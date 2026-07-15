@@ -40,6 +40,10 @@ function messageForError(error: unknown) {
     return "No microphone was found. Connect one and try again.";
   }
 
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
   return "Iris could not start a voice session. Please try again.";
 }
 
