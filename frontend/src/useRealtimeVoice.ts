@@ -30,6 +30,7 @@ type RealtimeEvent = {
 
 const REALTIME_CALLS_URL = "https://api.openai.com/v1/realtime/calls";
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
+const REQUEST_TIMEOUT_MS = 10_000;
 
 function messageForError(error: unknown) {
   if (error instanceof DOMException && error.name === "NotAllowedError") {
@@ -38,6 +39,10 @@ function messageForError(error: unknown) {
 
   if (error instanceof DOMException && error.name === "NotFoundError") {
     return "No microphone was found. Connect one and try again.";
+  }
+
+  if (error instanceof DOMException && error.name === "TimeoutError") {
+    return "Connecting to Iris timed out. Please check your network and try again.";
   }
 
   if (error instanceof Error && error.message) {
@@ -130,7 +135,9 @@ export function useRealtimeVoice() {
       microphone.current = stream;
 
       setStatus("connecting");
-      const tokenResponse = await fetch(`${apiBaseUrl}/api/realtime/token`);
+      const tokenResponse = await fetch(`${apiBaseUrl}/api/realtime/token`, {
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
       if (!tokenResponse.ok) {
         throw new Error("The Iris server could not create a voice session.");
       }
@@ -243,6 +250,7 @@ export function useRealtimeVoice() {
           "Content-Type": "application/sdp",
         },
         body: offer.sdp,
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       if (!response.ok) {
         throw new Error("OpenAI could not establish the voice connection.");
