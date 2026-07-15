@@ -1,3 +1,5 @@
+import { useEffect, useRef } from "react";
+
 import { useRealtimeVoice } from "./useRealtimeVoice";
 
 export function App() {
@@ -13,6 +15,15 @@ export function App() {
     stop,
     transcript,
   } = useRealtimeVoice();
+
+  const transcriptRef = useRef<HTMLOListElement>(null);
+
+  useEffect(() => {
+    const list = transcriptRef.current;
+    if (list) {
+      list.scrollTop = list.scrollHeight;
+    }
+  }, [transcript]);
 
   const statusMessage = {
     idle: "Press Talk when you’re ready. Iris does not save this audio.",
@@ -65,7 +76,7 @@ export function App() {
           </div>
 
           {transcript.length > 0 ? (
-            <ol className="transcript-list" aria-live="polite">
+            <ol ref={transcriptRef} className="transcript-list" aria-live="polite">
               {transcript.map((entry) => (
                 <li key={entry.id} className={`transcript-entry ${entry.speaker}`}>
                   <p className="speaker-label">
