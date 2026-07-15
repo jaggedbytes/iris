@@ -11,9 +11,21 @@ type RealtimeToken = {
   value: string;
 };
 
+export type TranscriptEntry = {
+  id: string;
+  speaker: "iris" | "you";
+  text: string;
+  isFinal: boolean;
+};
+
+type ConversationActivity = "ready" | "listening" | "thinking" | "speaking";
+
 type RealtimeEvent = {
   type?: string;
   error?: { message?: string };
+  item_id?: string;
+  transcript?: string;
+  delta?: string;
 };
 
 const REALTIME_CALLS_URL = "https://api.openai.com/v1/realtime/calls";
@@ -38,6 +50,32 @@ export function useRealtimeVoice() {
   const audioElement = useRef<HTMLAudioElement | null>(null);
   const [status, setStatus] = useState<VoiceStatus>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [activity, setActivity] = useState<ConversationActivity>("ready");
+  const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
+
+  const updateTranscript = useCallback(
+    (
+      id: string,
+      speaker: TranscriptEntry["speaker"],
+      text: string,
+      isFinal: boolean,
+      append = false,
+    ) => {
+      setTranscript((entries) => {
+        const existing = entries.find((entry) => entry.id === id);
+        const nextText = append && existing ? `${existing.text}${text}` : text;
+
+        if (existing) {
+          return entries.map((entry) =>
+            entry.id === id ? { ...entry, text: nextText, isFinal } : entry,
+          );
+        }
+
+        return [...entries, { id, speaker, text: nextText, isFinal }];
+      });
+    },
+    [],
+  );
 
   const releaseResources = useCallback(() => {
     dataChannel.current?.close();
@@ -56,8 +94,13 @@ export function useRealtimeVoice() {
 
   const stop = useCallback(() => {
     releaseResources();
+    setActivity("ready");
     setStatus("idle");
   }, [releaseResources]);
+
+  const clearTranscript = useCallback(() => {
+    setTranscript([]);
+  }, []);
 
   const start = useCallback(async () => {
     if (status !== "idle" && status !== "error") return;
@@ -66,12 +109,16 @@ export function useRealtimeVoice() {
     // is still alive. Release it before a retry opens a new microphone stream.
     releaseResources();
     setError(null);
+    setTranscript([]);
+    setActivity("ready");
     setStatus("requesting-microphone");
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          autoGainControl: true,
+          // Automatic gain can amplify a nearly silent room enough for VAD to
+          // interpret it as speech. Preserve the microphone's natural level.
+          autoGainControl: false,
           echoCancellation: true,
           noiseSuppression: true,
         },
@@ -106,6 +153,7 @@ export function useRealtimeVoice() {
       connection.onconnectionstatechange = () => {
         if (connection.connectionState === "connected") {
           setStatus("connected");
+          setActivity("listening");
         }
 
         if (connection.connectionState === "failed") {
@@ -131,7 +179,53 @@ export function useRealtimeVoice() {
         if (event.type === "error") {
           setError(event.error?.message ?? "Iris encountered a voice error.");
           releaseResources();
+          setActivity("ready");
           setStatus("error");
+          return;
+        }
+
+        if (event.type === "input_audio_buffer.speech_started") {
+          setActivity("listening");
+          return;
+        }
+
+        if (event.type === "input_audio_buffer.speech_stopped") {
+          setActivity("thinking");
+          return;
+        }
+
+        if (
+          event.type ===
+            "conversation.item.input_audio_transcription.completed" &&
+          event.item_id &&
+          event.transcript
+        ) {
+          updateTranscript(event.item_id, "you", event.transcript, true);
+          setActivity("thinking");
+          return;
+        }
+
+        if (
+          event.type === "response.output_audio_transcript.delta" &&
+          event.item_id &&
+          event.delta
+        ) {
+          updateTranscript(event.item_id, "iris", event.delta, false, true);
+          setActivity("speaking");
+          return;
+        }
+
+        if (
+          event.type === "response.output_audio_transcript.done" &&
+          event.item_id
+        ) {
+          updateTranscript(event.item_id, "iris", event.transcript ?? "", true);
+          setActivity("speaking");
+          return;
+        }
+
+        if (event.type === "response.done") {
+          setActivity("listening");
         }
       });
 
@@ -159,19 +253,23 @@ export function useRealtimeVoice() {
       releaseResources();
 
       setError(messageForError(startError));
+      setActivity("ready");
       setStatus("error");
     }
-  }, [releaseResources, status]);
+  }, [releaseResources, status, updateTranscript]);
 
   useEffect(() => releaseResources, [releaseResources]);
 
   return {
     audioElement,
+    activity,
+    clearTranscript,
     error,
     isActive: status === "connected" || status === "connecting",
     isStarting: status === "requesting-microphone" || status === "connecting",
     start,
     status,
     stop,
+    transcript,
   };
 }

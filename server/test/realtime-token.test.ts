@@ -53,6 +53,18 @@ test("mints a short-lived Realtime client secret without exposing the API key", 
 
     const body = JSON.parse(String(requestedInit?.body));
     assert.equal(body.session.model, "gpt-realtime-2.1");
+    assert.equal(
+      body.session.audio.input.transcription.model,
+      "gpt-4o-transcribe",
+    );
+    assert.deepEqual(body.session.audio.input.turn_detection, {
+      type: "server_vad",
+      threshold: 0.8,
+      prefix_padding_ms: 300,
+      silence_duration_ms: 800,
+      create_response: true,
+      interrupt_response: true,
+    });
     assert.equal(body.session.audio.output.voice, "marin");
     assert.equal(body.expires_after.seconds, 600);
   } finally {

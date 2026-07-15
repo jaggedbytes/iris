@@ -36,6 +36,25 @@ export async function createRealtimeClientSecret({
         model: "gpt-realtime-2.1",
         instructions: irisV1,
         audio: {
+          input: {
+            transcription: {
+              model: "gpt-4o-transcribe",
+              language: "en",
+              prompt:
+                "The speaker is an older adult talking to a warm phone companion named Iris. Transcribe the name Iris correctly, along with everyday first names of friends and family (for example Ruth, Maya, Maria).",
+            },
+            turn_detection: {
+              type: "server_vad",
+              // This prototype is evaluated in ordinary rooms. Requiring a
+              // stronger signal prevents quiet device/room noise from being
+              // committed as a user turn and triggering an automatic reply.
+              threshold: 0.8,
+              prefix_padding_ms: 300,
+              silence_duration_ms: 800,
+              create_response: true,
+              interrupt_response: true,
+            },
+          },
           output: {
             voice: "marin",
           },

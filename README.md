@@ -47,8 +47,3 @@ iris/
 ## Privacy boundary for this milestone
 
 This browser experiment should not record or persist microphone audio, call transcripts, or conversations. It exists solely to evaluate conversation quality. Later persistence must be limited to consented structured summaries.
-
-## Next milestone
-
-1. Add a lightweight transcript/status panel for persona evaluation.
-2. Iterate on `server/src/personas/iris-v1.ts` using a repeatable test script.
