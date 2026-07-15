@@ -16,7 +16,7 @@ Browser → Iris server (short-lived token) → OpenAI Realtime
 Browser ─────────────── WebRTC audio + events ─────────────→ OpenAI Realtime
 ```
 
-This repository currently contains the project skeleton only. The token endpoint and WebRTC connection are the next implementation milestone.
+The token endpoint is implemented. The WebRTC connection and microphone lifecycle are the next implementation milestone.
 
 ## Planned local development
 
@@ -27,7 +27,7 @@ cd server && npm install && npm run dev
 cd frontend && npm install && npm run dev
 ```
 
-Copy `server/.env.example` to `server/.env` before implementing the Realtime token route. Do not put the API key in the frontend.
+Copy `server/.env.example` to `server/.env` and set `OPENAI_API_KEY`. Do not put the API key in the frontend.
 
 ## Repository layout
 
@@ -50,7 +50,6 @@ This browser experiment should not record or persist microphone audio, call tran
 
 ## Next milestone
 
-1. Implement `GET /api/realtime/token` in the server using `OPENAI_API_KEY`.
-2. Implement the frontend WebRTC connection and microphone lifecycle.
-3. Add a lightweight transcript/status panel for persona evaluation.
-4. Iterate on `server/src/personas/iris-v1.ts` using a repeatable test script.
+1. Implement the frontend WebRTC connection and microphone lifecycle.
+2. Add a lightweight transcript/status panel for persona evaluation.
+3. Iterate on `server/src/personas/iris-v1.ts` using a repeatable test script.
