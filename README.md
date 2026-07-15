@@ -29,6 +29,17 @@ cd frontend && npm install && npm run dev
 
 Copy `server/.env.example` to `server/.env` and set `OPENAI_API_KEY`. Do not put the API key in the frontend.
 
+## Local dashboard foundation
+
+The dashboard is protected by `IRIS_ADMIN_TOKEN`; set a long local secret in `server/.env`, then seed the included demo person and trusted contact before starting the server:
+
+```bash
+cd server && npm run db:seed && npm run dev
+cd frontend && npm run dev
+```
+
+Open the frontend and enter `IRIS_ADMIN_TOKEN` to use the operator view. Operators can create an expiring, revocable trusted-contact link. The dashboard currently shows the shared data foundation only; **Call now** remains disabled until the outbound-phone checkpoint.
+
 ## Repository layout
 
 ```text

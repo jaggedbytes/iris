@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadFoundationConfig } from "../src/config.js";
+import { loadDashboardConfig, loadFoundationConfig } from "../src/config.js";
 import { closeDatabase, createDatabase, createRepositories } from "../src/db/index.js";
 
 function createTestRepositories() {
@@ -98,11 +98,20 @@ test("validates the durable foundation environment", () => {
       IRIS_DATABASE_PATH: ":memory:",
       IRIS_DEMO_PERSON_ID: "person-test",
     }),
-    { databasePath: ":memory:", demoPersonId: "person-test" },
+    {
+      databasePath: ":memory:",
+      demoPersonId: "person-test",
+    },
   );
 
   assert.throws(
     () => loadFoundationConfig({ IRIS_DATABASE_PATH: "" }),
     /IRIS_DATABASE_PATH must not be empty/,
   );
+
+  assert.deepEqual(loadDashboardConfig({ IRIS_ADMIN_TOKEN: "test-admin-token" }), {
+    adminToken: "test-admin-token",
+    frontendOrigin: "http://localhost:5173",
+  });
+  assert.throws(() => loadDashboardConfig({}), /IRIS_ADMIN_TOKEN must be configured/);
 });

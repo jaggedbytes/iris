@@ -2,12 +2,15 @@ import type { IrisDatabase } from "./database.js";
 import type {
   AccessGrant,
   AccessScope,
+  ActionRequestRecord,
+  ActionStatus,
   CallRecord,
   CallStatus,
   ConsentKind,
   ConsentStatus,
   CreateActionRequest,
   Person,
+  TimelineEvent,
   TrustedContact,
 } from "./types.js";
 
@@ -48,6 +51,27 @@ type CallRow = {
   summary_json: string | null;
 };
 
+type EventRow = {
+  id: string;
+  person_id: string;
+  call_id: string | null;
+  type: string;
+  payload_json: string;
+  occurred_at: string;
+};
+
+type ActionRequestRow = {
+  id: string;
+  person_id: string;
+  feature: "bridge" | "shield" | "translator";
+  action_type: string;
+  payload_json: string;
+  status: ActionStatus;
+  approval_source: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 const now = () => new Date().toISOString();
 
 const toPerson = (row: PersonRow): Person => ({
@@ -85,6 +109,27 @@ const toCall = (row: CallRow): CallRecord => ({
   startedAt: row.started_at,
   endedAt: row.ended_at,
   summaryJson: row.summary_json,
+});
+
+const toEvent = (row: EventRow): TimelineEvent => ({
+  id: row.id,
+  personId: row.person_id,
+  callId: row.call_id,
+  type: row.type,
+  payload: JSON.parse(row.payload_json) as unknown,
+  occurredAt: row.occurred_at,
+});
+
+const toActionRequest = (row: ActionRequestRow): ActionRequestRecord => ({
+  id: row.id,
+  personId: row.person_id,
+  feature: row.feature,
+  actionType: row.action_type,
+  payload: JSON.parse(row.payload_json) as unknown,
+  status: row.status,
+  approvalSource: row.approval_source,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
 });
 
 export function createRepositories(database: IrisDatabase) {
@@ -137,6 +182,22 @@ export function createRepositories(database: IrisDatabase) {
         .prepare("SELECT * FROM trusted_contacts WHERE id = ?")
         .get(input.id) as ContactRow;
       return toContact(row);
+    },
+
+    getTrustedContact(id: string) {
+      const row = database
+        .prepare("SELECT * FROM trusted_contacts WHERE id = ?")
+        .get(id) as ContactRow | undefined;
+      return row ? toContact(row) : null;
+    },
+
+    listTrustedContacts(personId: string) {
+      const rows = database
+        .prepare(
+          "SELECT * FROM trusted_contacts WHERE person_id = ? ORDER BY display_name",
+        )
+        .all(personId) as ContactRow[];
+      return rows.map(toContact);
     },
 
     grantAccess(input: {
@@ -305,6 +366,24 @@ export function createRepositories(database: IrisDatabase) {
           timestamp,
           timestamp,
         );
+    },
+
+    listEvents(personId: string) {
+      const rows = database
+        .prepare(
+          "SELECT * FROM events WHERE person_id = ? ORDER BY occurred_at DESC",
+        )
+        .all(personId) as EventRow[];
+      return rows.map(toEvent);
+    },
+
+    listActionRequests(personId: string) {
+      const rows = database
+        .prepare(
+          "SELECT * FROM action_requests WHERE person_id = ? ORDER BY created_at DESC",
+        )
+        .all(personId) as ActionRequestRow[];
+      return rows.map(toActionRequest);
     },
 
     resetAll() {

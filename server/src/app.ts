@@ -3,9 +3,16 @@ import express from "express";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 
+import { createDashboardRouter, type DashboardContext } from "./dashboard.js";
 import { createRealtimeClientSecret } from "./realtime.js";
 
-export function createApp({ request = fetch }: { request?: typeof fetch } = {}) {
+export function createApp({
+  request = fetch,
+  dashboard,
+}: {
+  request?: typeof fetch;
+  dashboard?: DashboardContext;
+} = {}) {
   const app = express();
 
   app.use(helmet());
@@ -15,6 +22,11 @@ export function createApp({ request = fetch }: { request?: typeof fetch } = {}) 
       origin: process.env.FRONTEND_ORIGIN ?? "http://localhost:5173",
     }),
   );
+  app.use(express.json());
+
+  if (dashboard) {
+    app.use("/api/dashboard", createDashboardRouter(dashboard));
+  }
 
   app.get("/health", (_request, response) => {
     response.json({ status: "ok" });
@@ -53,5 +65,3 @@ export function createApp({ request = fetch }: { request?: typeof fetch } = {}) 
 
   return app;
 }
-
-export const app = createApp();

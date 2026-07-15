@@ -50,6 +50,27 @@ export type CallRecord = {
   summaryJson: string | null;
 };
 
+export type TimelineEvent = {
+  id: string;
+  personId: string;
+  callId: string | null;
+  type: string;
+  payload: unknown;
+  occurredAt: string;
+};
+
+export type ActionRequestRecord = {
+  id: string;
+  personId: string;
+  feature: "bridge" | "shield" | "translator";
+  actionType: string;
+  payload: unknown;
+  status: ActionStatus;
+  approvalSource: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type CreateActionRequest = {
   id: string;
   personId: string;
