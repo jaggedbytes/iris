@@ -16,7 +16,7 @@ Browser → Iris server (short-lived token) → OpenAI Realtime
 Browser ─────────────── WebRTC audio + events ─────────────→ OpenAI Realtime
 ```
 
-The token endpoint is implemented. The WebRTC connection and microphone lifecycle are the next implementation milestone.
+The browser WebRTC voice loop and token endpoint are implemented. The user’s microphone audio and Iris’s returned audio are live-only; this prototype does not record or persist them.
 
 ## Planned local development
 
@@ -50,6 +50,5 @@ This browser experiment should not record or persist microphone audio, call tran
 
 ## Next milestone
 
-1. Implement the frontend WebRTC connection and microphone lifecycle.
-2. Add a lightweight transcript/status panel for persona evaluation.
-3. Iterate on `server/src/personas/iris-v1.ts` using a repeatable test script.
+1. Add a lightweight transcript/status panel for persona evaluation.
+2. Iterate on `server/src/personas/iris-v1.ts` using a repeatable test script.

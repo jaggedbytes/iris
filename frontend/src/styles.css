@@ -84,3 +84,12 @@ h1 {
   font-family: ui-sans-serif, system-ui, sans-serif;
   font-size: 0.9rem;
 }
+
+.status-error {
+  color: #a34943;
+}
+
+.remote-audio {
+  width: min(100%, 19rem);
+  margin-top: 1.25rem;
+}
