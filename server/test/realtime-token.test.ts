@@ -96,3 +96,30 @@ test("returns a configuration error when OPENAI_API_KEY is missing", async () =>
     process.env.OPENAI_API_KEY = previousKey;
   }
 });
+
+test("returns a 502 when the OpenAI upstream request fails", async () => {
+  const previousKey = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = "sk-test-secret";
+
+  const app = createApp({
+    request: async () =>
+      new Response("upstream is unavailable", { status: 503 }),
+  });
+
+  const server = app.listen();
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+
+  try {
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/api/realtime/token`,
+    );
+    assert.equal(response.status, 502);
+    assert.deepEqual(await response.json(), {
+      error: "Unable to start a voice session.",
+    });
+  } finally {
+    server.close();
+    process.env.OPENAI_API_KEY = previousKey;
+  }
+});
