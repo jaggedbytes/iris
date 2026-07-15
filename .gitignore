@@ -1,0 +1,17 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+.vite/
+
+# Local configuration and data
+.env
+.env.local
+*.sqlite
+*.sqlite3
+data/
+
+# OS/editor files
+.DS_Store
+.idea/
+.vscode/
