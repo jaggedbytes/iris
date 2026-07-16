@@ -56,8 +56,23 @@ export function loadDashboardConfig(
 
   return {
     adminToken,
-    frontendOrigin: environment.FRONTEND_ORIGIN?.trim() || "http://localhost:5173",
+    frontendOrigin: normalizeFrontendOrigin(
+      environment.FRONTEND_ORIGIN?.trim() || "http://localhost:5173",
+    ),
   };
+}
+
+function normalizeFrontendOrigin(value: string) {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("FRONTEND_ORIGIN must be a valid http(s) URL.");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("FRONTEND_ORIGIN must use the http or https protocol.");
+  }
+  return parsed.origin;
 }
 
 /** Configuration only needed when the outbound phone transport is enabled. */

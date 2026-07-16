@@ -113,5 +113,17 @@ test("validates the durable foundation environment", () => {
     adminToken: "test-admin-token",
     frontendOrigin: "http://localhost:5173",
   });
+  assert.deepEqual(
+    loadDashboardConfig({ IRIS_ADMIN_TOKEN: "t", FRONTEND_ORIGIN: "https://iris.example.com/app" }),
+    { adminToken: "t", frontendOrigin: "https://iris.example.com" },
+  );
   assert.throws(() => loadDashboardConfig({}), /IRIS_ADMIN_TOKEN must be configured/);
+  assert.throws(
+    () => loadDashboardConfig({ IRIS_ADMIN_TOKEN: "t", FRONTEND_ORIGIN: "not a url" }),
+    /FRONTEND_ORIGIN must be a valid http\(s\) URL/,
+  );
+  assert.throws(
+    () => loadDashboardConfig({ IRIS_ADMIN_TOKEN: "t", FRONTEND_ORIGIN: "ftp://iris.example.com" }),
+    /FRONTEND_ORIGIN must use the http or https protocol/,
+  );
 });
