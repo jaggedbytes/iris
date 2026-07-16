@@ -37,6 +37,20 @@ export type DashboardOverview = {
   permissions: string[];
 };
 
+export class DashboardError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "DashboardError";
+    this.status = status;
+  }
+
+  get isAuthError() {
+    return this.status === 401 || this.status === 403;
+  }
+}
+
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
 
 export function dashboardRequest(path: string, token: string, options?: RequestInit) {
@@ -53,7 +67,10 @@ export async function dashboardJson<T>(path: string, token: string, options?: Re
   const response = await dashboardRequest(path, token, options);
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as { error?: string } | null;
-    throw new Error(body?.error ?? "Unable to load the Iris dashboard.");
+    throw new DashboardError(
+      body?.error ?? "Unable to load the Iris dashboard.",
+      response.status,
+    );
   }
   return (await response.json()) as T;
 }

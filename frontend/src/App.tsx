@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 
 import {
   dashboardJson,
+  DashboardError,
 } from "./dashboard";
 import type { DashboardOverview, DashboardPrincipal } from "./dashboard";
 
@@ -87,8 +88,10 @@ export function App() {
         setOverview(nextOverview);
       } catch (loadError) {
         if (cancelled) return;
-        sessionStorage.removeItem(SESSION_TOKEN_KEY);
-        setToken("");
+        if (loadError instanceof DashboardError && loadError.isAuthError) {
+          sessionStorage.removeItem(SESSION_TOKEN_KEY);
+          setToken("");
+        }
         setError(loadError instanceof Error ? loadError.message : "Unable to load the dashboard.");
       } finally {
         if (!cancelled) setIsLoading(false);
