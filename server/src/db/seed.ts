@@ -1,12 +1,18 @@
 import type { IrisRepositories } from "./repositories.js";
 
-export function seedDemoFoundation(repositories: IrisRepositories, personId: string) {
+export function seedDemoFoundation(
+  repositories: IrisRepositories,
+  personId: string,
+  demoPhoneE164: string | null = null,
+) {
   repositories.resetAll();
 
   repositories.createPerson({
     id: personId,
     displayName: "Bean Jackson",
-    phoneE164: "+12487228194",
+    // Never seed a routable number: with live Twilio credentials the dashboard
+    // could place a real call. Populate only from an explicit demo destination.
+    phoneE164: demoPhoneE164,
   });
   repositories.createTrustedContact({
     id: "contact-evelyn",
