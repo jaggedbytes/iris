@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
 import {
@@ -56,6 +56,7 @@ export function App() {
   const [isLoading, setIsLoading] = useState(Boolean(token));
   const [magicLink, setMagicLink] = useState<string | null>(null);
   const [isCalling, setIsCalling] = useState(false);
+  const magicLinkRequestId = useRef(0);
 
   const personId = useMemo(() => {
     if (overview) return overview.person.id;
@@ -112,12 +113,16 @@ export function App() {
   };
 
   const signOut = () => {
+    magicLinkRequestId.current += 1;
     sessionStorage.removeItem(SESSION_TOKEN_KEY);
     setToken("");
     setMagicLink(null);
   };
 
   const createMagicLink = async (trustedContactId: string) => {
+    const requestId = ++magicLinkRequestId.current;
+    setMagicLink(null);
+    setError(null);
     try {
       const result = await dashboardJson<{ magicLink: string }>(
         `/api/dashboard/people/${personId}/magic-links`,
@@ -131,9 +136,11 @@ export function App() {
           }),
         },
       );
-      setMagicLink(result.magicLink);
+      if (requestId === magicLinkRequestId.current) setMagicLink(result.magicLink);
     } catch (linkError) {
-      setError(linkError instanceof Error ? linkError.message : "Unable to create a link.");
+      if (requestId === magicLinkRequestId.current) {
+        setError(linkError instanceof Error ? linkError.message : "Unable to create a link.");
+      }
     }
   };
 
