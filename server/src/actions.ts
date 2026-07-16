@@ -5,6 +5,7 @@ import type { TelephonyConfig } from "./config.js";
 import type { IrisRepositories } from "./db/repositories.js";
 
 type MessagingClient = { messages: { create(input: { to: string; from: string; body: string; statusCallback: string }): Promise<{ sid: string; status: string }> } };
+type TwilioRequestError = Error & { status?: unknown; code?: unknown };
 
 export class ActionDispatcher {
   constructor(
@@ -30,25 +31,43 @@ export class ActionDispatcher {
       this.audit(action.personId, actionId, "action.failed", { channel: "sms", reason: "invalid_payload" });
       return null;
     }
-    // Claim the approved request before its external side effect. Repeated calls
-    // see `dispatched` and cannot send the same message again.
-    this.repositories.updateActionRequest({ id: actionId, status: "dispatched" });
+    // Durable outbox claim: the action remains approved until the Twilio result
+    // and message row are committed. An ambiguous interrupted send is never
+    // retried automatically, preventing duplicate SMS.
+    if (!this.repositories.claimActionDispatch(actionId)) return null;
     try {
       const message = await this.client.messages.create({
         to: payload.to, from: this.config.twilioPhoneNumber, body: payload.body,
-        statusCallback: `${this.config.publicBaseUrl}/api/actions/messages/status`,
+        statusCallback: `${this.config.publicBaseUrl}/api/actions/${actionId}/messages/status`,
       });
-      this.repositories.createMessage({ id: randomUUID(), personId: action.personId, actionRequestId: action.id, providerMessageId: message.sid, deliveryStatus: message.status });
-      this.audit(action.personId, actionId, "action.dispatched", { channel: "sms", providerMessageId: message.sid, status: message.status });
+      const finalized = this.repositories.finalizeActionDispatch({ id: randomUUID(), personId: action.personId, actionRequestId: action.id, providerMessageId: message.sid, deliveryStatus: message.status });
+      if (finalized) this.audit(action.personId, actionId, "action.dispatched", { channel: "sms", providerMessageId: message.sid, status: message.status });
       return { messageId: message.sid, status: message.status };
-    } catch {
-      this.repositories.updateActionRequest({ id: actionId, status: "failed" });
-      this.audit(action.personId, actionId, "action.failed", { channel: "sms" });
+    } catch (error) {
+      const providerError = error as TwilioRequestError;
+      if (providerError.status === 429) {
+        this.repositories.retryActionDispatch(actionId);
+        this.audit(action.personId, actionId, "action.dispatch_retryable", { channel: "sms", status: providerError.status, code: typeof providerError.code === "number" ? providerError.code : undefined });
+        throw new Error("Unable to dispatch message.");
+      }
+      if (typeof providerError.status === "number" && providerError.status >= 400 && providerError.status < 500) {
+        this.repositories.failActionDispatch(actionId);
+        this.repositories.updateActionRequest({ id: actionId, status: "failed" });
+        this.audit(action.personId, actionId, "action.failed", { channel: "sms", reason: "provider_rejected", status: providerError.status, code: typeof providerError.code === "number" ? providerError.code : undefined });
+        throw new Error("Unable to dispatch message.");
+      }
+      this.audit(action.personId, actionId, "action.dispatch_uncertain", { channel: "sms" });
       throw new Error("Unable to dispatch message.");
     }
   }
 
-  recordDelivery(providerMessageId: string, status: string) {
+  recordDelivery(actionId: string, providerMessageId: string, status: string) {
+    const action = this.repositories.getActionRequest(actionId);
+    const dispatch = this.repositories.getActionDispatch(actionId);
+    if (action && dispatch?.state === "dispatching") {
+      const finalized = this.repositories.finalizeActionDispatch({ id: randomUUID(), personId: action.personId, actionRequestId: action.id, providerMessageId, deliveryStatus: status });
+      if (finalized) this.audit(action.personId, actionId, "action.reconciled", { channel: "sms", providerMessageId, status });
+    }
     this.repositories.updateMessageDelivery(providerMessageId, status);
   }
 

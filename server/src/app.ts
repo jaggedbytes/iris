@@ -36,9 +36,9 @@ export function createApp({
     app.use("/api/dashboard", createDashboardRouter(dashboard));
   }
   if (telephony) app.use("/api/telephony", createTelephonyRouter(telephony));
-  if (actions) app.post("/api/actions/messages/status", (request, response) => {
+  if (actions) app.post("/api/actions/:actionId/messages/status", (request, response) => {
     if (!actions.validateWebhook(request.header("x-twilio-signature"), request.originalUrl, request.body)) return response.status(403).end();
-    if (typeof request.body?.MessageSid === "string" && typeof request.body?.MessageStatus === "string") actions.recordDelivery(request.body.MessageSid, request.body.MessageStatus);
+    if (typeof request.body?.MessageSid === "string" && typeof request.body?.MessageStatus === "string") actions.recordDelivery(request.params.actionId, request.body.MessageSid, request.body.MessageStatus);
     response.status(204).end();
   });
 

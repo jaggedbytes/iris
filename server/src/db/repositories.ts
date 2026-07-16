@@ -425,6 +425,55 @@ export function createRepositories(database: IrisDatabase) {
       return this.getActionRequest(input.id);
     },
 
+    claimActionDispatch(actionId: string) {
+      return database.transaction(() => {
+        const timestamp = now();
+        const inserted = database.prepare(
+          "INSERT OR IGNORE INTO action_dispatch_outbox (action_request_id, state, created_at, updated_at) VALUES (?, 'dispatching', ?, ?)",
+        ).run(actionId, timestamp, timestamp);
+        if (inserted.changes === 1) return true;
+        return database.prepare(
+          "UPDATE action_dispatch_outbox SET state = 'dispatching', updated_at = ? WHERE action_request_id = ? AND state = 'retryable'",
+        ).run(timestamp, actionId).changes === 1;
+      })();
+    },
+
+    completeActionDispatch(input: { actionId: string; providerMessageId: string }) {
+      database.prepare(
+        "UPDATE action_dispatch_outbox SET state = 'dispatched', provider_message_id = ?, updated_at = ? WHERE action_request_id = ?",
+      ).run(input.providerMessageId, now(), input.actionId);
+    },
+
+    failActionDispatch(actionId: string) {
+      database.prepare(
+        "UPDATE action_dispatch_outbox SET state = 'failed', updated_at = ? WHERE action_request_id = ? AND state = 'dispatching'",
+      ).run(now(), actionId);
+    },
+
+    retryActionDispatch(actionId: string) {
+      database.prepare(
+        "UPDATE action_dispatch_outbox SET state = 'retryable', updated_at = ? WHERE action_request_id = ? AND state = 'dispatching'",
+      ).run(now(), actionId);
+    },
+
+    getActionDispatch(actionId: string) {
+      return database.prepare("SELECT state, provider_message_id FROM action_dispatch_outbox WHERE action_request_id = ?").get(actionId) as { state: "dispatching" | "dispatched" | "failed" | "retryable"; provider_message_id: string | null } | undefined;
+    },
+
+    finalizeActionDispatch(input: { id: string; personId: string; actionRequestId: string; providerMessageId: string; deliveryStatus: string }) {
+      return database.transaction(() => {
+        const dispatch = this.getActionDispatch(input.actionRequestId);
+        if (dispatch?.state !== "dispatching") return false;
+        database.prepare(
+          `INSERT OR IGNORE INTO messages (id, person_id, action_request_id, direction, provider_message_id, delivery_status, created_at)
+           VALUES (?, ?, ?, 'outbound', ?, ?, ?)`,
+        ).run(input.id, input.personId, input.actionRequestId, input.providerMessageId, input.deliveryStatus, now());
+        this.completeActionDispatch({ actionId: input.actionRequestId, providerMessageId: input.providerMessageId });
+        this.updateActionRequest({ id: input.actionRequestId, status: "dispatched" });
+        return true;
+      })();
+    },
+
     createMessage(input: { id: string; personId: string; actionRequestId: string; providerMessageId: string; deliveryStatus: string }) {
       database.prepare(
         `INSERT INTO messages (id, person_id, action_request_id, direction, provider_message_id, delivery_status, created_at)

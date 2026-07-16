@@ -35,7 +35,7 @@ test("Bridge propagates provider rejection and creates no bridge-sent event", as
   const dispatcher = new ActionDispatcher(repositories, { twilioAccountSid: "AC", twilioAuthToken: "token", twilioPhoneNumber: "+15550001111", publicBaseUrl: "https://iris.test", openaiApiKey: "key", safetyIdentifier: "safe" }, { messages: { create: async () => { throw new Error("rejected"); } } });
   try {
     await assert.rejects(new BridgeService(repositories, dispatcher).sendApprovedSms({ personId: "person-a", trustedContactId: "contact-a", message: "Please call me.", approvalId: "tool-call-fail" }), /Unable to dispatch message/);
-    assert.equal(repositories.getActionRequest(repositories.listActionRequests("person-a")[0].id)?.status, "failed");
+    assert.equal(repositories.getActionRequest(repositories.listActionRequests("person-a")[0].id)?.status, "approved");
     assert.equal(repositories.listEvents("person-a").some((event) => event.type === "bridge.sms_sent"), false);
   } finally { closeDatabase(database); }
 });

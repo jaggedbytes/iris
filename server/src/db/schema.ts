@@ -118,4 +118,31 @@ export const migrations = [
       CREATE INDEX idx_memories_person_created ON memories(person_id, created_at DESC);
     `,
   },
+  {
+    id: "002_action_outbox",
+    sql: `
+      CREATE TABLE action_dispatch_outbox (
+        action_request_id TEXT PRIMARY KEY REFERENCES action_requests(id) ON DELETE CASCADE,
+        state TEXT NOT NULL CHECK(state IN ('dispatching', 'dispatched')),
+        provider_message_id TEXT UNIQUE,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `,
+  },
+  {
+    id: "003_action_outbox_failed",
+    sql: `
+      CREATE TABLE action_dispatch_outbox_next (
+        action_request_id TEXT PRIMARY KEY REFERENCES action_requests(id) ON DELETE CASCADE,
+        state TEXT NOT NULL CHECK(state IN ('dispatching', 'dispatched', 'failed', 'retryable')),
+        provider_message_id TEXT UNIQUE,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO action_dispatch_outbox_next SELECT * FROM action_dispatch_outbox;
+      DROP TABLE action_dispatch_outbox;
+      ALTER TABLE action_dispatch_outbox_next RENAME TO action_dispatch_outbox;
+    `,
+  },
 ] as const;
