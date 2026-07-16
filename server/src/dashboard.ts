@@ -212,7 +212,7 @@ export function createDashboardRouter(context: DashboardContext) {
     });
 
     const magicLink = new URL(context.frontendOrigin);
-    magicLink.searchParams.set("access", token);
+    magicLink.hash = new URLSearchParams({ access: token }).toString();
     response.status(201).json({
       grant: { id: grant.id, expiresAt: grant.expiresAt, scopes: grant.scopes },
       magicLink: magicLink.toString(),

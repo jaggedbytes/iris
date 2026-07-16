@@ -180,7 +180,9 @@ test("creates a hashed magic link and revocation removes access", async () => {
       grant: { id: string };
       magicLink: string;
     };
-    const accessToken = new URL(body.magicLink).searchParams.get("access");
+    const accessToken = new URLSearchParams(
+      new URL(body.magicLink).hash.replace(/^#/, ""),
+    ).get("access");
     assert.ok(accessToken);
 
     const principal = await fetch(`${fixture.url}/api/dashboard/me`, {

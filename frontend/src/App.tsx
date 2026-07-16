@@ -9,11 +9,15 @@ import type { DashboardOverview, DashboardPrincipal } from "./dashboard";
 const SESSION_TOKEN_KEY = "iris-dashboard-access-token";
 
 function readMagicLinkToken() {
-  const location = new URL(window.location.href);
-  const token = location.searchParams.get("access");
+  const fragment = window.location.hash.replace(/^#/, "");
+  const params = new URLSearchParams(fragment);
+  const token = params.get("access");
   if (!token) return null;
 
-  location.searchParams.delete("access");
+  params.delete("access");
+  const location = new URL(window.location.href);
+  const remaining = params.toString();
+  location.hash = remaining ? `#${remaining}` : "";
   window.history.replaceState({}, "", location);
   return token;
 }
