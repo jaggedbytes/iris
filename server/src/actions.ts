@@ -17,7 +17,7 @@ export class ActionDispatcher {
   approve(actionId: string, approvalSource: string) {
     const action = this.repositories.getActionRequest(actionId);
     if (!action || action.status !== "pending_approval") return null;
-    const approved = this.repositories.updateActionRequest({ id: actionId, status: "approved", approvalSource });
+    const approved = this.repositories.updateActionRequest({ id: actionId, status: "approved", approvalSource, expectedStatus: "pending_approval" });
     if (approved) this.audit(approved.personId, actionId, "action.approved", { source: approvalSource });
     return approved;
   }
@@ -27,7 +27,7 @@ export class ActionDispatcher {
     if (!action || action.status !== "approved") return null;
     const payload = action.payload as { to?: unknown; body?: unknown };
     if (typeof payload.to !== "string" || typeof payload.body !== "string" || !payload.to || !payload.body) {
-      this.repositories.updateActionRequest({ id: actionId, status: "failed" });
+      this.repositories.updateActionRequest({ id: actionId, status: "failed", expectedStatus: "approved" });
       this.audit(action.personId, actionId, "action.failed", { channel: "sms", reason: "invalid_payload" });
       return null;
     }
@@ -52,7 +52,7 @@ export class ActionDispatcher {
       }
       if (typeof providerError.status === "number" && providerError.status >= 400 && providerError.status < 500) {
         this.repositories.failActionDispatch(actionId);
-        this.repositories.updateActionRequest({ id: actionId, status: "failed" });
+        this.repositories.updateActionRequest({ id: actionId, status: "failed", expectedStatus: "approved" });
         this.audit(action.personId, actionId, "action.failed", { channel: "sms", reason: "provider_rejected", status: providerError.status, code: typeof providerError.code === "number" ? providerError.code : undefined });
         throw new Error("Unable to dispatch message.");
       }

@@ -62,6 +62,20 @@ test("invalid approved SMS payload becomes a terminal failure", async () => {
   } finally { closeDatabase(database); }
 });
 
+test("updateActionRequest compare-and-set only transitions from the expected status", () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery" });
+  repositories.createActionRequest({ id: "action-cas", personId: "person-a", feature: "bridge", actionType: "sms", idempotencyKey: "cas", payload: { to: "+15550002222", body: "Hello" } });
+  try {
+    assert.equal(repositories.updateActionRequest({ id: "action-cas", status: "approved", expectedStatus: "pending_approval" })?.status, "approved");
+    assert.equal(repositories.updateActionRequest({ id: "action-cas", status: "dispatched", expectedStatus: "approved" })?.status, "dispatched");
+    // A stale transition from an already-consumed status is a no-op and reports null.
+    assert.equal(repositories.updateActionRequest({ id: "action-cas", status: "failed", expectedStatus: "approved" }), null);
+    assert.equal(repositories.getActionRequest("action-cas")?.status, "dispatched");
+  } finally { closeDatabase(database); }
+});
+
 test("Twilio 4xx rejection creates a terminal failed outbox entry", async () => {
   const database = createDatabase(":memory:");
   const repositories = createRepositories(database);

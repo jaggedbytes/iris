@@ -418,10 +418,18 @@ export function createRepositories(database: IrisDatabase) {
       return row ? toActionRequest(row) : null;
     },
 
-    updateActionRequest(input: { id: string; status: ActionStatus; approvalSource?: string | null }) {
-      database.prepare(
-        "UPDATE action_requests SET status = ?, approval_source = COALESCE(?, approval_source), updated_at = ? WHERE id = ?",
-      ).run(input.status, input.approvalSource ?? null, now(), input.id);
+    updateActionRequest(input: { id: string; status: ActionStatus; approvalSource?: string | null; expectedStatus?: ActionStatus }) {
+      // When expectedStatus is supplied this is a compare-and-set: the row only
+      // transitions if it is still in the expected state, and null is returned
+      // when it is not, so racing transitions cannot clobber one another.
+      const result = input.expectedStatus
+        ? database.prepare(
+            "UPDATE action_requests SET status = ?, approval_source = COALESCE(?, approval_source), updated_at = ? WHERE id = ? AND status = ?",
+          ).run(input.status, input.approvalSource ?? null, now(), input.id, input.expectedStatus)
+        : database.prepare(
+            "UPDATE action_requests SET status = ?, approval_source = COALESCE(?, approval_source), updated_at = ? WHERE id = ?",
+          ).run(input.status, input.approvalSource ?? null, now(), input.id);
+      if (input.expectedStatus && result.changes === 0) return null;
       return this.getActionRequest(input.id);
     },
 
@@ -469,7 +477,7 @@ export function createRepositories(database: IrisDatabase) {
            VALUES (?, ?, ?, 'outbound', ?, ?, ?)`,
         ).run(input.id, input.personId, input.actionRequestId, input.providerMessageId, input.deliveryStatus, now());
         this.completeActionDispatch({ actionId: input.actionRequestId, providerMessageId: input.providerMessageId });
-        this.updateActionRequest({ id: input.actionRequestId, status: "dispatched" });
+        this.updateActionRequest({ id: input.actionRequestId, status: "dispatched", expectedStatus: "approved" });
         return true;
       })();
     },
