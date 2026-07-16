@@ -8,6 +8,9 @@ import { closeDatabase, createDatabase, createRepositories } from "../src/db/ind
 const adminToken = "dashboard-test-admin-token";
 const hash = (value: string) =>
   createHash("sha256").update(value).digest("hex");
+// Grants must stay valid whenever the suite runs, so derive expiry from the
+// current clock instead of a hard-coded (eventually past) calendar date.
+const futureExpiry = () => new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 
 async function createDashboardServer(options: { startOutboundCall?: (personId: string) => Promise<{ callId: string }> } = {}) {
   const database = createDatabase(":memory:");
@@ -58,12 +61,12 @@ test("permits check-in calls for admins and request_check_in trusted contacts", 
     fixture.repositories.grantAccess({
       id: "grant-checkin", personId: "person-a", trustedContactId: "contact-a",
       scopes: ["request_check_in"], tokenHash: hash("checkin-token"),
-      expiresAt: "2030-01-01T00:00:00.000Z",
+      expiresAt: futureExpiry(),
     });
     fixture.repositories.grantAccess({
       id: "grant-summaries", personId: "person-a", trustedContactId: "contact-a",
       scopes: ["view_summaries"], tokenHash: hash("summaries-token"),
-      expiresAt: "2030-01-01T00:00:00.000Z",
+      expiresAt: futureExpiry(),
     });
 
     const adminResponse = await fetch(`${fixture.url}/api/dashboard/people/person-a/calls`, {
@@ -131,7 +134,7 @@ test("limits a trusted contact link to its person and granted scopes", async () 
       trustedContactId: "contact-a",
       scopes: ["view_summaries"],
       tokenHash: hash("contact-token"),
-      expiresAt: "2030-01-01T00:00:00.000Z",
+      expiresAt: futureExpiry(),
     });
 
     const permitted = await fetch(
