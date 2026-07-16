@@ -7,19 +7,27 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc --noEmit",
     "start": "node dist/index.js",
-    "test": "tsx --test 'test/**/*.test.ts'"
+    "test": "tsx --test 'test/**/*.test.ts'",
+    "check:env": "tsx src/scripts/check-environment.ts",
+    "db:seed": "tsx src/scripts/seed.ts",
+    "db:reset": "tsx src/scripts/reset.ts"
   },
   "dependencies": {
+    "better-sqlite3": "^12.11.1",
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
     "express": "^5.1.0",
     "express-rate-limit": "^8.5.2",
-    "helmet": "^8.3.0"
+    "helmet": "^8.3.0",
+    "twilio": "^6.0.2",
+    "ws": "^8.21.1"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.3",
     "@types/node": "^22.16.4",
+    "@types/ws": "^8.18.1",
     "tsx": "^4.20.3",
     "typescript": "^5.8.3"
   },

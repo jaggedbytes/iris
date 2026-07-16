@@ -1,111 +1,319 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { FormEvent } from "react";
 
-import { useRealtimeVoice } from "./useRealtimeVoice";
+import {
+  dashboardJson,
+  DashboardError,
+} from "./dashboard";
+import type { DashboardOverview, DashboardPrincipal } from "./dashboard";
+
+const SESSION_TOKEN_KEY = "iris-dashboard-access-token";
+
+function readMagicLinkToken() {
+  const fragment = window.location.hash.replace(/^#/, "");
+  const params = new URLSearchParams(fragment);
+  const token = params.get("access");
+  if (!token) return null;
+
+  params.delete("access");
+  const location = new URL(window.location.href);
+  const remaining = params.toString();
+  location.hash = remaining ? `#${remaining}` : "";
+  window.history.replaceState({}, "", location);
+  return token;
+}
+
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
+}
+
+function summaryLabel(summaryJson: string | null) {
+  if (!summaryJson) return "No saved summary yet";
+  try {
+    const summary = JSON.parse(summaryJson) as { recap?: string };
+    return summary.recap ?? "Saved call summary";
+  } catch {
+    return "Saved call summary";
+  }
+}
 
 export function App() {
-  const {
-    audioElement,
-    activity,
-    clearTranscript,
-    error,
-    isActive,
-    isStarting,
-    start,
-    status,
-    stop,
-    transcript,
-  } = useRealtimeVoice();
+  const [token, setToken] = useState(() => {
+    const magicLinkToken = readMagicLinkToken();
+    if (magicLinkToken) {
+      sessionStorage.setItem(SESSION_TOKEN_KEY, magicLinkToken);
+      return magicLinkToken;
+    }
+    return sessionStorage.getItem(SESSION_TOKEN_KEY) ?? "";
+  });
+  const [adminTokenInput, setAdminTokenInput] = useState("");
+  const [principal, setPrincipal] = useState<DashboardPrincipal | null>(null);
+  const [overview, setOverview] = useState<DashboardOverview | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(Boolean(token));
+  const [magicLink, setMagicLink] = useState<string | null>(null);
+  const [isCalling, setIsCalling] = useState(false);
+  const magicLinkRequestId = useRef(0);
 
-  const transcriptRef = useRef<HTMLOListElement>(null);
+  const personId = useMemo(() => {
+    if (overview) return overview.person.id;
+    if (principal) return principal.personId;
+    return "";
+  }, [overview, principal]);
 
   useEffect(() => {
-    const list = transcriptRef.current;
-    if (list) {
-      list.scrollTop = list.scrollHeight;
+    if (!token) {
+      setPrincipal(null);
+      setOverview(null);
+      setIsLoading(false);
+      return;
     }
-  }, [transcript]);
 
-  const statusMessage = {
-    idle: "Press Talk when you’re ready. Iris does not save this audio.",
-    "requesting-microphone": "Asking for microphone access…",
-    connecting: "Connecting you with Iris…",
-    connected: "Iris is listening. Speak naturally when you’re ready.",
-    error: error ?? "Iris could not start a voice session.",
-  }[status];
+    let cancelled = false;
+    setIsLoading(true);
+    setError(null);
 
-  const activityMessage = {
-    ready: "Ready",
-    listening: "Listening",
-    thinking: "Thinking",
-    speaking: "Iris is speaking",
-  }[activity];
+    void (async () => {
+      try {
+        const nextPrincipal = await dashboardJson<DashboardPrincipal>("/api/dashboard/me", token);
+        const nextPersonId = nextPrincipal.personId;
+        const nextOverview = await dashboardJson<DashboardOverview>(
+          `/api/dashboard/people/${nextPersonId}/overview`,
+          token,
+        );
+        if (cancelled) return;
+        setPrincipal(nextPrincipal);
+        setOverview(nextOverview);
+      } catch (loadError) {
+        if (cancelled) return;
+        if (loadError instanceof DashboardError && loadError.isAuthError) {
+          sessionStorage.removeItem(SESSION_TOKEN_KEY);
+          setToken("");
+        }
+        setError(loadError instanceof Error ? loadError.message : "Unable to load the dashboard.");
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  const signIn = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const nextToken = adminTokenInput.trim();
+    if (!nextToken) return;
+    sessionStorage.setItem(SESSION_TOKEN_KEY, nextToken);
+    setToken(nextToken);
+  };
+
+  const signOut = () => {
+    magicLinkRequestId.current += 1;
+    sessionStorage.removeItem(SESSION_TOKEN_KEY);
+    setToken("");
+    setMagicLink(null);
+  };
+
+  const createMagicLink = async (trustedContactId: string) => {
+    const requestId = ++magicLinkRequestId.current;
+    setMagicLink(null);
+    setError(null);
+    try {
+      const result = await dashboardJson<{ magicLink: string }>(
+        `/api/dashboard/people/${personId}/magic-links`,
+        token,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            trustedContactId,
+            scopes: ["view_summaries", "view_events", "request_check_in"],
+          }),
+        },
+      );
+      if (requestId === magicLinkRequestId.current) setMagicLink(result.magicLink);
+    } catch (linkError) {
+      if (requestId === magicLinkRequestId.current) {
+        setError(linkError instanceof Error ? linkError.message : "Unable to create a link.");
+      }
+    }
+  };
+
+  const startCall = async () => {
+    setIsCalling(true);
+    setError(null);
+    try {
+      await dashboardJson(`/api/dashboard/people/${personId}/calls`, token, {
+        method: "POST",
+      });
+    } catch (callError) {
+      setError(callError instanceof Error ? callError.message : "Iris could not place the call.");
+    } finally {
+      setIsCalling(false);
+    }
+  };
+
+  if (!token && !isLoading) {
+    return (
+      <main className="access-shell">
+        <section className="access-card" aria-labelledby="access-title">
+          <p className="eyebrow">Iris companion</p>
+          <h1 id="access-title">Trusted dashboard access.</h1>
+          <p>
+            Family links are scoped and revocable. Operators can sign in with
+            the local dashboard token.
+          </p>
+          <form onSubmit={signIn}>
+            <label htmlFor="admin-token">Operator access token</label>
+            <input
+              id="admin-token"
+              type="password"
+              value={adminTokenInput}
+              onChange={(event) => setAdminTokenInput(event.target.value)}
+              autoComplete="current-password"
+            />
+            <button type="submit">Open dashboard</button>
+          </form>
+          {error && <p className="form-error" role="alert">{error}</p>}
+        </section>
+      </main>
+    );
+  }
 
   return (
-    <main className="voice-shell">
-      <section className="voice-card" aria-labelledby="iris-title">
-        <p className="eyebrow">Iris voice prototype</p>
-        <h1 id="iris-title">A calm voice when it matters.</h1>
-        <p className="intro">
-          A private browser conversation to help us learn whether Iris feels
-          warm, calm, and genuinely helpful.
-        </p>
-
-        <button
-          className="talk-button"
-          type="button"
-          disabled={isStarting}
-          onClick={isActive ? stop : start}
-        >
-          {isActive ? "End conversation" : isStarting ? "Connecting…" : "Talk to Iris"}
-        </button>
-        <p className={`status ${status === "error" ? "status-error" : ""}`} role="status">
-          {statusMessage}
-        </p>
-
-        <audio ref={audioElement} controls className="remote-audio" />
-
-        <aside className="evaluation-panel" aria-labelledby="notes-title">
-          <div className="panel-heading">
-            <div>
-              <p className="panel-kicker">Persona evaluation</p>
-              <h2 id="notes-title">Conversation notes</h2>
-            </div>
-            <span className="activity-pill" aria-live="polite">
-              {activityMessage}
-            </span>
-          </div>
-
-          {transcript.length > 0 ? (
-            <ol ref={transcriptRef} className="transcript-list" aria-live="polite">
-              {transcript.map((entry) => (
-                <li key={entry.id} className={`transcript-entry ${entry.speaker}`}>
-                  <p className="speaker-label">
-                    {entry.speaker === "you" ? "You" : "Iris"}
-                    {!entry.isFinal && " · speaking…"}
-                  </p>
-                  <p>{entry.text || "…"}</p>
-                </li>
-              ))}
-            </ol>
-          ) : (
-            <p className="empty-notes">
-              Start a conversation to review the exchange here.
-            </p>
-          )}
-
-          <div className="panel-footer">
-            <p>Notes stay only in this browser tab and are not saved.</p>
-            <button
-              className="clear-button"
-              type="button"
-              disabled={transcript.length === 0}
-              onClick={clearTranscript}
-            >
-              Clear notes
+    <main className="dashboard-shell">
+      <header className="dashboard-header">
+        <div>
+          <p className="eyebrow">Iris companion</p>
+          <h1>{overview?.person.displayName ?? "Loading Iris…"}</h1>
+          <p className="header-subtitle">
+            {principal?.role === "admin"
+              ? "Operator view"
+              : `Trusted view for ${principal?.trustedContact?.displayName ?? "family"}`}
+          </p>
+        </div>
+        <div className="header-actions">
+          {principal?.role === "admin" && (
+            <button className="call-button" type="button" disabled={isCalling} onClick={() => void startCall()}>
+              {isCalling ? "Calling…" : "Call now"}
             </button>
-          </div>
-        </aside>
-      </section>
+          )}
+          <button className="text-button" type="button" onClick={signOut}>
+            Sign out
+          </button>
+        </div>
+      </header>
+
+      {error && <p className="form-error" role="alert">{error}</p>}
+      {isLoading && <p className="loading-note">Loading the current picture…</p>}
+
+      {overview && (
+        <div className="dashboard-grid">
+          <section className="overview-card profile-card">
+            <p className="card-kicker">Person</p>
+            <h2>{overview.person.displayName}</h2>
+            <p>{overview.person.phoneE164 ?? "Phone number not configured"}</p>
+            <p className="privacy-note">Only consented summaries are retained. Call audio and raw transcripts are not saved.</p>
+          </section>
+
+          <section className="overview-card">
+            <div className="card-heading">
+              <div>
+                <p className="card-kicker">Recent calls</p>
+                <h2>Conversation continuity</h2>
+              </div>
+              <span className="count-pill">{overview.calls.length}</span>
+            </div>
+            {overview.calls.length ? (
+              <ol className="item-list">
+                {overview.calls.map((call) => (
+                  <li key={call.id}>
+                    <strong>{summaryLabel(call.summaryJson)}</strong>
+                    <span>{formatDate(call.startedAt)} · {call.status}</span>
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <p className="empty-state">Calls will appear here after the phone foundation is connected.</p>
+            )}
+          </section>
+
+          <section className="overview-card">
+            <div className="card-heading">
+              <div>
+                <p className="card-kicker">Timeline</p>
+                <h2>What’s happened</h2>
+              </div>
+              <span className="count-pill">{overview.events.length}</span>
+            </div>
+            {overview.events.length ? (
+              <ol className="item-list">
+                {overview.events.map((event) => (
+                  <li key={event.id}>
+                    <strong>{event.type.replaceAll(".", " · ")}</strong>
+                    <span>{formatDate(event.occurredAt)}</span>
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <p className="empty-state">Bridge, Shield, and Translator events will appear here.</p>
+            )}
+          </section>
+
+          <section className="overview-card">
+            <p className="card-kicker">Trusted contacts</p>
+            <h2>People in the circle</h2>
+            {overview.contacts.length ? (
+              <ul className="contact-list">
+                {overview.contacts.map((contact) => (
+                  <li key={contact.id}>
+                    <div>
+                      <strong>{contact.displayName}</strong>
+                      <span>{contact.relationship}</span>
+                    </div>
+                    {principal?.role === "admin" && (
+                      <button className="secondary-button" type="button" onClick={() => void createMagicLink(contact.id)}>
+                        Create link
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="empty-state">Contact access is not available through this link.</p>
+            )}
+            {magicLink && (
+              <div className="magic-link" aria-live="polite">
+                <strong>New family link</strong>
+                <input readOnly value={magicLink} aria-label="New trusted contact link" />
+                <span>Share this once; it expires in seven days and can be revoked.</span>
+              </div>
+            )}
+          </section>
+
+          <section className="overview-card actions-card">
+            <p className="card-kicker">Actions</p>
+            <h2>Approval queue</h2>
+            {overview.actions.length ? (
+              <ol className="item-list">
+                {overview.actions.map((action) => (
+                  <li key={action.id}>
+                    <strong>{action.feature} · {action.actionType}</strong>
+                    <span>{action.status}</span>
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <p className="empty-state">Approved actions will appear here before anything is sent.</p>
+            )}
+          </section>
+        </div>
+      )}
     </main>
   );
 }

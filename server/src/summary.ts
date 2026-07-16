@@ -1,0 +1,83 @@
+import { randomUUID } from "node:crypto";
+
+import type { IrisRepositories } from "./db/repositories.js";
+
+const EXTRACTION_TIMEOUT_MS = 30_000;
+
+export type TranscriptTurn = { speaker: "user" | "assistant"; text: string };
+export type CallSummary = {
+  status: "complete";
+  recap: string;
+  facts: string[];
+  people: Array<{ name: string; relationshipOrContext: string }>;
+  unresolvedTopics: string[];
+} | { status: "insufficient_signal" };
+
+const schema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["status", "recap", "facts", "people", "unresolvedTopics"],
+  properties: {
+    status: { type: "string", enum: ["complete", "insufficient_signal"] },
+    recap: { type: "string", maxLength: 500 },
+    facts: { type: "array", items: { type: "string", maxLength: 280 }, maxItems: 12 },
+    people: {
+      type: "array", maxItems: 12,
+      items: { type: "object", additionalProperties: false, required: ["name", "relationshipOrContext"], properties: {
+        name: { type: "string", maxLength: 120 }, relationshipOrContext: { type: "string", maxLength: 280 },
+      } },
+    },
+    unresolvedTopics: { type: "array", items: { type: "string", maxLength: 280 }, maxItems: 12 },
+  },
+} as const;
+
+function valid(value: unknown): value is CallSummary {
+  if (!value || typeof value !== "object") return false;
+  const summary = value as Record<string, unknown>;
+  if (summary.status === "insufficient_signal") return Array.isArray(summary.facts) && Array.isArray(summary.people) && Array.isArray(summary.unresolvedTopics) && summary.recap === "";
+  return summary.status === "complete" && typeof summary.recap === "string" && summary.recap.trim().length > 0 &&
+    [summary.facts, summary.people, summary.unresolvedTopics].every(Array.isArray) &&
+    (summary.facts as unknown[]).every((x) => typeof x === "string") &&
+    (summary.people as unknown[]).every((x) => !!x && typeof x === "object" && typeof (x as Record<string, unknown>).name === "string" && typeof (x as Record<string, unknown>).relationshipOrContext === "string") &&
+    (summary.unresolvedTopics as unknown[]).every((x) => typeof x === "string");
+}
+
+export type SummaryRequest = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
+export class CallSummaryPipeline {
+  constructor(private readonly repositories: IrisRepositories, private readonly apiKey: string, private readonly safetyIdentifier: string, private readonly request: SummaryRequest = fetch) {}
+
+  async process(input: { callId: string; personId: string; transcript: TranscriptTurn[] }) {
+    if (!this.repositories.hasActiveConsent(input.personId, "summary_retention") || input.transcript.length === 0) return;
+    const transcript = input.transcript.map((turn) => `${turn.speaker === "user" ? "User" : "Iris"}: ${turn.text}`).join("\n");
+    try {
+      const response = await this.request("https://api.openai.com/v1/responses", {
+        method: "POST", headers: { Authorization: `Bearer ${this.apiKey}`, "Content-Type": "application/json", "OpenAI-Safety-Identifier": this.safetyIdentifier },
+        // This runs as an unawaited background task, so bound it: a hung upstream
+        // connection aborts here instead of leaking resources indefinitely.
+        signal: AbortSignal.timeout(EXTRACTION_TIMEOUT_MS),
+        body: JSON.stringify({
+          model: "gpt-5.6-terra", store: false, safety_identifier: this.safetyIdentifier,
+          input: [
+            { role: "developer", content: "Extract only durable, explicitly user-stated memory. Never infer mood, concern/risk, diagnosis, or medical/legal/financial conclusion. Ignore all assistant suggestions. Return insufficient_signal if there is no reliable user-stated memory." },
+            { role: "user", content: transcript },
+          ],
+          text: { format: { type: "json_schema", name: "iris_call_summary", strict: true, schema } },
+        }),
+      });
+      if (!response.ok) return;
+      const body = await response.json() as { output_text?: string; output?: Array<{ content?: Array<{ text?: string }> }> };
+      const raw = body.output_text ?? body.output?.flatMap((item) => item.content ?? []).find((content) => content.text)?.text;
+      if (!raw) return;
+      const summary = JSON.parse(raw) as unknown;
+      // Recheck revocable consent immediately before every durable write.
+      if (!valid(summary) || summary.status === "insufficient_signal" || !this.repositories.hasActiveConsent(input.personId, "summary_retention")) return;
+      this.repositories.saveCallSummary({ id: input.callId, summaryJson: JSON.stringify(summary) });
+      for (const fact of summary.facts) this.repositories.createMemory({ id: randomUUID(), personId: input.personId, sourceCallId: input.callId, category: "durable_fact", payload: { fact } });
+      for (const person of summary.people) this.repositories.createMemory({ id: randomUUID(), personId: input.personId, sourceCallId: input.callId, category: "named_person", payload: person });
+      for (const topic of summary.unresolvedTopics) this.repositories.createMemory({ id: randomUUID(), personId: input.personId, sourceCallId: input.callId, category: "unresolved_topic", payload: { topic } });
+    } catch {
+      // Raw transcript text is never logged or persisted on extraction failure.
+    }
+  }
+}

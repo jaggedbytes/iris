@@ -3,9 +3,23 @@ import express from "express";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 
+import { createDashboardRouter, type DashboardContext } from "./dashboard.js";
 import { createRealtimeClientSecret } from "./realtime.js";
+import { createTelephonyRouter } from "./telephony/router.js";
+import type { OutboundCallManager } from "./telephony/outbound.js";
+import type { ActionDispatcher } from "./actions.js";
 
-export function createApp({ request = fetch }: { request?: typeof fetch } = {}) {
+export function createApp({
+  request = fetch,
+  dashboard,
+  telephony,
+  actions,
+}: {
+  request?: typeof fetch;
+  dashboard?: DashboardContext;
+  telephony?: OutboundCallManager;
+  actions?: ActionDispatcher;
+} = {}) {
   const app = express();
 
   app.use(helmet());
@@ -15,6 +29,18 @@ export function createApp({ request = fetch }: { request?: typeof fetch } = {}) 
       origin: process.env.FRONTEND_ORIGIN ?? "http://localhost:5173",
     }),
   );
+  app.use(express.json());
+  app.use(express.urlencoded({ extended: false }));
+
+  if (dashboard) {
+    app.use("/api/dashboard", createDashboardRouter(dashboard));
+  }
+  if (telephony) app.use("/api/telephony", createTelephonyRouter(telephony));
+  if (actions) app.post("/api/actions/:actionId/messages/status", (request, response) => {
+    if (!actions.validateWebhook(request.header("x-twilio-signature"), request.originalUrl, request.body)) return response.status(403).end();
+    if (typeof request.body?.MessageSid === "string" && typeof request.body?.MessageStatus === "string") actions.recordDelivery(request.params.actionId, request.body.MessageSid, request.body.MessageStatus);
+    response.status(204).end();
+  });
 
   app.get("/health", (_request, response) => {
     response.json({ status: "ok" });
@@ -53,5 +79,3 @@ export function createApp({ request = fetch }: { request?: typeof fetch } = {}) 
 
   return app;
 }
-
-export const app = createApp();
