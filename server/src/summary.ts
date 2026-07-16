@@ -72,7 +72,7 @@ export class CallSummaryPipeline {
       const summary = JSON.parse(raw) as unknown;
       // Recheck revocable consent immediately before every durable write.
       if (!valid(summary) || summary.status === "insufficient_signal" || !this.repositories.hasActiveConsent(input.personId, "summary_retention")) return;
-      this.repositories.completeCall({ id: input.callId, status: "completed", summaryJson: JSON.stringify(summary) });
+      this.repositories.saveCallSummary({ id: input.callId, summaryJson: JSON.stringify(summary) });
       for (const fact of summary.facts) this.repositories.createMemory({ id: randomUUID(), personId: input.personId, sourceCallId: input.callId, category: "durable_fact", payload: { fact } });
       for (const person of summary.people) this.repositories.createMemory({ id: randomUUID(), personId: input.personId, sourceCallId: input.callId, category: "named_person", payload: person });
       for (const topic of summary.unresolvedTopics) this.repositories.createMemory({ id: randomUUID(), personId: input.personId, sourceCallId: input.callId, category: "unresolved_topic", payload: { topic } });

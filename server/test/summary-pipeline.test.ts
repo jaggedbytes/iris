@@ -20,6 +20,11 @@ test("persists only validated user-stated summary memory", async () => {
     people: [{ name: "Ruth", relationshipOrContext: "Avery's friend" }], unresolvedTopics: ["Plan a visit with Ruth."],
   }) }), { status: 200 });
   try {
+    // The call is completed before the summary lands; persisting the summary
+    // must not move ended_at (which would inflate the recorded duration).
+    repositories.completeCall({ id: "call-a", status: "completed" });
+    const endedAt = repositories.listCalls("person-a")[0].endedAt;
+    assert.ok(endedAt);
     await new CallSummaryPipeline(repositories, "key", "safe-id", request).process({
       callId: "call-a", personId: "person-a",
       transcript: [
@@ -29,6 +34,7 @@ test("persists only validated user-stated summary memory", async () => {
     });
     const summary = JSON.parse(repositories.listCalls("person-a")[0].summaryJson!) as { facts: string[] };
     assert.deepEqual(summary.facts, ["Avery has a friend named Ruth."]);
+    assert.equal(repositories.listCalls("person-a")[0].endedAt, endedAt);
     const tables = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND sql LIKE '%transcript%'").all();
     assert.deepEqual(tables, []);
   } finally { closeDatabase(database); }

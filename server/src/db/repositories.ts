@@ -316,6 +316,14 @@ export function createRepositories(database: IrisDatabase) {
         .run(input.status, now(), input.summaryJson ?? null, input.id);
     },
 
+    saveCallSummary(input: { id: string; summaryJson: string }) {
+      // Summary persistence happens after the call is already completed, so it
+      // must not touch ended_at (doing so would inflate the recorded duration).
+      database
+        .prepare("UPDATE calls SET summary_json = ? WHERE id = ?")
+        .run(input.summaryJson, input.id);
+    },
+
     updateCall(input: {
       id: string;
       status?: Extract<CallStatus, "attempted" | "answered">;
