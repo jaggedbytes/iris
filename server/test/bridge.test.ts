@@ -27,6 +27,30 @@ test("Bridge recalls scoped memory and sends only to the selected trusted contac
   } finally { closeDatabase(database); }
 });
 
+test("Bridge resumes an interrupted approved action on retry instead of aborting", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery" });
+  repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Robin", relationship: "daughter", phoneE164: "+15550002222" });
+  let attempts = 0;
+  const dispatcher = new ActionDispatcher(repositories, { twilioAccountSid: "AC", twilioAuthToken: "token", twilioPhoneNumber: "+15550001111", publicBaseUrl: "https://iris.test", openaiApiKey: "key", safetyIdentifier: "safe" }, { messages: { create: async () => {
+    attempts += 1;
+    if (attempts === 1) { const error = new Error("rate limited") as Error & { status: number }; error.status = 429; throw error; }
+    return { sid: "SMresume", status: "queued" };
+  } } });
+  const bridge = new BridgeService(repositories, dispatcher);
+  try {
+    await assert.rejects(bridge.sendApprovedSms({ personId: "person-a", trustedContactId: "contact-a", message: "Please call me.", approvalId: "tool-call-resume" }), /Unable to dispatch message/);
+    assert.equal(repositories.getActionRequest(repositories.listActionRequests("person-a")[0].id)?.status, "approved");
+    const resumed = await bridge.sendApprovedSms({ personId: "person-a", trustedContactId: "contact-a", message: "Please call me.", approvalId: "tool-call-resume" });
+    assert.equal(resumed.ok, true);
+    assert.equal(attempts, 2);
+    assert.equal(repositories.listActionRequests("person-a").length, 1);
+    assert.equal(repositories.getActionRequest(repositories.listActionRequests("person-a")[0].id)?.status, "dispatched");
+    assert.equal(repositories.listEvents("person-a").filter((event) => event.type === "bridge.sms_sent").length, 1);
+  } finally { closeDatabase(database); }
+});
+
 test("Bridge propagates provider rejection and creates no bridge-sent event", async () => {
   const database = createDatabase(":memory:");
   const repositories = createRepositories(database);
