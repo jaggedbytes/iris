@@ -146,14 +146,24 @@ export class OutboundCallManager {
     socket.on("error", clearHandshakeTimer);
 
     const awaitStart = (raw: Buffer | string) => {
-      let message: { event?: string; start?: { customParameters?: { callId?: string } } };
+      let message: { event?: string; start?: { customParameters?: { callId?: string; streamToken?: string } } };
       try { message = JSON.parse(raw.toString()) as typeof message; } catch { clearHandshakeTimer(); socket.close(); return; }
       // Twilio sends `connected` before the `start` message that contains our
       // custom parameters. It is informational, not an authentication failure.
       if (message.event === "connected") return;
       const callId = message.start?.customParameters?.callId;
-      const active = callId && this.activeCalls.get(callId);
-      if (message.event !== "start" || !active) { clearHandshakeTimer(); socket.close(); return; }
+      const streamToken = message.start?.customParameters?.streamToken;
+      const active = callId ? this.activeCalls.get(callId) : undefined;
+      // Authenticate (and reject a duplicate session) before touching the active
+      // call, so an unauthenticated socket can never finalize a legitimate call.
+      if (
+        message.event !== "start" ||
+        !callId ||
+        !active ||
+        active.session ||
+        !streamToken ||
+        streamToken !== active.streamToken
+      ) { clearHandshakeTimer(); socket.close(); return; }
       socket.off("message", awaitStart);
       clearHandshakeTimer();
       active.session = new CallSession(

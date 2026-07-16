@@ -154,7 +154,9 @@ test("a wrong Media Stream token cannot open a session", async () => {
     socket.emit("message", Buffer.from(JSON.stringify({
       event: "start", start: { streamSid: "MZ123", customParameters: { callId, streamToken: "wrong" } },
     })));
-    assert.equal(repositories.listCalls("person-a")[0].status, "failed");
+    // An unauthenticated socket is closed without mutating the legitimate call.
+    assert.equal(socket.closed, true);
+    assert.equal(repositories.listCalls("person-a")[0].status, "attempted");
   } finally {
     closeDatabase(database);
   }
