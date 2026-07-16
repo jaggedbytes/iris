@@ -473,6 +473,8 @@ export function createRepositories(database: IrisDatabase) {
     },
 
     reclaimStaleDispatches(cutoffIso: string) {
+      // Promote to needs_review (not retryable): a stale dispatching claim may
+      // still have been accepted by Twilio, so automatic re-send is unsafe.
       return database.transaction(() => {
         const rows = database.prepare(
           `SELECT o.action_request_id AS actionRequestId, a.person_id AS personId
@@ -481,7 +483,7 @@ export function createRepositories(database: IrisDatabase) {
             WHERE o.state = 'dispatching' AND o.updated_at < ? AND a.status = 'approved'`,
         ).all(cutoffIso) as Array<{ actionRequestId: string; personId: string }>;
         const promote = database.prepare(
-          "UPDATE action_dispatch_outbox SET state = 'retryable', updated_at = ? WHERE action_request_id = ? AND state = 'dispatching'",
+          "UPDATE action_dispatch_outbox SET state = 'needs_review', updated_at = ? WHERE action_request_id = ? AND state = 'dispatching'",
         );
         const timestamp = now();
         for (const row of rows) promote.run(timestamp, row.actionRequestId);
@@ -489,14 +491,21 @@ export function createRepositories(database: IrisDatabase) {
       })();
     },
 
+    releaseDispatchForRetry(actionId: string) {
+      return database.prepare(
+        "UPDATE action_dispatch_outbox SET state = 'retryable', updated_at = ? WHERE action_request_id = ? AND state = 'needs_review'",
+      ).run(now(), actionId).changes === 1;
+    },
+
     getActionDispatch(actionId: string) {
-      return database.prepare("SELECT state, provider_message_id FROM action_dispatch_outbox WHERE action_request_id = ?").get(actionId) as { state: "dispatching" | "dispatched" | "failed" | "retryable"; provider_message_id: string | null } | undefined;
+      return database.prepare("SELECT state, provider_message_id FROM action_dispatch_outbox WHERE action_request_id = ?").get(actionId) as { state: "dispatching" | "dispatched" | "failed" | "retryable" | "needs_review"; provider_message_id: string | null } | undefined;
     },
 
     finalizeActionDispatch(input: { id: string; personId: string; actionRequestId: string; providerMessageId: string; deliveryStatus: string }) {
       return database.transaction(() => {
         const dispatch = this.getActionDispatch(input.actionRequestId);
-        if (dispatch?.state !== "dispatching") return false;
+        // Late Twilio callbacks may arrive after a stale claim was parked for review.
+        if (dispatch?.state !== "dispatching" && dispatch?.state !== "needs_review") return false;
         // CAS first so a concurrent status change aborts before any message or
         // outbox write is committed, keeping the three tables consistent.
         const updated = this.updateActionRequest({

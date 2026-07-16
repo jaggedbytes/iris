@@ -265,6 +265,9 @@ export function createDashboardRouter(context: DashboardContext) {
     if (!principal) return;
     if (principal.role !== "admin" || !context.actions) return response.status(403).json({ error: "Admin access is required." });
     try {
+      // Privileged path: release a needs_review claim before retrying. Automatic
+      // sweeps never re-send; only an admin dispatch may.
+      context.actions.releaseForRetry(request.params.actionId);
       const result = await context.actions.dispatchSms(request.params.actionId);
       if (!result) return response.status(409).json({ error: "Action must be approved and undispatched." });
       response.status(202).json(result);

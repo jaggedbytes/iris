@@ -7,10 +7,9 @@ import type { IrisRepositories } from "./db/repositories.js";
 type MessagingClient = { messages: { create(input: { to: string; from: string; body: string; statusCallback: string }): Promise<{ sid: string; status: string }> } };
 type TwilioRequestError = Error & { status?: unknown; code?: unknown };
 
-// How long an outbox claim may sit in `dispatching` before a sweep treats it as
-// an abandoned (uncertain) send and makes it retryable again. It is deliberately
-// generous: a message Twilio actually accepted would have delivered its status
-// callback and reconciled to `dispatched` (and thus be skipped) long before this.
+// How long an outbox claim may sit in `dispatching` before a sweep parks it for
+// manual review. Uncertain failures do not prove Twilio rejected the send, so
+// the sweep must never re-dispatch automatically.
 export const DEFAULT_STALE_DISPATCH_MS = 15 * 60 * 1000;
 
 export class ActionDispatcher {
@@ -71,7 +70,7 @@ export class ActionDispatcher {
   recordDelivery(actionId: string, providerMessageId: string, status: string) {
     const action = this.repositories.getActionRequest(actionId);
     const dispatch = this.repositories.getActionDispatch(actionId);
-    if (action && dispatch?.state === "dispatching") {
+    if (action && (dispatch?.state === "dispatching" || dispatch?.state === "needs_review")) {
       const finalized = this.repositories.finalizeActionDispatch({ id: randomUUID(), personId: action.personId, actionRequestId: action.id, providerMessageId, deliveryStatus: status });
       if (finalized) this.audit(action.personId, actionId, "action.reconciled", { channel: "sms", providerMessageId, status });
     }
@@ -79,28 +78,27 @@ export class ActionDispatcher {
   }
 
   /**
-   * Recovers dispatches abandoned in `dispatching` by an uncertain (network or
-   * timeout) failure that never received a Twilio callback. After the stale
-   * window they are made retryable and re-dispatched, so a send that never
-   * reached Twilio cannot stay stuck indefinitely. Intended to be swept
-   * periodically; accepts an injectable clock for deterministic testing.
+   * Parks stale `dispatching` claims for manual review. Does not re-send: a
+   * network/timeout failure may still have been accepted by Twilio, so automatic
+   * retry would risk a duplicate SMS. Late status callbacks can still reconcile
+   * `needs_review` rows; an operator must explicitly release before a retry.
    */
-  async recoverStaleDispatches(nowMs: number = Date.now()) {
+  recoverStaleDispatches(nowMs: number = Date.now()) {
     const cutoff = new Date(nowMs - this.staleDispatchMs).toISOString();
     const stale = this.repositories.reclaimStaleDispatches(cutoff);
-    const outcomes: Array<{ actionId: string; ok: boolean }> = [];
     for (const row of stale) {
-      this.audit(row.personId, row.actionRequestId, "action.dispatch_recovered", { channel: "sms" });
-      try {
-        const dispatched = await this.dispatchSms(row.actionRequestId);
-        outcomes.push({ actionId: row.actionRequestId, ok: dispatched !== null });
-      } catch {
-        // A repeat uncertain failure leaves the claim dispatching for the next
-        // sweep; a terminal 4xx marks it failed. Either way it is not stuck.
-        outcomes.push({ actionId: row.actionRequestId, ok: false });
-      }
+      this.audit(row.personId, row.actionRequestId, "action.dispatch_needs_review", { channel: "sms" });
     }
-    return outcomes;
+    return stale.map((row) => row.actionRequestId);
+  }
+
+  /** Privileged: allow a needs_review claim to be claimed again by dispatchSms. */
+  releaseForRetry(actionId: string) {
+    const action = this.repositories.getActionRequest(actionId);
+    if (!action || action.status !== "approved") return null;
+    if (!this.repositories.releaseDispatchForRetry(actionId)) return null;
+    this.audit(action.personId, actionId, "action.dispatch_released", { channel: "sms" });
+    return action;
   }
 
   validateWebhook(signature: string | undefined, path: string, body: Record<string, unknown>) {

@@ -145,4 +145,19 @@ export const migrations = [
       ALTER TABLE action_dispatch_outbox_next RENAME TO action_dispatch_outbox;
     `,
   },
+  {
+    id: "004_action_outbox_needs_review",
+    sql: `
+      CREATE TABLE action_dispatch_outbox_next (
+        action_request_id TEXT PRIMARY KEY REFERENCES action_requests(id) ON DELETE CASCADE,
+        state TEXT NOT NULL CHECK(state IN ('dispatching', 'dispatched', 'failed', 'retryable', 'needs_review')),
+        provider_message_id TEXT UNIQUE,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO action_dispatch_outbox_next SELECT * FROM action_dispatch_outbox;
+      DROP TABLE action_dispatch_outbox;
+      ALTER TABLE action_dispatch_outbox_next RENAME TO action_dispatch_outbox;
+    `,
+  },
 ] as const;

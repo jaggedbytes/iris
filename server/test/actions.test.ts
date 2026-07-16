@@ -104,7 +104,7 @@ test("finalizeActionDispatch aborts when the action-request CAS fails", () => {
   } finally { closeDatabase(database); }
 });
 
-test("a stale uncertain dispatch is recovered and re-dispatched by a later sweep", async () => {
+test("a stale uncertain dispatch is parked for review without an automatic second send", async () => {
   const database = createDatabase(":memory:");
   const repositories = createRepositories(database);
   repositories.createPerson({ id: "person-a", displayName: "Avery" });
@@ -112,27 +112,53 @@ test("a stale uncertain dispatch is recovered and re-dispatched by a later sweep
   let attempts = 0;
   const dispatcher = new ActionDispatcher(repositories, { twilioAccountSid: "ACtest", twilioAuthToken: "token", twilioPhoneNumber: "+15550001111", publicBaseUrl: "https://iris.test", openaiApiKey: "key", safetyIdentifier: "safe" }, { messages: { create: async () => {
     attempts += 1;
-    if (attempts === 1) throw new Error("network down"); // uncertain: no HTTP status
-    return { sid: "SMrecovered", status: "queued" };
+    throw new Error("network down"); // uncertain: no HTTP status — Twilio may still have accepted
   } } }, 15 * 60 * 1000);
   try {
     dispatcher.approve("action-stale", "test");
     await assert.rejects(dispatcher.dispatchSms("action-stale"), /Unable to dispatch message/);
-    assert.equal(repositories.getActionRequest("action-stale")?.status, "approved");
     assert.equal(repositories.getActionDispatch("action-stale")?.state, "dispatching");
-
-    // Within the stale window nothing is reclaimed.
-    assert.deepEqual(await dispatcher.recoverStaleDispatches(Date.now()), []);
-    assert.equal(repositories.getActionDispatch("action-stale")?.state, "dispatching");
+    assert.deepEqual(dispatcher.recoverStaleDispatches(Date.now()), []);
     assert.equal(attempts, 1);
 
-    // After the window elapses the sweep reclaims and re-dispatches it.
-    const outcomes = await dispatcher.recoverStaleDispatches(Date.now() + 60 * 60 * 1000);
-    assert.deepEqual(outcomes, [{ actionId: "action-stale", ok: true }]);
-    assert.equal(attempts, 2);
+    // After the window, park for review — never re-send automatically.
+    assert.deepEqual(dispatcher.recoverStaleDispatches(Date.now() + 60 * 60 * 1000), ["action-stale"]);
+    assert.equal(attempts, 1);
+    assert.equal(repositories.getActionRequest("action-stale")?.status, "approved");
+    assert.equal(repositories.getActionDispatch("action-stale")?.state, "needs_review");
+    assert.equal(await dispatcher.dispatchSms("action-stale"), null);
+    assert.equal(attempts, 1);
+    assert.equal(repositories.listEvents("person-a").some((event) => event.type === "action.dispatch_needs_review"), true);
+
+    // A late Twilio callback for the first accepted send reconciles without a second send.
+    dispatcher.recordDelivery("action-stale", "SMlate", "delivered");
     assert.equal(repositories.getActionRequest("action-stale")?.status, "dispatched");
-    assert.equal(repositories.getActionDispatch("action-stale")?.state, "dispatched");
-    assert.equal(repositories.listEvents("person-a").some((event) => event.type === "action.dispatch_recovered"), true);
+    assert.equal(repositories.getActionDispatch("action-stale")?.provider_message_id, "SMlate");
+    assert.equal(attempts, 1);
+  } finally { closeDatabase(database); }
+});
+
+test("an operator can explicitly release a needs_review claim for a single retry", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery" });
+  repositories.createActionRequest({ id: "action-release", personId: "person-a", feature: "bridge", actionType: "sms", idempotencyKey: "release", payload: { to: "+15550002222", body: "Hello" } });
+  let attempts = 0;
+  const dispatcher = new ActionDispatcher(repositories, { twilioAccountSid: "ACtest", twilioAuthToken: "token", twilioPhoneNumber: "+15550001111", publicBaseUrl: "https://iris.test", openaiApiKey: "key", safetyIdentifier: "safe" }, { messages: { create: async () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("network down");
+    return { sid: "SMretry", status: "queued" };
+  } } }, 1);
+  try {
+    dispatcher.approve("action-release", "test");
+    await assert.rejects(dispatcher.dispatchSms("action-release"), /Unable to dispatch message/);
+    assert.deepEqual(dispatcher.recoverStaleDispatches(Date.now() + 1_000), ["action-release"]);
+    assert.equal(attempts, 1);
+
+    assert.ok(dispatcher.releaseForRetry("action-release"));
+    assert.equal(repositories.getActionDispatch("action-release")?.state, "retryable");
+    assert.deepEqual(await dispatcher.dispatchSms("action-release"), { messageId: "SMretry", status: "queued" });
+    assert.equal(attempts, 2);
   } finally { closeDatabase(database); }
 });
 
