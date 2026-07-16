@@ -472,6 +472,23 @@ export function createRepositories(database: IrisDatabase) {
       ).run(now(), actionId);
     },
 
+    reclaimStaleDispatches(cutoffIso: string) {
+      return database.transaction(() => {
+        const rows = database.prepare(
+          `SELECT o.action_request_id AS actionRequestId, a.person_id AS personId
+             FROM action_dispatch_outbox o
+             JOIN action_requests a ON a.id = o.action_request_id
+            WHERE o.state = 'dispatching' AND o.updated_at < ? AND a.status = 'approved'`,
+        ).all(cutoffIso) as Array<{ actionRequestId: string; personId: string }>;
+        const promote = database.prepare(
+          "UPDATE action_dispatch_outbox SET state = 'retryable', updated_at = ? WHERE action_request_id = ? AND state = 'dispatching'",
+        );
+        const timestamp = now();
+        for (const row of rows) promote.run(timestamp, row.actionRequestId);
+        return rows;
+      })();
+    },
+
     getActionDispatch(actionId: string) {
       return database.prepare("SELECT state, provider_message_id FROM action_dispatch_outbox WHERE action_request_id = ?").get(actionId) as { state: "dispatching" | "dispatched" | "failed" | "retryable"; provider_message_id: string | null } | undefined;
     },

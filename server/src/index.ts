@@ -39,7 +39,17 @@ server.listen(port, () => {
   console.log(`Iris server listening on http://localhost:${port}`);
 });
 
+// Periodically recover SMS dispatches abandoned by uncertain provider failures
+// so a send that never reached Twilio cannot remain stuck indefinitely.
+const dispatchSweep = setInterval(() => {
+  void actions.recoverStaleDispatches().catch((error) =>
+    console.error("Stale dispatch recovery failed", error instanceof Error ? error.message : "unknown error"),
+  );
+}, 60_000);
+dispatchSweep.unref();
+
 function shutdown() {
+  clearInterval(dispatchSweep);
   server.close(() => closeDatabase(database));
 }
 

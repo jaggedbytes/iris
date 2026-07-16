@@ -76,6 +76,38 @@ test("updateActionRequest compare-and-set only transitions from the expected sta
   } finally { closeDatabase(database); }
 });
 
+test("a stale uncertain dispatch is recovered and re-dispatched by a later sweep", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery" });
+  repositories.createActionRequest({ id: "action-stale", personId: "person-a", feature: "bridge", actionType: "sms", idempotencyKey: "stale", payload: { to: "+15550002222", body: "Hello" } });
+  let attempts = 0;
+  const dispatcher = new ActionDispatcher(repositories, { twilioAccountSid: "ACtest", twilioAuthToken: "token", twilioPhoneNumber: "+15550001111", publicBaseUrl: "https://iris.test", openaiApiKey: "key", safetyIdentifier: "safe" }, { messages: { create: async () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("network down"); // uncertain: no HTTP status
+    return { sid: "SMrecovered", status: "queued" };
+  } } }, 15 * 60 * 1000);
+  try {
+    dispatcher.approve("action-stale", "test");
+    await assert.rejects(dispatcher.dispatchSms("action-stale"), /Unable to dispatch message/);
+    assert.equal(repositories.getActionRequest("action-stale")?.status, "approved");
+    assert.equal(repositories.getActionDispatch("action-stale")?.state, "dispatching");
+
+    // Within the stale window nothing is reclaimed.
+    assert.deepEqual(await dispatcher.recoverStaleDispatches(Date.now()), []);
+    assert.equal(repositories.getActionDispatch("action-stale")?.state, "dispatching");
+    assert.equal(attempts, 1);
+
+    // After the window elapses the sweep reclaims and re-dispatches it.
+    const outcomes = await dispatcher.recoverStaleDispatches(Date.now() + 60 * 60 * 1000);
+    assert.deepEqual(outcomes, [{ actionId: "action-stale", ok: true }]);
+    assert.equal(attempts, 2);
+    assert.equal(repositories.getActionRequest("action-stale")?.status, "dispatched");
+    assert.equal(repositories.getActionDispatch("action-stale")?.state, "dispatched");
+    assert.equal(repositories.listEvents("person-a").some((event) => event.type === "action.dispatch_recovered"), true);
+  } finally { closeDatabase(database); }
+});
+
 test("Twilio 4xx rejection creates a terminal failed outbox entry", async () => {
   const database = createDatabase(":memory:");
   const repositories = createRepositories(database);

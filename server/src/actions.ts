@@ -7,11 +7,18 @@ import type { IrisRepositories } from "./db/repositories.js";
 type MessagingClient = { messages: { create(input: { to: string; from: string; body: string; statusCallback: string }): Promise<{ sid: string; status: string }> } };
 type TwilioRequestError = Error & { status?: unknown; code?: unknown };
 
+// How long an outbox claim may sit in `dispatching` before a sweep treats it as
+// an abandoned (uncertain) send and makes it retryable again. It is deliberately
+// generous: a message Twilio actually accepted would have delivered its status
+// callback and reconciled to `dispatched` (and thus be skipped) long before this.
+export const DEFAULT_STALE_DISPATCH_MS = 15 * 60 * 1000;
+
 export class ActionDispatcher {
   constructor(
     private readonly repositories: IrisRepositories,
     private readonly config: TelephonyConfig,
     private readonly client: MessagingClient = twilio(config.twilioAccountSid, config.twilioAuthToken),
+    private readonly staleDispatchMs: number = DEFAULT_STALE_DISPATCH_MS,
   ) {}
 
   approve(actionId: string, approvalSource: string) {
@@ -69,6 +76,31 @@ export class ActionDispatcher {
       if (finalized) this.audit(action.personId, actionId, "action.reconciled", { channel: "sms", providerMessageId, status });
     }
     this.repositories.updateMessageDelivery(providerMessageId, status);
+  }
+
+  /**
+   * Recovers dispatches abandoned in `dispatching` by an uncertain (network or
+   * timeout) failure that never received a Twilio callback. After the stale
+   * window they are made retryable and re-dispatched, so a send that never
+   * reached Twilio cannot stay stuck indefinitely. Intended to be swept
+   * periodically; accepts an injectable clock for deterministic testing.
+   */
+  async recoverStaleDispatches(nowMs: number = Date.now()) {
+    const cutoff = new Date(nowMs - this.staleDispatchMs).toISOString();
+    const stale = this.repositories.reclaimStaleDispatches(cutoff);
+    const outcomes: Array<{ actionId: string; ok: boolean }> = [];
+    for (const row of stale) {
+      this.audit(row.personId, row.actionRequestId, "action.dispatch_recovered", { channel: "sms" });
+      try {
+        const dispatched = await this.dispatchSms(row.actionRequestId);
+        outcomes.push({ actionId: row.actionRequestId, ok: dispatched !== null });
+      } catch {
+        // A repeat uncertain failure leaves the claim dispatching for the next
+        // sweep; a terminal 4xx marks it failed. Either way it is not stuck.
+        outcomes.push({ actionId: row.actionRequestId, ok: false });
+      }
+    }
+    return outcomes;
   }
 
   validateWebhook(signature: string | undefined, path: string, body: Record<string, unknown>) {
