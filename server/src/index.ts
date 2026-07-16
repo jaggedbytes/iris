@@ -6,6 +6,7 @@ import { loadDashboardConfig, loadFoundationConfig, loadTelephonyConfig } from "
 import { closeDatabase, createDatabase, createRepositories } from "./db/index.js";
 import { OutboundCallManager } from "./telephony/outbound.js";
 import { attachMediaServer } from "./telephony/router.js";
+import { CallSummaryPipeline } from "./summary.js";
 
 const port = Number(process.env.PORT ?? 3001);
 const foundationConfig = loadFoundationConfig();
@@ -13,7 +14,8 @@ const dashboardConfig = loadDashboardConfig();
 const telephonyConfig = loadTelephonyConfig();
 const database = createDatabase(foundationConfig.databasePath);
 const repositories = createRepositories(database);
-const telephony = new OutboundCallManager(repositories, telephonyConfig);
+const summaries = new CallSummaryPipeline(repositories, telephonyConfig.openaiApiKey, telephonyConfig.safetyIdentifier);
+const telephony = new OutboundCallManager(repositories, telephonyConfig, undefined, undefined, summaries);
 const app = createApp({
   dashboard: {
     repositories,

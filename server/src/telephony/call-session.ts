@@ -14,6 +14,7 @@ export type RealtimeSocketFactory = (input: {
   apiKey: string;
   safetyIdentifier: string;
 }) => SocketLike;
+export type LiveTranscriptTurn = { speaker: "user" | "assistant"; text: string };
 
 export const createRealtimeSocket: RealtimeSocketFactory = ({
   apiKey,
@@ -48,7 +49,7 @@ export class CallSession {
   private realtime: SocketLike | null = null;
   private realtimeReady = false;
   private bufferedAudio: string[] = [];
-  private liveTranscript: string[] = [];
+  private liveTranscript: LiveTranscriptTurn[] = [];
   private closed = false;
   private readonly debugRealtime = process.env.IRIS_REALTIME_DEBUG === "true";
 
@@ -61,7 +62,7 @@ export class CallSession {
       apiKey: string;
       safetyIdentifier: string;
     },
-    private readonly onClose: (reason: "completed" | "failed") => void,
+    private readonly onClose: (reason: "completed" | "failed", transcript: LiveTranscriptTurn[]) => void,
   ) {
     twilioSocket.on("message", (data: Buffer | string) => this.handleTwilioMessage(data));
     twilioSocket.on("close", () => this.close("completed"));
@@ -109,6 +110,7 @@ export class CallSession {
                   // Twilio Media Streams use G.711 μ-law, named PCMU by the
                   // Realtime API. Keeping both ends in PCMU avoids transcoding.
                   format: { type: "audio/pcmu" },
+                  transcription: { model: "gpt-4o-transcribe" },
                   turn_detection: { type: "server_vad" },
                 },
                 output: { format: { type: "audio/pcmu" }, voice: "marin" },
@@ -178,7 +180,12 @@ export class CallSession {
     if (event.type === "input_audio_buffer.speech_started" && this.streamSid) {
       this.twilioSocket.send(JSON.stringify({ event: "clear", streamSid: this.streamSid }));
     }
-    if (event.transcript) this.liveTranscript.push(event.transcript);
+    if (event.type === "conversation.item.input_audio_transcription.completed" && event.transcript) {
+      this.liveTranscript.push({ speaker: "user", text: event.transcript });
+    }
+    if (event.type === "response.output_audio_transcript.done" && event.transcript) {
+      this.liveTranscript.push({ speaker: "assistant", text: event.transcript });
+    }
   }
 
   private logRealtimeEvent(event: RealtimeEvent) {
@@ -202,10 +209,13 @@ export class CallSession {
     if (this.closed) return;
     this.closed = true;
     this.bufferedAudio.length = 0;
-    this.liveTranscript.length = 0;
+    const transcript = this.liveTranscript.splice(0);
     this.realtimeReady = false;
     this.realtime?.close();
     this.realtime = null;
-    this.onClose(reason);
+    // On a fallback finalization, the provider socket may still be open even
+    // though it failed to deliver its own close event.
+    this.twilioSocket.close();
+    this.onClose(reason, transcript);
   }
 }

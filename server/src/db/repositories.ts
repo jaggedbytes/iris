@@ -345,6 +345,13 @@ export function createRepositories(database: IrisDatabase) {
       return rows.map(toCall);
     },
 
+    createMemory(input: { id: string; personId: string; sourceCallId: string; category: string; payload: unknown }) {
+      database.prepare(
+        `INSERT INTO memories (id, person_id, source_call_id, category, payload_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run(input.id, input.personId, input.sourceCallId, input.category, JSON.stringify(input.payload), now());
+    },
+
     createEvent(input: {
       id: string;
       personId: string;

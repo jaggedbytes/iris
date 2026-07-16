@@ -5,6 +5,7 @@ import twilio from "twilio";
 import type { TelephonyConfig } from "../config.js";
 import type { IrisRepositories } from "../db/repositories.js";
 import { CallSession, createRealtimeSocket, type RealtimeSocketFactory, type SocketLike } from "./call-session.js";
+import type { TranscriptTurn } from "../summary.js";
 
 type TwilioClient = {
   calls: {
@@ -20,7 +21,21 @@ type TwilioClient = {
   };
 };
 
-type ActiveCall = { personId: string; streamToken: string; session?: CallSession };
+type ActiveCall = {
+  personId: string;
+  streamToken: string;
+  session?: CallSession;
+  terminalStatus?: "completed" | "failed";
+  finalizationTimer?: unknown;
+};
+
+export const DEFAULT_STREAM_CLOSE_GRACE_MS = 10_000;
+export type CallSummaryProcessor = { process(input: { callId: string; personId: string; transcript: TranscriptTurn[] }): Promise<void> };
+export type CallScheduler = {
+  setTimeout(callback: () => void, delayMs: number): { unref?: () => void };
+  clearTimeout(handle: unknown): void;
+};
+const systemScheduler: CallScheduler = { setTimeout, clearTimeout };
 
 export class OutboundCallManager {
   private readonly activeCalls = new Map<string, ActiveCall>();
@@ -30,6 +45,9 @@ export class OutboundCallManager {
     private readonly config: TelephonyConfig,
     private readonly client: TwilioClient = twilio(config.twilioAccountSid, config.twilioAuthToken),
     private readonly realtimeFactory: RealtimeSocketFactory = createRealtimeSocket,
+    private readonly summaries?: CallSummaryProcessor,
+    private readonly scheduler: CallScheduler = systemScheduler,
+    private readonly streamCloseGraceMs = DEFAULT_STREAM_CLOSE_GRACE_MS,
   ) {}
 
   async startCall(personId: string) {
@@ -90,7 +108,20 @@ export class OutboundCallManager {
       this.repositories.createEvent({ id: randomUUID(), personId: active.personId, callId, type: "call.answered", payload: { transport: "twilio" } });
     }
     if (["completed", "busy", "no-answer", "canceled", "failed"].includes(callStatus)) {
-      this.finish(callId, callStatus === "completed" ? "completed" : "failed", callStatus === "completed" ? "call.completed" : "call.failed");
+      const terminalStatus = callStatus === "completed" ? "completed" : "failed";
+      // A terminal callback can precede the final WebSocket close and its last
+      // transcription events. Let an established session close itself first.
+      if (active.session) {
+        active.terminalStatus = terminalStatus;
+        if (!active.finalizationTimer) {
+          active.finalizationTimer = this.scheduler.setTimeout(() => {
+            active.session?.close(terminalStatus);
+          }, this.streamCloseGraceMs);
+          (active.finalizationTimer as { unref?: () => void }).unref?.();
+        }
+        return;
+      }
+      this.finish(callId, terminalStatus, terminalStatus === "completed" ? "call.completed" : "call.failed");
     }
   }
 
@@ -111,7 +142,10 @@ export class OutboundCallManager {
         socket,
         this.realtimeFactory,
         { apiKey: this.config.openaiApiKey, safetyIdentifier: this.config.safetyIdentifier },
-        (status) => this.finish(callId, status, status === "completed" ? "call.completed" : "call.failed"),
+        (streamStatus, transcript) => {
+          const status = active.terminalStatus ?? streamStatus;
+          this.finish(callId, status, status === "completed" ? "call.completed" : "call.failed", transcript);
+        },
       );
       socket.emit("message", raw);
       this.repositories.createEvent({ id: randomUUID(), personId: active.personId, callId, type: "call.stream_started", payload: { transport: "twilio_media_stream" } });
@@ -119,15 +153,13 @@ export class OutboundCallManager {
     socket.on("message", awaitStart);
   }
 
-  private finish(callId: string, status: "completed" | "failed", eventType: string) {
+  private finish(callId: string, status: "completed" | "failed", eventType: string, transcript: TranscriptTurn[] = []) {
     const active = this.activeCalls.get(callId);
     if (!active) return;
     this.activeCalls.delete(callId);
-    // A provider completion callback can arrive slightly before the WebSocket
-    // close. Closing the in-memory session here guarantees its audio queue and
-    // transient transcript buffer do not outlive the call.
-    active.session?.close(status);
+    if (active.finalizationTimer) this.scheduler.clearTimeout(active.finalizationTimer);
     this.repositories.completeCall({ id: callId, status });
     this.repositories.createEvent({ id: randomUUID(), personId: active.personId, callId, type: eventType, payload: { transport: "twilio" } });
+    if (status === "completed") void this.summaries?.process({ callId, personId: active.personId, transcript });
   }
 }
