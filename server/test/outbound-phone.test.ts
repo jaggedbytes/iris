@@ -107,6 +107,37 @@ test("outbound calls use a token-bound μ-law stream and discard live transcript
   }
 });
 
+test("an unsolicited Realtime disconnect fails the call and skips summary", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  const realtime = new FakeSocket();
+  const summaries: unknown[] = [];
+  const manager = new OutboundCallManager(
+    repositories, telephonyConfig, { calls: { create: async () => ({ sid: "CA123" }) } }, () => realtime,
+    { process: async (input) => { summaries.push(input); } },
+  );
+  try {
+    const { callId } = await manager.startCall("person-a");
+    const token = /streamToken" value="([^"]+)"/.exec(manager.twiml(callId) ?? "")?.[1];
+    assert.ok(token);
+    const socket = new FakeSocket();
+    manager.acceptMediaSocket(socket);
+    socket.emit("message", Buffer.from(JSON.stringify({ event: "start", start: { streamSid: "MZ123", customParameters: { callId, streamToken: token } } })));
+    realtime.emit("open");
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "Half a sentence" })));
+
+    // OpenAI/network drops mid-call before any Twilio terminal status arrives.
+    realtime.emit("close");
+
+    assert.equal(repositories.listCalls("person-a")[0].status, "failed");
+    assert.deepEqual(summaries, []);
+    assert.equal(socket.closed, true);
+    assert.equal(repositories.listEvents("person-a").some((event) => event.type === "call.failed"), true);
+  } finally { closeDatabase(database); }
+});
+
 test("a wrong Media Stream token cannot open a session", async () => {
   const database = createDatabase(":memory:");
   const repositories = createRepositories(database);

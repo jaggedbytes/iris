@@ -133,7 +133,9 @@ export class CallSession {
       this.debug(`socket error: ${error.message}`);
       this.close("failed");
     });
-    this.realtime.on("close", () => this.close("completed"));
+    // An unsolicited upstream close is a mid-call failure. Intentional shutdowns
+    // set `closed` before closing this socket, so close() no-ops for those.
+    this.realtime.on("close", () => this.close("failed"));
   }
 
   private forwardInput(payload: string) {
