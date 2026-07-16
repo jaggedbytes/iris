@@ -5,13 +5,17 @@ import helmet from "helmet";
 
 import { createDashboardRouter, type DashboardContext } from "./dashboard.js";
 import { createRealtimeClientSecret } from "./realtime.js";
+import { createTelephonyRouter } from "./telephony/router.js";
+import type { OutboundCallManager } from "./telephony/outbound.js";
 
 export function createApp({
   request = fetch,
   dashboard,
+  telephony,
 }: {
   request?: typeof fetch;
   dashboard?: DashboardContext;
+  telephony?: OutboundCallManager;
 } = {}) {
   const app = express();
 
@@ -23,10 +27,12 @@ export function createApp({
     }),
   );
   app.use(express.json());
+  app.use(express.urlencoded({ extended: false }));
 
   if (dashboard) {
     app.use("/api/dashboard", createDashboardRouter(dashboard));
   }
+  if (telephony) app.use("/api/telephony", createTelephonyRouter(telephony));
 
   app.get("/health", (_request, response) => {
     response.json({ status: "ok" });

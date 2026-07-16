@@ -5,15 +5,15 @@ export function seedDemoFoundation(repositories: IrisRepositories, personId: str
 
   repositories.createPerson({
     id: personId,
-    displayName: "Evelyn Carter",
-    phoneE164: "+15555550100",
+    displayName: "Bean Jackson",
+    phoneE164: "+12487228194",
   });
   repositories.createTrustedContact({
-    id: "contact-roger",
+    id: "contact-evelyn",
     personId,
-    displayName: "Roger Carter",
+    displayName: "Evelyn Carter",
     phoneE164: "+15555550101",
-    relationship: "son",
+    relationship: "neighbor",
   });
   repositories.recordConsent({
     id: "consent-summary-retention",

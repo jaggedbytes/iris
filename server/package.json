@@ -18,13 +18,16 @@
     "dotenv": "^16.6.1",
     "express": "^5.1.0",
     "express-rate-limit": "^8.5.2",
-    "helmet": "^8.3.0"
+    "helmet": "^8.3.0",
+    "twilio": "^6.0.2",
+    "ws": "^8.21.1"
   },
   "devDependencies": {
-    "@types/cors": "^2.8.19",
     "@types/better-sqlite3": "^7.6.13",
+    "@types/cors": "^2.8.19",
     "@types/express": "^5.0.3",
     "@types/node": "^22.16.4",
+    "@types/ws": "^8.18.1",
     "tsx": "^4.20.3",
     "typescript": "^5.8.3"
   },

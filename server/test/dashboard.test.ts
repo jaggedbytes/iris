@@ -9,7 +9,7 @@ const adminToken = "dashboard-test-admin-token";
 const hash = (value: string) =>
   createHash("sha256").update(value).digest("hex");
 
-async function createDashboardServer() {
+async function createDashboardServer(options: { startOutboundCall?: (personId: string) => Promise<{ callId: string }> } = {}) {
   const database = createDatabase(":memory:");
   const repositories = createRepositories(database);
   repositories.createPerson({ id: "person-a", displayName: "Avery" });
@@ -26,6 +26,7 @@ async function createDashboardServer() {
       repositories,
       adminToken,
       frontendOrigin: "http://localhost:5173",
+      startOutboundCall: options.startOutboundCall,
     },
   });
   const server = app.listen();
@@ -42,6 +43,37 @@ async function createDashboardServer() {
     url: `http://127.0.0.1:${address.port}`,
   };
 }
+
+test("allows only an admin to start an outbound call", async () => {
+  const startedFor: string[] = [];
+  const fixture = await createDashboardServer({
+    startOutboundCall: async (personId) => {
+      startedFor.push(personId);
+      return { callId: "call-started" };
+    },
+  });
+
+  try {
+    fixture.repositories.grantAccess({
+      id: "grant-a", personId: "person-a", trustedContactId: "contact-a",
+      scopes: ["request_check_in"], tokenHash: hash("contact-token"),
+      expiresAt: "2030-01-01T00:00:00.000Z",
+    });
+    const adminResponse = await fetch(`${fixture.url}/api/dashboard/people/person-a/calls`, {
+      method: "POST", headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    assert.equal(adminResponse.status, 202);
+    assert.deepEqual(startedFor, ["person-a"]);
+
+    const contactResponse = await fetch(`${fixture.url}/api/dashboard/people/person-a/calls`, {
+      method: "POST", headers: { Authorization: "Bearer contact-token" },
+    });
+    assert.equal(contactResponse.status, 403);
+    assert.deepEqual(startedFor, ["person-a"]);
+  } finally {
+    fixture.close();
+  }
+});
 
 test("allows an admin to view a person overview", async () => {
   const fixture = await createDashboardServer();

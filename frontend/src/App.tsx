@@ -50,6 +50,7 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(Boolean(token));
   const [magicLink, setMagicLink] = useState<string | null>(null);
+  const [isCalling, setIsCalling] = useState(false);
 
   const personId = useMemo(() => {
     if (overview) return overview.person.id;
@@ -132,6 +133,20 @@ export function App() {
     }
   };
 
+  const startCall = async () => {
+    setIsCalling(true);
+    setError(null);
+    try {
+      await dashboardJson(`/api/dashboard/people/${personId}/calls`, token, {
+        method: "POST",
+      });
+    } catch (callError) {
+      setError(callError instanceof Error ? callError.message : "Iris could not place the call.");
+    } finally {
+      setIsCalling(false);
+    }
+  };
+
   if (!token && !isLoading) {
     return (
       <main className="access-shell">
@@ -172,9 +187,11 @@ export function App() {
           </p>
         </div>
         <div className="header-actions">
-          <button className="call-button" type="button" disabled title="Available in the outbound phone checkpoint">
-            Call now
-          </button>
+          {principal?.role === "admin" && (
+            <button className="call-button" type="button" disabled={isCalling} onClick={() => void startCall()}>
+              {isCalling ? "Calling…" : "Call now"}
+            </button>
+          )}
           <button className="text-button" type="button" onClick={signOut}>
             Sign out
           </button>

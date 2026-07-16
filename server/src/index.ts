@@ -1,22 +1,32 @@
 import "dotenv/config";
+import { createServer } from "node:http";
 
 import { createApp } from "./app.js";
-import { loadDashboardConfig, loadFoundationConfig } from "./config.js";
+import { loadDashboardConfig, loadFoundationConfig, loadTelephonyConfig } from "./config.js";
 import { closeDatabase, createDatabase, createRepositories } from "./db/index.js";
+import { OutboundCallManager } from "./telephony/outbound.js";
+import { attachMediaServer } from "./telephony/router.js";
 
 const port = Number(process.env.PORT ?? 3001);
 const foundationConfig = loadFoundationConfig();
 const dashboardConfig = loadDashboardConfig();
+const telephonyConfig = loadTelephonyConfig();
 const database = createDatabase(foundationConfig.databasePath);
+const repositories = createRepositories(database);
+const telephony = new OutboundCallManager(repositories, telephonyConfig);
 const app = createApp({
   dashboard: {
-    repositories: createRepositories(database),
+    repositories,
     adminToken: dashboardConfig.adminToken,
     frontendOrigin: dashboardConfig.frontendOrigin,
+    startOutboundCall: (personId) => telephony.startCall(personId),
   },
+  telephony,
 });
 
-const server = app.listen(port, () => {
+const server = createServer(app);
+attachMediaServer(server, telephony);
+server.listen(port, () => {
   console.log(`Iris server listening on http://localhost:${port}`);
 });
 

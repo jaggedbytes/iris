@@ -316,6 +316,26 @@ export function createRepositories(database: IrisDatabase) {
         .run(input.status, now(), input.summaryJson ?? null, input.id);
     },
 
+    updateCall(input: {
+      id: string;
+      status?: Extract<CallStatus, "attempted" | "answered">;
+      providerCallId?: string;
+    }) {
+      if (input.status) {
+        database
+          .prepare(
+            "UPDATE calls SET status = ?, provider_call_id = COALESCE(?, provider_call_id) WHERE id = ?",
+          )
+          .run(input.status, input.providerCallId ?? null, input.id);
+        return;
+      }
+      if (input.providerCallId) {
+        database
+          .prepare("UPDATE calls SET provider_call_id = ? WHERE id = ?")
+          .run(input.providerCallId, input.id);
+      }
+    },
+
     listCalls(personId: string) {
       const rows = database
         .prepare(

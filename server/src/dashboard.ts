@@ -24,6 +24,7 @@ export type DashboardContext = {
   repositories: IrisRepositories;
   adminToken: string;
   frontendOrigin: string;
+  startOutboundCall?: (personId: string) => Promise<{ callId: string }>;
 };
 
 function hashToken(token: string) {
@@ -214,6 +215,31 @@ export function createDashboardRouter(context: DashboardContext) {
       grant: { id: grant.id, expiresAt: grant.expiresAt, scopes: grant.scopes },
       magicLink: magicLink.toString(),
     });
+  });
+
+  router.post("/people/:personId/calls", async (request, response) => {
+    const principal = requirePrincipal(request, response, context);
+    if (!principal) return;
+    if (principal.role !== "admin") {
+      response.status(403).json({ error: "Admin access is required." });
+      return;
+    }
+    if (!context.repositories.getPerson(request.params.personId)) {
+      response.status(404).json({ error: "Person not found." });
+      return;
+    }
+    if (!context.startOutboundCall) {
+      response.status(503).json({ error: "Outbound calling is not configured." });
+      return;
+    }
+
+    try {
+      const call = await context.startOutboundCall(request.params.personId);
+      response.status(202).json({ ...call, status: "attempted" });
+    } catch (error) {
+      console.error("Unable to initiate outbound call", error);
+      response.status(502).json({ error: "Iris could not place the call." });
+    }
   });
 
   router.delete("/access-grants/:grantId", (request, response) => {
