@@ -6,6 +6,7 @@ import type { TelephonyConfig } from "../config.js";
 import type { IrisRepositories } from "../db/repositories.js";
 import { CallSession, createRealtimeSocket, type RealtimeSocketFactory, type SocketLike } from "./call-session.js";
 import type { TranscriptTurn } from "../summary.js";
+import type { BridgeService } from "../bridge.js";
 
 type TwilioClient = {
   calls: {
@@ -48,6 +49,7 @@ export class OutboundCallManager {
     private readonly summaries?: CallSummaryProcessor,
     private readonly scheduler: CallScheduler = systemScheduler,
     private readonly streamCloseGraceMs = DEFAULT_STREAM_CLOSE_GRACE_MS,
+    private readonly bridge?: BridgeService,
   ) {}
 
   async startCall(personId: string) {
@@ -146,6 +148,10 @@ export class OutboundCallManager {
           const status = active.terminalStatus ?? streamStatus;
           this.finish(callId, status, status === "completed" ? "call.completed" : "call.failed", transcript);
         },
+        this.bridge ? {
+          context: JSON.stringify(this.bridge.context(active.personId)),
+          dispatch: (contactId, message, approvalId) => this.bridge!.sendApprovedSms({ personId: active.personId, trustedContactId: contactId, message, approvalId }),
+        } : undefined,
       );
       socket.emit("message", raw);
       this.repositories.createEvent({ id: randomUUID(), personId: active.personId, callId, type: "call.stream_started", payload: { transport: "twilio_media_stream" } });

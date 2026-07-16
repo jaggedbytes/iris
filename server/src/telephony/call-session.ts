@@ -37,6 +37,7 @@ type RealtimeEvent = {
   delta?: string;
   transcript?: string;
   error?: { code?: string; message?: string };
+  name?: string; call_id?: string; arguments?: string;
 };
 
 /**
@@ -63,6 +64,7 @@ export class CallSession {
       safetyIdentifier: string;
     },
     private readonly onClose: (reason: "completed" | "failed", transcript: LiveTranscriptTurn[]) => void,
+    private readonly bridge?: { context: string; dispatch: (contactId: string, message: string, approvalId: string) => Promise<{ ok: boolean; contactName?: string }> },
   ) {
     twilioSocket.on("message", (data: Buffer | string) => this.handleTwilioMessage(data));
     twilioSocket.on("close", () => this.close("completed"));
@@ -104,7 +106,9 @@ export class CallSession {
             session: {
               type: "realtime",
               instructions: irisV1,
+              ...(this.bridge ? { instructions: `${irisV1}\n\nBridge memory context (do not mention this list unless helpful):\n${this.bridge.context}\n\nYou may only call bridge_send_sms after the person clearly says yes to sending a specific message to a listed trusted contact. First say who you would contact and what you would send, then ask for approval. Never call it on ambiguity.` } : {}),
               output_modalities: ["audio"],
+              tools: this.bridge ? [{ type: "function", name: "bridge_send_sms", description: "Send an explicitly approved SMS to a listed trusted contact.", parameters: { type: "object", additionalProperties: false, required: ["trusted_contact_id", "message"], properties: { trusted_contact_id: { type: "string" }, message: { type: "string", maxLength: 480 } } } }] : [],
               audio: {
                 input: {
                   // Twilio Media Streams use G.711 μ-law, named PCMU by the
@@ -170,6 +174,10 @@ export class CallSession {
       for (const audio of this.bufferedAudio.splice(0)) this.appendAudio(audio);
       return;
     }
+    if (event.type === "response.function_call_arguments.done" && event.name === "bridge_send_sms" && event.call_id && event.arguments && this.bridge) {
+      void this.handleBridgeTool(event.call_id, event.arguments);
+      return;
+    }
     if (event.type === "response.output_audio.delta" && event.delta && this.streamSid) {
       this.twilioSocket.send(JSON.stringify({
         event: "media",
@@ -203,6 +211,16 @@ export class CallSession {
 
   private debug(message: string) {
     if (this.debugRealtime) console.info(`[Iris Realtime ${this.callId}] ${message}`);
+  }
+
+  private async handleBridgeTool(callId: string, argumentsJson: string) {
+    let args: { trusted_contact_id?: unknown; message?: unknown };
+    try { args = JSON.parse(argumentsJson) as typeof args; } catch { return; }
+    const result = typeof args.trusted_contact_id === "string" && typeof args.message === "string"
+      ? await this.bridge!.dispatch(args.trusted_contact_id, args.message, callId).catch(() => ({ ok: false }))
+      : { ok: false };
+    this.realtime?.send(JSON.stringify({ type: "conversation.item.create", item: { type: "function_call_output", call_id: callId, output: JSON.stringify(result) } }));
+    this.realtime?.send(JSON.stringify({ type: "response.create" }));
   }
 
   close(reason: "completed" | "failed") {

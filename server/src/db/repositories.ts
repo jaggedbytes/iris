@@ -352,6 +352,12 @@ export function createRepositories(database: IrisDatabase) {
       ).run(input.id, input.personId, input.sourceCallId, input.category, JSON.stringify(input.payload), now());
     },
 
+    listMemories(personId: string, limit = 20) {
+      return database.prepare(
+        "SELECT category, payload_json FROM memories WHERE person_id = ? ORDER BY created_at DESC LIMIT ?",
+      ).all(personId, limit) as Array<{ category: string; payload_json: string }>;
+    },
+
     createEvent(input: {
       id: string;
       personId: string;
@@ -404,6 +410,11 @@ export function createRepositories(database: IrisDatabase) {
 
     getActionRequest(id: string) {
       const row = database.prepare("SELECT * FROM action_requests WHERE id = ?").get(id) as ActionRequestRow | undefined;
+      return row ? toActionRequest(row) : null;
+    },
+
+    findActionRequestByIdempotencyKey(idempotencyKey: string) {
+      const row = database.prepare("SELECT * FROM action_requests WHERE idempotency_key = ?").get(idempotencyKey) as ActionRequestRow | undefined;
       return row ? toActionRequest(row) : null;
     },
 
