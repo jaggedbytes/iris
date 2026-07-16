@@ -58,8 +58,8 @@ export function App() {
 
   const personId = useMemo(() => {
     if (overview) return overview.person.id;
-    if (principal?.role === "trusted_contact") return principal.personId;
-    return "person-demo";
+    if (principal) return principal.personId;
+    return "";
   }, [overview, principal]);
 
   useEffect(() => {
@@ -77,10 +77,7 @@ export function App() {
     void (async () => {
       try {
         const nextPrincipal = await dashboardJson<DashboardPrincipal>("/api/dashboard/me", token);
-        const nextPersonId =
-          nextPrincipal.role === "trusted_contact"
-            ? nextPrincipal.personId
-            : "person-demo";
+        const nextPersonId = nextPrincipal.personId;
         const nextOverview = await dashboardJson<DashboardOverview>(
           `/api/dashboard/people/${nextPersonId}/overview`,
           token,

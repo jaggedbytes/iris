@@ -25,6 +25,7 @@ const app = createApp({
     repositories,
     adminToken: dashboardConfig.adminToken,
     frontendOrigin: dashboardConfig.frontendOrigin,
+    demoPersonId: foundationConfig.demoPersonId,
     startOutboundCall: (personId) => telephony.startCall(personId),
     actions,
   },

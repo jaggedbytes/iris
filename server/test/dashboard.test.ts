@@ -26,6 +26,7 @@ async function createDashboardServer(options: { startOutboundCall?: (personId: s
       repositories,
       adminToken,
       frontendOrigin: "http://localhost:5173",
+      demoPersonId: "person-a",
       startOutboundCall: options.startOutboundCall,
     },
   });

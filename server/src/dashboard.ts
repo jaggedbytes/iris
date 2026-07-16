@@ -25,6 +25,7 @@ export type DashboardContext = {
   repositories: IrisRepositories;
   adminToken: string;
   frontendOrigin: string;
+  demoPersonId: string;
   startOutboundCall?: (personId: string) => Promise<{ callId: string }>;
   actions?: ActionDispatcher;
 };
@@ -114,7 +115,7 @@ export function createDashboardRouter(context: DashboardContext) {
     if (!principal) return;
 
     if (principal.role === "admin") {
-      response.json({ role: "admin" });
+      response.json({ role: "admin", personId: context.demoPersonId });
       return;
     }
 

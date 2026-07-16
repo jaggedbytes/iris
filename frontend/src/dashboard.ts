@@ -1,5 +1,5 @@
 export type DashboardPrincipal =
-  | { role: "admin" }
+  | { role: "admin"; personId: string }
   | {
       role: "trusted_contact";
       personId: string;
