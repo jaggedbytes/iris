@@ -31,6 +31,7 @@ type ActiveCall = {
 };
 
 export const DEFAULT_STREAM_CLOSE_GRACE_MS = 10_000;
+export const DEFAULT_MEDIA_HANDSHAKE_TIMEOUT_MS = 10_000;
 export type CallSummaryProcessor = { process(input: { callId: string; personId: string; transcript: TranscriptTurn[] }): Promise<void> };
 export type CallScheduler = {
   setTimeout(callback: () => void, delayMs: number): { unref?: () => void };
@@ -50,6 +51,7 @@ export class OutboundCallManager {
     private readonly scheduler: CallScheduler = systemScheduler,
     private readonly streamCloseGraceMs = DEFAULT_STREAM_CLOSE_GRACE_MS,
     private readonly bridge?: BridgeService,
+    private readonly handshakeTimeoutMs = DEFAULT_MEDIA_HANDSHAKE_TIMEOUT_MS,
   ) {}
 
   async startCall(personId: string) {
@@ -128,16 +130,32 @@ export class OutboundCallManager {
   }
 
   acceptMediaSocket(socket: SocketLike) {
+    // The public media endpoint must not retain unauthenticated sockets. Close
+    // any connection that has not sent a valid `start` within the deadline.
+    let handshakeTimer: unknown = this.scheduler.setTimeout(() => {
+      handshakeTimer = null;
+      socket.close();
+    }, this.handshakeTimeoutMs);
+    (handshakeTimer as { unref?: () => void }).unref?.();
+    const clearHandshakeTimer = () => {
+      if (handshakeTimer === null) return;
+      this.scheduler.clearTimeout(handshakeTimer);
+      handshakeTimer = null;
+    };
+    socket.on("close", clearHandshakeTimer);
+    socket.on("error", clearHandshakeTimer);
+
     const awaitStart = (raw: Buffer | string) => {
       let message: { event?: string; start?: { customParameters?: { callId?: string } } };
-      try { message = JSON.parse(raw.toString()) as typeof message; } catch { socket.close(); return; }
+      try { message = JSON.parse(raw.toString()) as typeof message; } catch { clearHandshakeTimer(); socket.close(); return; }
       // Twilio sends `connected` before the `start` message that contains our
       // custom parameters. It is informational, not an authentication failure.
       if (message.event === "connected") return;
       const callId = message.start?.customParameters?.callId;
       const active = callId && this.activeCalls.get(callId);
-      if (message.event !== "start" || !active) { socket.close(); return; }
+      if (message.event !== "start" || !active) { clearHandshakeTimer(); socket.close(); return; }
       socket.off("message", awaitStart);
+      clearHandshakeTimer();
       active.session = new CallSession(
         callId,
         active.streamToken,

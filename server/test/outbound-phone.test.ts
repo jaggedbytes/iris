@@ -189,6 +189,28 @@ test("fallback finalization preserves final turns and is idempotent", async () =
     assert.deepEqual(summaries, [{ callId, personId: "person-a", transcript: [{ speaker: "user", text: "Please remember Ruth." }] }]);
     socket.emit("close");
     assert.equal(summaries.length, 1);
-    assert.equal(scheduler.cleared, 1);
+    // One clear for the handshake timer (on valid start) and one for the
+    // finalization timer (on finish).
+    assert.equal(scheduler.cleared, 2);
+  } finally { closeDatabase(database); }
+});
+
+test("closes a media socket that never sends an authenticated start", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  const scheduler = new FakeScheduler();
+  const manager = new OutboundCallManager(
+    repositories, telephonyConfig, { calls: { create: async () => ({ sid: "CA123" }) } },
+    () => new FakeSocket(), undefined, scheduler, 10_000, undefined, 5_000,
+  );
+  try {
+    const socket = new FakeSocket();
+    manager.acceptMediaSocket(socket);
+    // Only the informational `connected` frame arrives; no authenticated start.
+    socket.emit("message", Buffer.from(JSON.stringify({ event: "connected" })));
+    assert.equal(socket.closed, false);
+    assert.equal(scheduler.scheduled?.delayMs, 5_000);
+    scheduler.scheduled?.callback();
+    assert.equal(socket.closed, true);
   } finally { closeDatabase(database); }
 });
