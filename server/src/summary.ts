@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 
 import type { IrisRepositories } from "./db/repositories.js";
 
+const EXTRACTION_TIMEOUT_MS = 30_000;
+
 export type TranscriptTurn = { speaker: "user" | "assistant"; text: string };
 export type CallSummary = {
   status: "complete";
@@ -51,6 +53,9 @@ export class CallSummaryPipeline {
     try {
       const response = await this.request("https://api.openai.com/v1/responses", {
         method: "POST", headers: { Authorization: `Bearer ${this.apiKey}`, "Content-Type": "application/json", "OpenAI-Safety-Identifier": this.safetyIdentifier },
+        // This runs as an unawaited background task, so bound it: a hung upstream
+        // connection aborts here instead of leaking resources indefinitely.
+        signal: AbortSignal.timeout(EXTRACTION_TIMEOUT_MS),
         body: JSON.stringify({
           model: "gpt-5.6-terra", store: false, safety_identifier: this.safetyIdentifier,
           input: [
