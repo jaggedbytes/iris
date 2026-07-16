@@ -76,6 +76,34 @@ test("updateActionRequest compare-and-set only transitions from the expected sta
   } finally { closeDatabase(database); }
 });
 
+test("finalizeActionDispatch aborts when the action-request CAS fails", () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery" });
+  repositories.createActionRequest({ id: "action-cas-abort", personId: "person-a", feature: "bridge", actionType: "sms", idempotencyKey: "cas-abort", payload: { to: "+15550002222", body: "Hello" } });
+  try {
+    // Claim the outbox while the action is still pending_approval (not approved),
+    // so the CAS inside finalize must fail and leave no message/outbox write.
+    assert.equal(repositories.claimActionDispatch("action-cas-abort"), true);
+    assert.equal(
+      repositories.finalizeActionDispatch({
+        id: "msg-cas-abort",
+        personId: "person-a",
+        actionRequestId: "action-cas-abort",
+        providerMessageId: "SMcasabort",
+        deliveryStatus: "queued",
+      }),
+      false,
+    );
+    assert.equal(repositories.getActionRequest("action-cas-abort")?.status, "pending_approval");
+    assert.equal(repositories.getActionDispatch("action-cas-abort")?.state, "dispatching");
+    assert.equal(
+      (database.prepare("SELECT COUNT(*) AS count FROM messages WHERE provider_message_id = ?").get("SMcasabort") as { count: number }).count,
+      0,
+    );
+  } finally { closeDatabase(database); }
+});
+
 test("a stale uncertain dispatch is recovered and re-dispatched by a later sweep", async () => {
   const database = createDatabase(":memory:");
   const repositories = createRepositories(database);

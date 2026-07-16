@@ -497,12 +497,19 @@ export function createRepositories(database: IrisDatabase) {
       return database.transaction(() => {
         const dispatch = this.getActionDispatch(input.actionRequestId);
         if (dispatch?.state !== "dispatching") return false;
+        // CAS first so a concurrent status change aborts before any message or
+        // outbox write is committed, keeping the three tables consistent.
+        const updated = this.updateActionRequest({
+          id: input.actionRequestId,
+          status: "dispatched",
+          expectedStatus: "approved",
+        });
+        if (!updated) return false;
         database.prepare(
           `INSERT OR IGNORE INTO messages (id, person_id, action_request_id, direction, provider_message_id, delivery_status, created_at)
            VALUES (?, ?, ?, 'outbound', ?, ?, ?)`,
         ).run(input.id, input.personId, input.actionRequestId, input.providerMessageId, input.deliveryStatus, now());
         this.completeActionDispatch({ actionId: input.actionRequestId, providerMessageId: input.providerMessageId });
-        this.updateActionRequest({ id: input.actionRequestId, status: "dispatched", expectedStatus: "approved" });
         return true;
       })();
     },
