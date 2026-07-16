@@ -44,7 +44,7 @@ Open the frontend and enter `IRIS_ADMIN_TOKEN` to use the operator view. Operato
 
 Set the Twilio and `IRIS_PUBLIC_BASE_URL` values in `server/.env`. The public URL must terminate at this server and be reachable by Twilio over HTTPS/WSS (a tunnel is fine for local development). Ensure the demo person's `phone_e164` is a phone you are authorized to call. Start the server and frontend, sign in as the operator, press **Call now**, answer the phone, and speak with Iris.
 
-The phone bridge relays Twilio's 8 kHz G.711 μ-law Media Stream directly to and from OpenAI Realtime—there is no application-side transcoding. Calls create lifecycle events (attempted, answered, stream started, completed, or failed). Audio and raw transcript data remain in the live process only and are discarded when the stream disconnects; this checkpoint deliberately saves no call summary.
+The phone bridge relays Twilio's 8 kHz G.711 μ-law Media Stream directly to and from OpenAI Realtime—there is no application-side transcoding. Calls create lifecycle events (attempted, answered, stream started, completed, or failed). Completed calls may pass through a consent-gated summary pipeline that persists a concise recap and durable memories only when summary-retention consent is active. Audio and raw transcript data remain in the live process only and are discarded when the stream disconnects.
 
 ## Repository layout
 
