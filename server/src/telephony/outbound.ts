@@ -194,6 +194,13 @@ export class OutboundCallManager {
     if (active.finalizationTimer) this.scheduler.clearTimeout(active.finalizationTimer);
     this.repositories.completeCall({ id: callId, status });
     this.repositories.createEvent({ id: randomUUID(), personId: active.personId, callId, type: eventType, payload: { transport: "twilio" } });
-    if (status === "completed") void this.summaries?.process({ callId, personId: active.personId, transcript });
+    if (status === "completed") {
+      // Summary processing runs after finalization; a rejection must never
+      // surface as an unhandled rejection. Observe it without call context that
+      // could carry transcript content.
+      void this.summaries
+        ?.process({ callId, personId: active.personId, transcript })
+        .catch((error) => console.error("Call summary processing failed", { callId, error: error instanceof Error ? error.message : "unknown error" }));
+    }
   }
 }
