@@ -45,7 +45,7 @@ async function createDashboardServer(options: { startOutboundCall?: (personId: s
   };
 }
 
-test("allows only an admin to start an outbound call", async () => {
+test("permits check-in calls for admins and request_check_in trusted contacts", async () => {
   const startedFor: string[] = [];
   const fixture = await createDashboardServer({
     startOutboundCall: async (personId) => {
@@ -56,21 +56,32 @@ test("allows only an admin to start an outbound call", async () => {
 
   try {
     fixture.repositories.grantAccess({
-      id: "grant-a", personId: "person-a", trustedContactId: "contact-a",
-      scopes: ["request_check_in"], tokenHash: hash("contact-token"),
+      id: "grant-checkin", personId: "person-a", trustedContactId: "contact-a",
+      scopes: ["request_check_in"], tokenHash: hash("checkin-token"),
       expiresAt: "2030-01-01T00:00:00.000Z",
     });
+    fixture.repositories.grantAccess({
+      id: "grant-summaries", personId: "person-a", trustedContactId: "contact-a",
+      scopes: ["view_summaries"], tokenHash: hash("summaries-token"),
+      expiresAt: "2030-01-01T00:00:00.000Z",
+    });
+
     const adminResponse = await fetch(`${fixture.url}/api/dashboard/people/person-a/calls`, {
       method: "POST", headers: { Authorization: `Bearer ${adminToken}` },
     });
     assert.equal(adminResponse.status, 202);
-    assert.deepEqual(startedFor, ["person-a"]);
 
-    const contactResponse = await fetch(`${fixture.url}/api/dashboard/people/person-a/calls`, {
-      method: "POST", headers: { Authorization: "Bearer contact-token" },
+    const scopedContact = await fetch(`${fixture.url}/api/dashboard/people/person-a/calls`, {
+      method: "POST", headers: { Authorization: "Bearer checkin-token" },
     });
-    assert.equal(contactResponse.status, 403);
-    assert.deepEqual(startedFor, ["person-a"]);
+    assert.equal(scopedContact.status, 202);
+
+    const unscopedContact = await fetch(`${fixture.url}/api/dashboard/people/person-a/calls`, {
+      method: "POST", headers: { Authorization: "Bearer summaries-token" },
+    });
+    assert.equal(unscopedContact.status, 403);
+
+    assert.deepEqual(startedFor, ["person-a", "person-a"]);
   } finally {
     fixture.close();
   }

@@ -228,8 +228,9 @@ export function createDashboardRouter(context: DashboardContext) {
   router.post("/people/:personId/calls", async (request, response) => {
     const principal = requirePrincipal(request, response, context);
     if (!principal) return;
-    if (principal.role !== "admin") {
-      response.status(403).json({ error: "Admin access is required." });
+    const { personId } = request.params;
+    if (!canAccessPerson(principal, personId) || !hasScope(principal, "request_check_in")) {
+      response.status(403).json({ error: "Check-in access is required." });
       return;
     }
     if (!context.repositories.getPerson(request.params.personId)) {
