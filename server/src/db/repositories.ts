@@ -374,6 +374,13 @@ export function createRepositories(database: IrisDatabase) {
         );
     },
 
+    createAuditEvent(input: { id: string; personId: string; action: string; targetId: string; metadata: unknown }) {
+      database.prepare(
+        `INSERT INTO audit_events (id, person_id, actor_type, actor_id, action, target_type, target_id, metadata_json, occurred_at)
+         VALUES (?, ?, 'system', NULL, ?, 'action_request', ?, ?, ?)`,
+      ).run(input.id, input.personId, input.action, input.targetId, JSON.stringify(input.metadata), now());
+    },
+
     createActionRequest(input: CreateActionRequest) {
       const timestamp = now();
       database
@@ -393,6 +400,29 @@ export function createRepositories(database: IrisDatabase) {
           timestamp,
           timestamp,
         );
+    },
+
+    getActionRequest(id: string) {
+      const row = database.prepare("SELECT * FROM action_requests WHERE id = ?").get(id) as ActionRequestRow | undefined;
+      return row ? toActionRequest(row) : null;
+    },
+
+    updateActionRequest(input: { id: string; status: ActionStatus; approvalSource?: string | null }) {
+      database.prepare(
+        "UPDATE action_requests SET status = ?, approval_source = COALESCE(?, approval_source), updated_at = ? WHERE id = ?",
+      ).run(input.status, input.approvalSource ?? null, now(), input.id);
+      return this.getActionRequest(input.id);
+    },
+
+    createMessage(input: { id: string; personId: string; actionRequestId: string; providerMessageId: string; deliveryStatus: string }) {
+      database.prepare(
+        `INSERT INTO messages (id, person_id, action_request_id, direction, provider_message_id, delivery_status, created_at)
+         VALUES (?, ?, ?, 'outbound', ?, ?, ?)`,
+      ).run(input.id, input.personId, input.actionRequestId, input.providerMessageId, input.deliveryStatus, now());
+    },
+
+    updateMessageDelivery(providerMessageId: string, deliveryStatus: string) {
+      database.prepare("UPDATE messages SET delivery_status = ? WHERE provider_message_id = ?").run(deliveryStatus, providerMessageId);
     },
 
     listEvents(personId: string) {

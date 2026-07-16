@@ -4,6 +4,7 @@ import { Router, type Request, type Response } from "express";
 
 import type { IrisRepositories } from "./db/repositories.js";
 import type { AccessScope } from "./db/types.js";
+import type { ActionDispatcher } from "./actions.js";
 
 const ALL_SCOPES: AccessScope[] = [
   "view_summaries",
@@ -25,6 +26,7 @@ export type DashboardContext = {
   adminToken: string;
   frontendOrigin: string;
   startOutboundCall?: (personId: string) => Promise<{ callId: string }>;
+  actions?: ActionDispatcher;
 };
 
 function hashToken(token: string) {
@@ -240,6 +242,26 @@ export function createDashboardRouter(context: DashboardContext) {
       console.error("Unable to initiate outbound call", error);
       response.status(502).json({ error: "Iris could not place the call." });
     }
+  });
+
+  router.post("/actions/:actionId/approve", (request, response) => {
+    const principal = requirePrincipal(request, response, context);
+    if (!principal) return;
+    if (principal.role !== "admin" || !context.actions) return response.status(403).json({ error: "Admin access is required." });
+    const action = context.actions.approve(request.params.actionId, "dashboard_admin");
+    if (!action) return response.status(409).json({ error: "Action cannot be approved." });
+    response.json(action);
+  });
+
+  router.post("/actions/:actionId/dispatch", async (request, response) => {
+    const principal = requirePrincipal(request, response, context);
+    if (!principal) return;
+    if (principal.role !== "admin" || !context.actions) return response.status(403).json({ error: "Admin access is required." });
+    try {
+      const result = await context.actions.dispatchSms(request.params.actionId);
+      if (!result) return response.status(409).json({ error: "Action must be approved and undispatched." });
+      response.status(202).json(result);
+    } catch { response.status(502).json({ error: "Unable to dispatch message." }); }
   });
 
   router.delete("/access-grants/:grantId", (request, response) => {

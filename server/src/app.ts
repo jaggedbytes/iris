@@ -7,15 +7,18 @@ import { createDashboardRouter, type DashboardContext } from "./dashboard.js";
 import { createRealtimeClientSecret } from "./realtime.js";
 import { createTelephonyRouter } from "./telephony/router.js";
 import type { OutboundCallManager } from "./telephony/outbound.js";
+import type { ActionDispatcher } from "./actions.js";
 
 export function createApp({
   request = fetch,
   dashboard,
   telephony,
+  actions,
 }: {
   request?: typeof fetch;
   dashboard?: DashboardContext;
   telephony?: OutboundCallManager;
+  actions?: ActionDispatcher;
 } = {}) {
   const app = express();
 
@@ -33,6 +36,11 @@ export function createApp({
     app.use("/api/dashboard", createDashboardRouter(dashboard));
   }
   if (telephony) app.use("/api/telephony", createTelephonyRouter(telephony));
+  if (actions) app.post("/api/actions/messages/status", (request, response) => {
+    if (!actions.validateWebhook(request.header("x-twilio-signature"), request.originalUrl, request.body)) return response.status(403).end();
+    if (typeof request.body?.MessageSid === "string" && typeof request.body?.MessageStatus === "string") actions.recordDelivery(request.body.MessageSid, request.body.MessageStatus);
+    response.status(204).end();
+  });
 
   app.get("/health", (_request, response) => {
     response.json({ status: "ok" });
