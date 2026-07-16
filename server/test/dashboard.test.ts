@@ -12,7 +12,7 @@ const hash = (value: string) =>
 async function createDashboardServer(options: { startOutboundCall?: (personId: string) => Promise<{ callId: string }> } = {}) {
   const database = createDatabase(":memory:");
   const repositories = createRepositories(database);
-  repositories.createPerson({ id: "person-a", displayName: "Avery" });
+  repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550009999" });
   repositories.createPerson({ id: "person-b", displayName: "Blair" });
   repositories.createTrustedContact({
     id: "contact-a",
@@ -85,8 +85,9 @@ test("allows an admin to view a person overview", async () => {
       { headers: { Authorization: `Bearer ${adminToken}` } },
     );
     assert.equal(response.status, 200);
-    const body = (await response.json()) as { person: { id: string }; contacts: unknown[] };
+    const body = (await response.json()) as { person: { id: string; phoneE164: string | null }; contacts: unknown[] };
     assert.equal(body.person.id, "person-a");
+    assert.equal(body.person.phoneE164, "+15550009999");
     assert.equal(body.contacts.length, 1);
   } finally {
     fixture.close();
@@ -128,11 +129,14 @@ test("limits a trusted contact link to its person and granted scopes", async () 
     );
     assert.equal(permitted.status, 200);
     const permittedBody = (await permitted.json()) as {
+      person: { id: string; phoneE164: string | null };
       calls: Array<{ id: string }>;
       contacts: unknown[];
       events: unknown[];
       actions: unknown[];
     };
+    assert.equal(permittedBody.person.id, "person-a");
+    assert.equal(permittedBody.person.phoneE164, null);
     assert.deepEqual(permittedBody.calls.map((call) => call.id), ["call-a"]);
     assert.deepEqual(permittedBody.contacts, []);
     assert.deepEqual(permittedBody.events, []);

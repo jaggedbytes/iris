@@ -149,7 +149,12 @@ export function createDashboardRouter(context: DashboardContext) {
     }
 
     response.json({
-      person,
+      // The phone number is operator-only PII; trusted contacts receive a
+      // scope-appropriate projection regardless of their granted view scopes.
+      person:
+        principal.role === "admin"
+          ? person
+          : { id: person.id, displayName: person.displayName, phoneE164: null },
       calls: hasScope(principal, "view_summaries")
         ? context.repositories.listCalls(personId)
         : [],
