@@ -4,7 +4,7 @@ import test from "node:test";
 
 import { createDatabase, createRepositories, closeDatabase } from "../src/db/index.js";
 import { OutboundCallManager, type CallScheduler } from "../src/telephony/outbound.js";
-import type { SocketLike } from "../src/telephony/call-session.js";
+import { friendlyRequesterToken, type SocketLike } from "../src/telephony/call-session.js";
 
 class FakeSocket extends EventEmitter implements SocketLike {
   sent: string[] = [];
@@ -74,8 +74,9 @@ test("outbound calls use a token-bound μ-law stream and discard live transcript
     socket.emit("message", Buffer.from(JSON.stringify({ event: "media", media: { payload: "ulaw-before-realtime-opens" } })));
     assert.deepEqual(realtime.sent, []);
     realtime.emit("open");
-    const sessionUpdate = JSON.parse(realtime.sent[0]) as { session: { audio: { input: { format: { type: string } } } } };
+    const sessionUpdate = JSON.parse(realtime.sent[0]) as { session: { instructions: string; audio: { input: { format: { type: string } } } } };
     assert.equal(sessionUpdate.session.audio.input.format.type, "audio/pcmu");
+    assert.equal(sessionUpdate.session.instructions.includes("Family-requested check-in metadata"), false);
     assert.equal(realtime.sent.length, 1);
     realtime.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
     assert.deepEqual(JSON.parse(realtime.sent[1]), { type: "input_audio_buffer.append", audio: "ulaw-before-realtime-opens" });
@@ -139,6 +140,36 @@ test("reuses an active call instead of creating a duplicate provider call", asyn
     const next = await nextPending;
     assert.notEqual(next.callId, first.callId);
     assert.equal(providerCalls, 2);
+  } finally { closeDatabase(database); }
+});
+
+test("family-requested calls retain the display name and use a friendly spoken token", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  const realtime = new FakeSocket();
+  const manager = new OutboundCallManager(
+    repositories,
+    telephonyConfig,
+    { calls: { create: async () => ({ sid: "CA123" }) } },
+    () => realtime,
+  );
+  try {
+    assert.equal(friendlyRequesterToken("  Mary Jane  "), "Mary");
+    const { callId } = await manager.startCall("person-a", { trustedContactId: "contact-a", displayName: "Mary Jane" });
+    assert.equal((await manager.startCall("person-a", { trustedContactId: "contact-a", displayName: "Changed Name" })).callId, callId);
+    const checkInEvents = repositories.listEvents("person-a").filter((event) => event.type === "check_in.requested");
+    assert.deepEqual(checkInEvents.map((event) => event.payload), [{ requesterDisplayName: "Mary Jane" }]);
+
+    const token = /streamToken" value="([^"]+)"/.exec(manager.twiml(callId) ?? "")?.[1];
+    assert.ok(token);
+    const socket = new FakeSocket();
+    manager.acceptMediaSocket(socket);
+    socket.emit("message", Buffer.from(JSON.stringify({ event: "start", start: { streamSid: "MZ123", customParameters: { callId, streamToken: token } } })));
+    realtime.emit("open");
+    const sessionUpdate = JSON.parse(realtime.sent[0]) as { session: { instructions: string } };
+    assert.match(sessionUpdate.session.instructions, /Mary Jane/);
+    assert.match(sessionUpdate.session.instructions, /"Mary" asked you to check in/);
   } finally { closeDatabase(database); }
 });
 

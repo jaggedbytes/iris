@@ -25,6 +25,7 @@ type TwilioClient = {
 type ActiveCall = {
   personId: string;
   streamToken: string;
+  checkInRequester?: TrustedCheckInRequester;
   session?: CallSession;
   terminalStatus?: "completed" | "failed";
   finalizationTimer?: unknown;
@@ -34,6 +35,7 @@ export const DEFAULT_STREAM_CLOSE_GRACE_MS = 10_000;
 export const DEFAULT_MEDIA_HANDSHAKE_TIMEOUT_MS = 10_000;
 export type CallSummaryProcessor = { process(input: { callId: string; personId: string; transcript: TranscriptTurn[] }): Promise<void> };
 export type ProviderCallTerminator = (providerCallId: string) => Promise<void>;
+export type TrustedCheckInRequester = { trustedContactId: string; displayName: string };
 export type CallScheduler = {
   setTimeout(callback: () => void, delayMs: number): { unref?: () => void };
   clearTimeout(handle: unknown): void;
@@ -95,7 +97,7 @@ export class OutboundCallManager {
     return recovered;
   }
 
-  async startCall(personId: string) {
+  async startCall(personId: string, checkInRequester?: TrustedCheckInRequester) {
     const person = this.repositories.getPerson(personId);
     if (!person?.phoneE164) throw new Error("The person does not have a phone number.");
     const callId = randomUUID();
@@ -103,7 +105,16 @@ export class OutboundCallManager {
     const reservation = this.repositories.reserveOutboundCall({ id: callId, personId });
     if (!reservation.created) return { callId: reservation.call.id };
     this.repositories.createEvent({ id: randomUUID(), personId, callId, type: "call.attempted", payload: { transport: "twilio" } });
-    this.activeCalls.set(callId, { personId, streamToken });
+    if (checkInRequester) {
+      this.repositories.createEvent({
+        id: randomUUID(),
+        personId,
+        callId,
+        type: "check_in.requested",
+        payload: { requesterDisplayName: checkInRequester.displayName },
+      });
+    }
+    this.activeCalls.set(callId, { personId, streamToken, checkInRequester });
 
     try {
       const call = await this.client.calls.create({
@@ -222,6 +233,7 @@ export class OutboundCallManager {
           context: JSON.stringify(this.bridge.context(active.personId)),
           dispatch: (contactId, message, approvalId) => this.bridge!.sendApprovedSms({ personId: active.personId, trustedContactId: contactId, message, approvalId }),
         } : undefined,
+        active.checkInRequester?.displayName,
       );
       socket.emit("message", raw);
       this.repositories.createEvent({ id: randomUUID(), personId: active.personId, callId, type: "call.stream_started", payload: { transport: "twilio_media_stream" } });

@@ -12,7 +12,7 @@ const hash = (value: string) =>
 // current clock instead of a hard-coded (eventually past) calendar date.
 const futureExpiry = () => new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 
-async function createDashboardServer(options: { startOutboundCall?: (personId: string) => Promise<{ callId: string }> } = {}) {
+async function createDashboardServer(options: { startOutboundCall?: (input: { personId: string; checkInRequester?: { trustedContactId: string; displayName: string } }) => Promise<{ callId: string }> } = {}) {
   const database = createDatabase(":memory:");
   const repositories = createRepositories(database);
   repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550009999" });
@@ -49,10 +49,10 @@ async function createDashboardServer(options: { startOutboundCall?: (personId: s
 }
 
 test("permits check-in calls for admins and request_check_in trusted contacts", async () => {
-  const startedFor: string[] = [];
+  const startedFor: Array<{ personId: string; checkInRequester?: { trustedContactId: string; displayName: string } }> = [];
   const fixture = await createDashboardServer({
-    startOutboundCall: async (personId) => {
-      startedFor.push(personId);
+    startOutboundCall: async (input) => {
+      startedFor.push(input);
       return { callId: "call-started" };
     },
   });
@@ -84,7 +84,10 @@ test("permits check-in calls for admins and request_check_in trusted contacts", 
     });
     assert.equal(unscopedContact.status, 403);
 
-    assert.deepEqual(startedFor, ["person-a", "person-a"]);
+    assert.deepEqual(startedFor, [
+      { personId: "person-a", checkInRequester: undefined },
+      { personId: "person-a", checkInRequester: { trustedContactId: "contact-a", displayName: "Robin" } },
+    ]);
   } finally {
     fixture.close();
   }

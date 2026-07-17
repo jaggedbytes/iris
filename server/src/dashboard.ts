@@ -5,6 +5,7 @@ import { Router, type Request, type Response } from "express";
 import type { IrisRepositories } from "./db/repositories.js";
 import type { AccessScope } from "./db/types.js";
 import type { ActionDispatcher } from "./actions.js";
+import type { TrustedCheckInRequester } from "./telephony/outbound.js";
 
 const ALL_SCOPES: AccessScope[] = [
   "view_summaries",
@@ -26,7 +27,7 @@ export type DashboardContext = {
   adminToken: string;
   frontendOrigin: string;
   demoPersonId: string;
-  startOutboundCall?: (personId: string) => Promise<{ callId: string }>;
+  startOutboundCall?: (input: { personId: string; checkInRequester?: TrustedCheckInRequester }) => Promise<{ callId: string }>;
   actions?: ActionDispatcher;
 };
 
@@ -243,7 +244,16 @@ export function createDashboardRouter(context: DashboardContext) {
     }
 
     try {
-      const call = await context.startOutboundCall(request.params.personId);
+      let checkInRequester: TrustedCheckInRequester | undefined;
+      if (principal.role === "trusted_contact") {
+        const contact = context.repositories.getTrustedContact(principal.trustedContactId);
+        if (!contact || contact.personId !== personId) {
+          response.status(403).json({ error: "Trusted contact is no longer available for this person." });
+          return;
+        }
+        checkInRequester = { trustedContactId: contact.id, displayName: contact.displayName };
+      }
+      const call = await context.startOutboundCall({ personId: request.params.personId, checkInRequester });
       response.status(202).json({ ...call, status: "attempted" });
     } catch (error) {
       console.error("Unable to initiate outbound call", error);
