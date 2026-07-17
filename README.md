@@ -4,7 +4,7 @@ Iris is a phone-first AI companion for older adults. The current demo proves the
 
 ## Phone-first Bridge demo
 
-The dashboard starts an outbound Twilio call. Twilio opens a bidirectional Media Stream to the Iris server, which relays G.711 μ-law audio to OpenAI Realtime without application-side transcoding. When the call ends, raw audio and transcript text are discarded. Only a consent-gated, structured summary and durable user-stated memory may be stored.
+The dashboard starts an outbound Twilio call. Twilio opens a bidirectional Media Stream to the Iris server, which relays G.711 μ-law audio to OpenAI Realtime without application-side transcoding. When the call ends, raw audio and transcript text are discarded. Conversation-derived data is limited to a consent-gated structured summary and durable user-stated memory; required operational audit and outbox records may also be retained.
 
 ```text
 Operator or trusted contact dashboard
@@ -83,4 +83,4 @@ iris/
 
 ## Privacy boundary
 
-Raw microphone and phone audio, raw transcripts, message bodies, phone numbers, and provider identifiers are never rendered in the dashboard timeline. Phone transcripts remain in memory only for the active call, then are discarded. Durable storage is limited to consented structured summaries, user-stated facts, named people/context, unresolved topics, and operational audit records.
+Raw microphone and phone audio, raw transcripts, message bodies, phone numbers, and provider identifiers are never rendered in the dashboard timeline. Phone transcripts remain in memory only for the active call, then are discarded. Conversation-derived durable storage is limited to consented structured summaries, user-stated facts, named people/context, and unresolved topics; required operational audit and outbox records may also be retained.
