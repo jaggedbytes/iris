@@ -101,6 +101,9 @@ export function App() {
   const [refreshVersion, setRefreshVersion] = useState(0);
   const magicLinkRequestId = useRef(0);
   const overviewRequestId = useRef(0);
+  // Skip interval/visibility refreshes while an overview load is still running so
+  // a slow response is not cancelled every 2.5s into an endless backlog.
+  const overviewLoadInFlight = useRef(false);
 
   const personId = useMemo(() => {
     if (overview) return overview.person.id;
@@ -111,6 +114,7 @@ export function App() {
   useEffect(() => {
     if (!token) {
       overviewRequestId.current += 1;
+      overviewLoadInFlight.current = false;
       setPrincipal(null);
       setOverview(null);
       setIsLoading(false);
@@ -119,6 +123,7 @@ export function App() {
 
     let cancelled = false;
     const requestId = ++overviewRequestId.current;
+    overviewLoadInFlight.current = true;
     if (!overview) setIsLoading(true);
 
     void (async () => {
@@ -141,7 +146,10 @@ export function App() {
         }
         setError(loadError instanceof Error ? loadError.message : "Unable to load the dashboard.");
       } finally {
-        if (!cancelled && requestId === overviewRequestId.current) setIsLoading(false);
+        if (!cancelled && requestId === overviewRequestId.current) {
+          overviewLoadInFlight.current = false;
+          setIsLoading(false);
+        }
       }
     })();
 
@@ -157,7 +165,10 @@ export function App() {
   useEffect(() => {
     if (!token || !shouldPoll) return;
     const refreshWhenVisible = () => {
-      if (document.visibilityState === "visible") {
+      if (
+        document.visibilityState === "visible"
+        && !overviewLoadInFlight.current
+      ) {
         setRefreshVersion((current) => current + 1);
       }
     };
