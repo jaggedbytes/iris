@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 import twilio from "twilio";
 
 import type { TelephonyConfig } from "./config.js";
+
+type SmsConfig = Pick<
+  TelephonyConfig,
+  "twilioAccountSid" | "twilioAuthToken" | "twilioPhoneNumber" | "publicBaseUrl"
+>;
 import type { IrisRepositories } from "./db/repositories.js";
 
 type MessagingClient = { messages: { create(input: { to: string; from: string; body: string; statusCallback: string }): Promise<{ sid: string; status: string }> } };
@@ -15,7 +20,7 @@ export const DEFAULT_STALE_DISPATCH_MS = 15 * 60 * 1000;
 export class ActionDispatcher {
   constructor(
     private readonly repositories: IrisRepositories,
-    private readonly config: TelephonyConfig,
+    private readonly config: SmsConfig,
     private readonly client: MessagingClient = twilio(config.twilioAccountSid, config.twilioAuthToken),
     private readonly staleDispatchMs: number = DEFAULT_STALE_DISPATCH_MS,
   ) {}

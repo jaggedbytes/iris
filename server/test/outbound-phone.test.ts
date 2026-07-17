@@ -32,6 +32,7 @@ const telephonyConfig = {
   publicBaseUrl: "https://iris.test",
   openaiApiKey: "test-openai-key",
   safetyIdentifier: "iris-test",
+  farewellCloseTimeoutMs: 8_000,
 };
 
 test("outbound calls use a token-bound μ-law stream and discard live transcript state", async () => {
@@ -404,9 +405,10 @@ test("end_call waits for the farewell response, then finalizes through the exist
   const realtime = new FakeSocket();
   const scheduler = new FakeScheduler();
   const summaries: Array<{ transcript: unknown[] }> = [];
+  const configuredTelephony = { ...telephonyConfig, farewellCloseTimeoutMs: 77 };
   const manager = new OutboundCallManager(
-    repositories, telephonyConfig, { calls: { create: async () => ({ sid: "CA123" }) } }, () => realtime,
-    { process: async (input) => { summaries.push(input); } }, scheduler, 10_000, undefined, 10_000, undefined, 77,
+    repositories, configuredTelephony, { calls: { create: async () => ({ sid: "CA123" }) } }, () => realtime,
+    { process: async (input) => { summaries.push(input); } }, scheduler, 10_000, undefined, 10_000,
   );
   try {
     const { callId } = await manager.startCall("person-a");
@@ -469,9 +471,10 @@ test("end_call uses its farewell-only timeout when completion events never arriv
   repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
   const realtime = new FakeSocket();
   const scheduler = new FakeScheduler();
+  const configuredTelephony = { ...telephonyConfig, farewellCloseTimeoutMs: 91 };
   const manager = new OutboundCallManager(
-    repositories, telephonyConfig, { calls: { create: async () => ({ sid: "CA123" }) } }, () => realtime,
-    undefined, scheduler, 10_000, undefined, 10_000, undefined, 91,
+    repositories, configuredTelephony, { calls: { create: async () => ({ sid: "CA123" }) } }, () => realtime,
+    undefined, scheduler, 10_000, undefined, 10_000,
   );
   try {
     const { callId } = await manager.startCall("person-a");
@@ -502,9 +505,10 @@ test("handset hangup clears a pending farewell timeout through the normal close 
   repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
   const realtime = new FakeSocket();
   const scheduler = new FakeScheduler();
+  const configuredTelephony = { ...telephonyConfig, farewellCloseTimeoutMs: 91 };
   const manager = new OutboundCallManager(
-    repositories, telephonyConfig, { calls: { create: async () => ({ sid: "CA123" }) } }, () => realtime,
-    undefined, scheduler, 10_000, undefined, 10_000, undefined, 91,
+    repositories, configuredTelephony, { calls: { create: async () => ({ sid: "CA123" }) } }, () => realtime,
+    undefined, scheduler, 10_000, undefined, 10_000,
   );
   try {
     const { callId } = await manager.startCall("person-a");

@@ -4,7 +4,7 @@ import twilio from "twilio";
 
 import type { TelephonyConfig } from "../config.js";
 import type { IrisRepositories } from "../db/repositories.js";
-import { CallSession, createRealtimeSocket, DEFAULT_FAREWELL_CLOSE_TIMEOUT_MS, type CallSessionScheduler, type RealtimeSocketFactory, type SocketLike } from "./call-session.js";
+import { CallSession, createRealtimeSocket, type CallSessionScheduler, type RealtimeSocketFactory, type SocketLike } from "./call-session.js";
 import type { TranscriptTurn } from "../summary.js";
 import type { BridgeService } from "../bridge.js";
 
@@ -64,7 +64,7 @@ export class OutboundCallManager {
         .calls(providerCallId)
         .update({ status: "completed" });
     },
-    private readonly farewellCloseTimeoutMs = DEFAULT_FAREWELL_CLOSE_TIMEOUT_MS,
+    private readonly farewellCloseTimeoutMs = config.farewellCloseTimeoutMs,
   ) {}
 
   /**

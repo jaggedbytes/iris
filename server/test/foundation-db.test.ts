@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import Database from "better-sqlite3";
 
-import { loadDashboardConfig, loadFoundationConfig } from "../src/config.js";
+import {
+  DEFAULT_FAREWELL_CLOSE_TIMEOUT_MS,
+  loadDashboardConfig,
+  loadFoundationConfig,
+  loadTelephonyConfig,
+} from "../src/config.js";
 import { closeDatabase, createDatabase, createRepositories, migrate } from "../src/db/index.js";
 import { migrations } from "../src/db/schema.js";
 
@@ -237,4 +242,33 @@ test("validates the durable foundation environment", () => {
     () => loadDashboardConfig({ IRIS_ADMIN_TOKEN: "t", FRONTEND_ORIGIN: "ftp://iris.example.com" }),
     /FRONTEND_ORIGIN must use the http or https protocol/,
   );
+});
+
+test("validates the optional farewell-close timeout for phone calls", () => {
+  const requiredTelephonyEnvironment = {
+    TWILIO_ACCOUNT_SID: "ACtest",
+    TWILIO_AUTH_TOKEN: "test-auth-token",
+    TWILIO_PHONE_NUMBER: "+15550001111",
+    IRIS_PUBLIC_BASE_URL: "https://iris.example.test",
+    OPENAI_API_KEY: "test-openai-key",
+  };
+
+  assert.equal(
+    loadTelephonyConfig(requiredTelephonyEnvironment).farewellCloseTimeoutMs,
+    DEFAULT_FAREWELL_CLOSE_TIMEOUT_MS,
+  );
+  assert.equal(
+    loadTelephonyConfig({
+      ...requiredTelephonyEnvironment,
+      IRIS_FAREWELL_CLOSE_TIMEOUT_MS: "12000",
+    }).farewellCloseTimeoutMs,
+    12_000,
+  );
+
+  for (const value of ["999", "30001", "not-a-number", "8000.5"]) {
+    assert.throws(
+      () => loadTelephonyConfig({ ...requiredTelephonyEnvironment, IRIS_FAREWELL_CLOSE_TIMEOUT_MS: value }),
+      /IRIS_FAREWELL_CLOSE_TIMEOUT_MS must be an integer between 1000 and 30000 milliseconds/,
+    );
+  }
 });

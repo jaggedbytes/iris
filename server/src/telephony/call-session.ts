@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 
 import WebSocket from "ws";
 
+import { DEFAULT_FAREWELL_CLOSE_TIMEOUT_MS } from "../config.js";
 import { irisV1 } from "../personas/iris-v1.js";
 
 export type SocketLike = EventEmitter & {
@@ -20,7 +21,6 @@ export type CallSessionScheduler = {
   clearTimeout(handle: unknown): void;
 };
 const systemScheduler: CallSessionScheduler = { setTimeout, clearTimeout };
-export const DEFAULT_FAREWELL_CLOSE_TIMEOUT_MS = 8_000;
 
 export function friendlyRequesterToken(displayName: string) {
   return displayName.trim().split(/\s+/).find(Boolean) ?? null;
