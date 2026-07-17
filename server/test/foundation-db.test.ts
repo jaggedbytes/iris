@@ -39,6 +39,26 @@ test("scopes calls to their owning person", () => {
   }
 });
 
+test("reserves one active outbound call per person until it reaches a terminal status", () => {
+  const { database, repositories } = createTestRepositories();
+
+  try {
+    repositories.createPerson({ id: "person-a", displayName: "Avery" });
+    const first = repositories.reserveOutboundCall({ id: "call-a", personId: "person-a" });
+    const duplicate = repositories.reserveOutboundCall({ id: "call-b", personId: "person-a" });
+    assert.equal(first.created, true);
+    assert.equal(duplicate.created, false);
+    assert.equal(duplicate.call.id, "call-a");
+
+    repositories.completeCall({ id: "call-a", status: "completed" });
+    const next = repositories.reserveOutboundCall({ id: "call-b", personId: "person-a" });
+    assert.equal(next.created, true);
+    assert.equal(next.call.id, "call-b");
+  } finally {
+    closeDatabase(database);
+  }
+});
+
 test("uses the latest summary-retention consent state", () => {
   const { database, repositories } = createTestRepositories();
 

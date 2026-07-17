@@ -33,6 +33,7 @@ type ActiveCall = {
 export const DEFAULT_STREAM_CLOSE_GRACE_MS = 10_000;
 export const DEFAULT_MEDIA_HANDSHAKE_TIMEOUT_MS = 10_000;
 export type CallSummaryProcessor = { process(input: { callId: string; personId: string; transcript: TranscriptTurn[] }): Promise<void> };
+export type ProviderCallTerminator = (providerCallId: string) => Promise<void>;
 export type CallScheduler = {
   setTimeout(callback: () => void, delayMs: number): { unref?: () => void };
   clearTimeout(handle: unknown): void;
@@ -52,14 +53,55 @@ export class OutboundCallManager {
     private readonly streamCloseGraceMs = DEFAULT_STREAM_CLOSE_GRACE_MS,
     private readonly bridge?: BridgeService,
     private readonly handshakeTimeoutMs = DEFAULT_MEDIA_HANDSHAKE_TIMEOUT_MS,
+    private readonly terminateProviderCall: ProviderCallTerminator = async (providerCallId) => {
+      await twilio(config.twilioAccountSid, config.twilioAuthToken)
+        .calls(providerCallId)
+        .update({ status: "completed" });
+    },
   ) {}
+
+  /**
+   * A fresh process cannot resume a prior Media Stream because its in-memory
+   * stream token and Realtime session are gone. End known Twilio calls before
+   * clearing their local guard; if Twilio cannot confirm that termination, keep
+   * the row active to avoid creating a duplicate call.
+   */
+  async recoverInterruptedCalls() {
+    const recovered: string[] = [];
+    for (const call of this.repositories.listActiveCalls()) {
+      if (call.providerCallId) {
+        try {
+          await this.terminateProviderCall(call.providerCallId);
+        } catch (error) {
+          const status = (error as { status?: unknown }).status;
+          // A missing Call SID is already terminal at Twilio, so local recovery
+          // can proceed. Other failures leave the guard in place for safety.
+          if (status !== 404) {
+            console.error("Unable to terminate interrupted Twilio call", { callId: call.id, error: error instanceof Error ? error.message : "unknown error" });
+            continue;
+          }
+        }
+      }
+      if (!this.repositories.interruptActiveCall(call.id)) continue;
+      this.repositories.createEvent({
+        id: randomUUID(),
+        personId: call.personId,
+        callId: call.id,
+        type: "call.interrupted",
+        payload: { transport: "twilio", recovery: "process_restart" },
+      });
+      recovered.push(call.id);
+    }
+    return recovered;
+  }
 
   async startCall(personId: string) {
     const person = this.repositories.getPerson(personId);
     if (!person?.phoneE164) throw new Error("The person does not have a phone number.");
     const callId = randomUUID();
     const streamToken = randomBytes(32).toString("base64url");
-    this.repositories.createCall({ id: callId, personId, status: "attempted" });
+    const reservation = this.repositories.reserveOutboundCall({ id: callId, personId });
+    if (!reservation.created) return { callId: reservation.call.id };
     this.repositories.createEvent({ id: randomUUID(), personId, callId, type: "call.attempted", payload: { transport: "twilio" } });
     this.activeCalls.set(callId, { personId, streamToken });
 

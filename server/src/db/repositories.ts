@@ -311,6 +311,41 @@ export function createRepositories(database: IrisDatabase) {
       return toCall(row);
     },
 
+    reserveOutboundCall(input: { id: string; personId: string }) {
+      return database.transaction(() => {
+        const active = database
+          .prepare(
+            `SELECT * FROM calls
+             WHERE person_id = ? AND status IN ('attempted', 'answered')
+             ORDER BY started_at DESC
+             LIMIT 1`,
+          )
+          .get(input.personId) as CallRow | undefined;
+        if (active) return { call: toCall(active), created: false };
+        const call = this.createCall({ id: input.id, personId: input.personId, status: "attempted" });
+        return { call, created: true };
+      })();
+    },
+
+    listActiveCalls() {
+      const rows = database
+        .prepare(
+          "SELECT * FROM calls WHERE status IN ('attempted', 'answered') ORDER BY started_at",
+        )
+        .all() as CallRow[];
+      return rows.map(toCall);
+    },
+
+    interruptActiveCall(id: string) {
+      return database
+        .prepare(
+          `UPDATE calls
+             SET status = 'failed', ended_at = ?, summary_state = 'unavailable'
+           WHERE id = ? AND status IN ('attempted', 'answered')`,
+        )
+        .run(now(), id).changes === 1;
+    },
+
     completeCall(input: { id: string; status: Extract<CallStatus, "completed" | "failed">; summaryJson?: string | null; summaryState?: CallSummaryState }) {
       const summaryState = input.summaryState ?? (input.summaryJson ? "ready" : input.status === "failed" ? "unavailable" : undefined);
       database

@@ -109,6 +109,93 @@ test("outbound calls use a token-bound μ-law stream and discard live transcript
   }
 });
 
+test("reuses an active call instead of creating a duplicate provider call", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  let providerCalls = 0;
+  let resolveProviderCall: ((value: { sid: string }) => void) | undefined;
+  const manager = new OutboundCallManager(
+    repositories,
+    telephonyConfig,
+    { calls: { create: async () => {
+      providerCalls += 1;
+      return new Promise<{ sid: string }>((resolve) => { resolveProviderCall = resolve; });
+    } } },
+    () => new FakeSocket(),
+  );
+  try {
+    const firstPending = manager.startCall("person-a");
+    const repeated = await manager.startCall("person-a");
+    assert.equal(providerCalls, 1);
+    assert.equal(repositories.listCalls("person-a").length, 1);
+    resolveProviderCall?.({ sid: "CA1" });
+    const first = await firstPending;
+    assert.equal(repeated.callId, first.callId);
+
+    manager.handleStatus(first.callId, "completed");
+    const nextPending = manager.startCall("person-a");
+    resolveProviderCall?.({ sid: "CA2" });
+    const next = await nextPending;
+    assert.notEqual(next.callId, first.callId);
+    assert.equal(providerCalls, 2);
+  } finally { closeDatabase(database); }
+});
+
+test("startup recovery ends known Twilio calls before releasing their local guard", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  repositories.createCall({ id: "call-with-sid", personId: "person-a", status: "answered", providerCallId: "CAknown" });
+  repositories.createPerson({ id: "person-b", displayName: "Blair", phoneE164: "+15550003333" });
+  repositories.createCall({ id: "call-without-sid", personId: "person-b", status: "attempted" });
+  const terminated: string[] = [];
+  const manager = new OutboundCallManager(
+    repositories,
+    telephonyConfig,
+    { calls: { create: async () => ({ sid: "CAnew" }) } },
+    () => new FakeSocket(),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    async (providerCallId) => { terminated.push(providerCallId); },
+  );
+  try {
+    assert.deepEqual(await manager.recoverInterruptedCalls(), ["call-with-sid", "call-without-sid"]);
+    assert.deepEqual(terminated, ["CAknown"]);
+    assert.equal(repositories.listCalls("person-a")[0].status, "failed");
+    assert.equal(repositories.listCalls("person-b")[0].status, "failed");
+    assert.equal(repositories.listEvents("person-a").some((event) => event.type === "call.interrupted"), true);
+    assert.equal(repositories.listEvents("person-b").some((event) => event.type === "call.interrupted"), true);
+  } finally { closeDatabase(database); }
+});
+
+test("startup recovery retains a call guard when Twilio termination is uncertain", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  repositories.createCall({ id: "call-a", personId: "person-a", status: "answered", providerCallId: "CAunknown" });
+  const manager = new OutboundCallManager(
+    repositories,
+    telephonyConfig,
+    { calls: { create: async () => ({ sid: "CAnew" }) } },
+    () => new FakeSocket(),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    async () => { throw new Error("network unavailable"); },
+  );
+  try {
+    assert.deepEqual(await manager.recoverInterruptedCalls(), []);
+    assert.equal(repositories.listCalls("person-a")[0].status, "answered");
+    assert.equal(repositories.listEvents("person-a").some((event) => event.type === "call.interrupted"), false);
+  } finally { closeDatabase(database); }
+});
+
 test("an unsolicited Realtime disconnect fails the call and skips summary", async () => {
   const database = createDatabase(":memory:");
   const repositories = createRepositories(database);
