@@ -12,7 +12,6 @@ export class BridgeService {
       return { memories: [], recallAnchor: null, contacts };
     }
     const memories = this.repositories.listMemories(personId)
-      .filter((memory) => memory.category !== "recall_anchor")
       .map((memory) => ({ category: memory.category, value: JSON.parse(memory.payload_json) }));
     return {
       memories,

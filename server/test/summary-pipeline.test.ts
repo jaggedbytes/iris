@@ -40,10 +40,7 @@ test("persists only validated user-stated summary memory", async () => {
     const summary = JSON.parse(repositories.listCalls("person-a")[0].summaryJson!) as { facts: string[]; recallAnchor: string | null };
     assert.deepEqual(summary.facts, ["Avery has a friend named Ruth."]);
     assert.equal(summary.recallAnchor, "your plans to visit Ruth");
-    assert.deepEqual(
-      repositories.listMemories("person-a").find((memory) => memory.category === "recall_anchor"),
-      { category: "recall_anchor", payload_json: JSON.stringify({ anchor: "your plans to visit Ruth" }) },
-    );
+    assert.equal(repositories.findLatestRecallAnchor("person-a"), "your plans to visit Ruth");
     assert.equal(repositories.listCalls("person-a")[0].summaryState, "ready");
     assert.equal(repositories.listCalls("person-a")[0].endedAt, endedAt);
     assert.deepEqual(repositories.listEvents("person-a").find((event) => event.type === "call.summary_ready")?.payload, {});
@@ -64,7 +61,7 @@ test("does not call extraction or save anything without active consent", async (
     assert.equal(requested, false);
     assert.equal(repositories.listCalls("person-a")[0].summaryJson, null);
     assert.equal(repositories.listCalls("person-a")[0].summaryState, "not_requested");
-    assert.equal(repositories.listMemories("person-a").some((memory) => memory.category === "recall_anchor"), false);
+    assert.equal(repositories.findLatestRecallAnchor("person-a"), null);
   } finally { closeDatabase(database); }
 });
 
@@ -97,7 +94,7 @@ test("does not save refused, malformed, or insufficient extraction", async () =>
       callId: "call-malformed", personId: "person-a", transcript: [{ speaker: "user", text: "I garden." }],
     });
     assert.equal(repositories.listCalls("person-a").find((call) => call.id === "call-malformed")?.summaryState, "unavailable");
-    assert.equal(repositories.listMemories("person-a").some((memory) => memory.category === "recall_anchor"), false);
+    assert.equal(repositories.findLatestRecallAnchor("person-a"), null);
   } finally { closeDatabase(database); }
 });
 
@@ -137,7 +134,7 @@ test("ready summary state is terminal and finalize rolls back partial memory wri
     assert.equal(repositories.listCalls("person-a").find((call) => call.id === "call-b")?.summaryJson, null);
     assert.equal(repositories.listCalls("person-a").find((call) => call.id === "call-b")?.summaryState, "processing");
     assert.equal(repositories.listMemories("person-a").some((memory) => memory.payload_json.includes("Should not stick")), false);
-    assert.equal(repositories.listMemories("person-a").some((memory) => memory.payload_json.includes("your garden")), true);
+    assert.equal(repositories.findLatestRecallAnchor("person-a"), "your garden");
     assert.equal(
       (database.prepare("SELECT COUNT(*) AS count FROM memories WHERE id = ?").get("memory-anchor-b") as { count: number }).count,
       0,
@@ -163,10 +160,7 @@ test("a null recall anchor does not remove an earlier valid anchor", async () =>
       callId: "call-b", personId: "person-a", transcript: [{ speaker: "user", text: "Nothing much today." }],
     });
 
-    assert.deepEqual(
-      repositories.listMemories("person-a").filter((memory) => memory.category === "recall_anchor"),
-      [{ category: "recall_anchor", payload_json: JSON.stringify({ anchor: "your garden plans" }) }],
-    );
+    assert.equal(repositories.findLatestRecallAnchor("person-a"), "your garden plans");
     assert.equal(repositories.listCalls("person-a").find((call) => call.id === "call-b")?.summaryState, "ready");
   } finally { closeDatabase(database); }
 });

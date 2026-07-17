@@ -477,8 +477,13 @@ export function createRepositories(database: IrisDatabase) {
     },
 
     listMemories(personId: string, limit = 20) {
+      // Recall anchors are fetched separately for the call opener. Excluding
+      // them here keeps the limit window available for durable Bridge context.
       return database.prepare(
-        "SELECT category, payload_json FROM memories WHERE person_id = ? ORDER BY created_at DESC LIMIT ?",
+        `SELECT category, payload_json FROM memories
+         WHERE person_id = ? AND category <> 'recall_anchor'
+         ORDER BY created_at DESC
+         LIMIT ?`,
       ).all(personId, limit) as Array<{ category: string; payload_json: string }>;
     },
 

@@ -54,6 +54,35 @@ test("Bridge exposes only the latest valid recall anchor while consent is active
   } finally { closeDatabase(database); }
 });
 
+test("Bridge memory context keeps durable facts when many recall anchors exist", () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery" });
+  repositories.createCall({ id: "call-a", personId: "person-a", status: "completed" });
+  repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Robin", relationship: "daughter", phoneE164: "+15550002222" });
+  repositories.recordConsent({ id: "consent-a", personId: "person-a", kind: "summary_retention", status: "granted", source: "test" });
+  repositories.createMemory({ id: "memory-fact", personId: "person-a", sourceCallId: "call-a", category: "durable_fact", payload: { fact: "Avery enjoys gardening." } });
+  for (let index = 0; index < 25; index += 1) {
+    repositories.createMemory({
+      id: `memory-anchor-${index}`,
+      personId: "person-a",
+      sourceCallId: "call-a",
+      category: "recall_anchor",
+      payload: { anchor: `anchor ${index}` },
+    });
+  }
+  const bridge = new BridgeService(
+    repositories,
+    new ActionDispatcher(repositories, { twilioAccountSid: "AC", twilioAuthToken: "token", twilioPhoneNumber: "+15550001111", publicBaseUrl: "https://iris.test", openaiApiKey: "key", safetyIdentifier: "safe" }),
+  );
+  try {
+    const context = bridge.context("person-a");
+    assert.deepEqual(context.memories, [{ category: "durable_fact", value: { fact: "Avery enjoys gardening." } }]);
+    assert.equal(context.recallAnchor, "anchor 24");
+    assert.equal(repositories.listMemories("person-a").some((memory) => memory.category === "recall_anchor"), false);
+  } finally { closeDatabase(database); }
+});
+
 test("Bridge resumes an interrupted approved action on retry instead of aborting", async () => {
   const database = createDatabase(":memory:");
   const repositories = createRepositories(database);
