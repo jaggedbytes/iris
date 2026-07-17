@@ -75,6 +75,7 @@ type ShieldSession = {
   contacts: Array<{ id: string; name: string }>;
   alertText: string;
   assess: (situation: string) => Promise<unknown>;
+  sendAlert: (contactId: string, approvalId: string) => Promise<{ ok: boolean; contactName?: string }>;
 };
 
 /**
@@ -354,7 +355,7 @@ export class CallSession {
       return;
     }
     if (name === "shield_send_alert") {
-      this.dispatchShieldAlert(callId, argumentsJson);
+      await this.dispatchShieldAlert(callId, argumentsJson);
       return;
     }
     if (name !== "bridge_send_sms") {
@@ -394,7 +395,7 @@ export class CallSession {
     this.sendToolOutput(callId, result);
   }
 
-  private dispatchShieldAlert(callId: string, argumentsJson: string) {
+  private async dispatchShieldAlert(callId: string, argumentsJson: string) {
     if (!this.shield) {
       this.sendToolOutput(callId, { ok: false, error: "tool_unavailable" });
       return;
@@ -408,9 +409,8 @@ export class CallSession {
       this.sendToolOutput(callId, { ok: false, error: "unavailable_contact" });
       return;
     }
-    // Alert delivery stays unavailable until checkpoint 3 wires this path to
-    // the approval-gated action dispatcher. Do not imply an alert was sent.
-    this.sendToolOutput(callId, { ok: false, error: "alert_delivery_unavailable" });
+    const result = await this.shield.sendAlert(args.trusted_contact_id, callId).catch(() => ({ ok: false }));
+    this.sendToolOutput(callId, result);
   }
 
   private sendToolOutput(callId: string, result: unknown, createResponse = true) {

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 
+import type { ActionDispatcher } from "./actions.js";
 import type { IrisRepositories } from "./db/repositories.js";
 
 const SHIELD_ASSESSMENT_TIMEOUT_MS = 12_000;
@@ -81,6 +82,7 @@ export class ShieldService {
     private readonly apiKey: string,
     private readonly safetyIdentifier: string,
     private readonly request: ShieldRequest = fetch,
+    private readonly actions?: ActionDispatcher,
   ) {}
 
   async assess(input: { callId: string; personId: string; situation: string }): Promise<ShieldAssessment> {
@@ -131,5 +133,48 @@ export class ShieldService {
       // The situation and assessment stay in process memory and are never logged.
       return unavailable();
     }
+  }
+
+  async sendApprovedAlert(input: { callId: string; personId: string; trustedContactId: string; approvalId: string }) {
+    if (!this.actions) return { ok: false };
+    const person = this.repositories.getPerson(input.personId);
+    const contact = this.repositories.getTrustedContact(input.trustedContactId);
+    if (!person || !contact || contact.personId !== input.personId || !contact.phoneE164) return { ok: false };
+
+    const idempotencyKey = `shield:${input.approvalId}`;
+    const existing = this.repositories.findActionRequestByIdempotencyKey(idempotencyKey);
+    if (existing?.status === "dispatched") return { ok: true, contactName: contact.displayName };
+    if (existing && existing.status !== "pending_approval" && existing.status !== "approved") {
+      return { ok: false, contactName: contact.displayName };
+    }
+    const actionId = existing?.id ?? randomUUID();
+    if (!existing) {
+      this.repositories.createActionRequest({
+        id: actionId,
+        personId: input.personId,
+        feature: "shield",
+        actionType: "sms",
+        approvalSource: "spoken_call",
+        idempotencyKey,
+        payload: { to: contact.phoneE164, body: createShieldAlertText(person.displayName) },
+      });
+    }
+    this.actions.approve(actionId, "spoken_call");
+    try {
+      const dispatched = await this.actions.dispatchSms(actionId);
+      if (!dispatched) return { ok: false, contactName: contact.displayName };
+    } catch {
+      // The action dispatcher retains its failed, retryable, or uncertain
+      // outbox state. Never claim a Shield alert was sent in any of them.
+      return { ok: false, contactName: contact.displayName };
+    }
+    this.repositories.createEvent({
+      id: randomUUID(),
+      personId: input.personId,
+      callId: input.callId,
+      type: "shield.alert_sent",
+      payload: { contactName: contact.displayName },
+    });
+    return { ok: true, contactName: contact.displayName };
   }
 }

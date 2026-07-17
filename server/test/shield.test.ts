@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { ActionDispatcher } from "../src/actions.js";
 import { closeDatabase, createDatabase, createRepositories } from "../src/db/index.js";
 import { ShieldService, type ShieldRequest } from "../src/shield.js";
 
@@ -105,5 +106,62 @@ test("Shield keeps refusals, malformed output, timeouts, and provider failures u
     } finally {
       closeDatabase(database);
     }
+  }
+});
+
+test("Shield alert is fixed, approval-gated, idempotent, and exposes only the contact name in its event", async () => {
+  const { database, repositories } = setup();
+  repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Robin", relationship: "daughter", phoneE164: "+15550002222" });
+  const messages: Array<{ to: string; body: string }> = [];
+  const dispatcher = new ActionDispatcher(repositories, { twilioAccountSid: "AC", twilioAuthToken: "token", twilioPhoneNumber: "+15550001111", publicBaseUrl: "https://iris.test" }, { messages: { create: async (input) => {
+    messages.push({ to: input.to, body: input.body });
+    return { sid: "SMshield", status: "queued" };
+  } } });
+  const shield = new ShieldService(repositories, "key", "safe", fetch, dispatcher);
+  try {
+    assert.deepEqual(await shield.sendApprovedAlert({ callId: "call-a", personId: "person-a", trustedContactId: "contact-a", approvalId: "tool-a" }), { ok: true, contactName: "Robin" });
+    assert.deepEqual(await shield.sendApprovedAlert({ callId: "call-a", personId: "person-a", trustedContactId: "contact-a", approvalId: "tool-a" }), { ok: true, contactName: "Robin" });
+    assert.deepEqual(messages, [{ to: "+15550002222", body: "Iris is speaking with Avery about something that feels urgent or suspicious. Please check in with them when you can." }]);
+    const action = repositories.listActionRequests("person-a")[0];
+    assert.equal(action.feature, "shield");
+    assert.equal(action.status, "dispatched");
+    assert.equal(repositories.getActionDispatch(action.id)?.state, "dispatched");
+    const events = repositories.listEvents("person-a").filter((event) => event.type === "shield.alert_sent");
+    assert.deepEqual(events.map((event) => event.payload), [{ contactName: "Robin" }]);
+    assert.equal(JSON.stringify(events).includes(messages[0].body), false);
+    assert.equal(JSON.stringify(events).includes(messages[0].to), false);
+    assert.equal(JSON.stringify(events).includes("SMshield"), false);
+  } finally {
+    closeDatabase(database);
+  }
+});
+
+test("Shield never creates an alert-sent event for invalid contacts or uncertain delivery", async () => {
+  const { database, repositories } = setup();
+  repositories.createTrustedContact({ id: "contact-no-phone", personId: "person-a", displayName: "Robin", relationship: "daughter" });
+  repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Sam", relationship: "son", phoneE164: "+15550002222" });
+  let attempts = 0;
+  const dispatcher = new ActionDispatcher(repositories, { twilioAccountSid: "AC", twilioAuthToken: "token", twilioPhoneNumber: "+15550001111", publicBaseUrl: "https://iris.test" }, { messages: { create: async () => {
+    attempts += 1;
+    if (attempts === 1) {
+      const error = new Error("provider rejected") as Error & { status: number };
+      error.status = 400;
+      throw error;
+    }
+    throw new Error("network uncertain");
+  } } });
+  const shield = new ShieldService(repositories, "key", "safe", fetch, dispatcher);
+  try {
+    assert.deepEqual(await shield.sendApprovedAlert({ callId: "call-a", personId: "person-a", trustedContactId: "missing", approvalId: "tool-missing" }), { ok: false });
+    assert.deepEqual(await shield.sendApprovedAlert({ callId: "call-a", personId: "person-a", trustedContactId: "contact-no-phone", approvalId: "tool-no-phone" }), { ok: false });
+    assert.deepEqual(await shield.sendApprovedAlert({ callId: "call-a", personId: "person-a", trustedContactId: "contact-a", approvalId: "tool-rejected" }), { ok: false, contactName: "Sam" });
+    assert.deepEqual(await shield.sendApprovedAlert({ callId: "call-a", personId: "person-a", trustedContactId: "contact-a", approvalId: "tool-uncertain" }), { ok: false, contactName: "Sam" });
+    assert.equal(repositories.findActionRequestByIdempotencyKey("shield:tool-rejected")?.status, "failed");
+    const uncertain = repositories.findActionRequestByIdempotencyKey("shield:tool-uncertain");
+    assert.equal(uncertain?.status, "approved");
+    assert.equal(repositories.getActionDispatch(uncertain!.id)?.state, "dispatching");
+    assert.deepEqual(repositories.listEvents("person-a").filter((event) => event.type === "shield.alert_sent"), []);
+  } finally {
+    closeDatabase(database);
   }
 });

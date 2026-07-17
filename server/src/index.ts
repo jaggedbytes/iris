@@ -20,7 +20,7 @@ const repositories = createRepositories(database);
 const summaries = new CallSummaryPipeline(repositories, telephonyConfig.openaiApiKey, telephonyConfig.safetyIdentifier);
 const actions = new ActionDispatcher(repositories, telephonyConfig);
 const bridge = new BridgeService(repositories, actions);
-const shield = new ShieldService(repositories, telephonyConfig.openaiApiKey, telephonyConfig.safetyIdentifier);
+const shield = new ShieldService(repositories, telephonyConfig.openaiApiKey, telephonyConfig.safetyIdentifier, undefined, actions);
 const telephony = new OutboundCallManager(repositories, telephonyConfig, undefined, undefined, summaries, undefined, undefined, bridge, undefined, undefined, undefined, shield);
 const app = createApp({
   dashboard: {

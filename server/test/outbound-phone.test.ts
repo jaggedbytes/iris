@@ -367,11 +367,16 @@ test("Shield tools dispatch only from completed response.done calls and preserve
   repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
   repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Robin", relationship: "daughter", phoneE164: "+15550003333" });
   let assessments = 0;
+  const sentSms: Array<{ to: string; body: string }> = [];
+  const dispatcher = new ActionDispatcher(repositories, telephonyConfig, { messages: { create: async (input) => {
+    sentSms.push({ to: input.to, body: input.body });
+    return { sid: "SMshield", status: "queued" };
+  } } });
   const shield = new ShieldService(repositories, "key", "safe", async () => {
     assessments += 1;
     return { ok: true, json: async () => ({ output_text: JSON.stringify({ status: "pause_recommended", redFlags: ["urgency", "gift_card_payment"], safeNextStep: "verify_known_official_number" }) }) } as Response;
-  });
-  const bridge = new BridgeService(repositories, new ActionDispatcher(repositories, telephonyConfig));
+  }, dispatcher);
+  const bridge = new BridgeService(repositories, dispatcher);
   const realtime = new FakeSocket();
   const manager = new OutboundCallManager(
     repositories, telephonyConfig, { calls: { create: async () => ({ sid: "CA123" }) } }, () => realtime,
@@ -414,16 +419,24 @@ test("Shield tools dispatch only from completed response.done calls and preserve
       response: { id: "response-shield-malformed", output: [{ type: "function_call", status: "completed", name: "shield_assess", call_id: "shield-assess-malformed", arguments: "not-json" }] },
     })));
 
+    await new Promise((resolve) => setImmediate(resolve));
     const outputs = realtime.sent.slice(1)
       .filter((message) => JSON.parse(message).type === "conversation.item.create")
-      .map((message) => JSON.parse(message) as { item: { call_id: string; output: string } });
-    assert.deepEqual(outputs.map(({ item }) => ({ callId: item.call_id, result: JSON.parse(item.output) })), [
+      .map((message) => JSON.parse(message) as { item: { call_id: string; output: string } })
+      .map(({ item }) => ({ callId: item.call_id, result: JSON.parse(item.output) }))
+      .sort((left, right) => left.callId.localeCompare(right.callId));
+    assert.deepEqual(outputs, [
       { callId: "shield-assess", result: { status: "pause_recommended", redFlags: ["urgency", "gift_card_payment"], safeNextStep: "verify_known_official_number" } },
+      { callId: "shield-alert-valid", result: { ok: true, contactName: "Robin" } },
       { callId: "shield-alert-unlisted", result: { ok: false, error: "unavailable_contact" } },
-      { callId: "shield-alert-valid", result: { ok: false, error: "alert_delivery_unavailable" } },
       { callId: "shield-assess-malformed", result: { ok: false, error: "invalid_arguments" } },
-    ]);
-    assert.equal(repositories.listActionRequests("person-a").length, 0);
+    ].sort((left, right) => left.callId.localeCompare(right.callId)));
+    assert.deepEqual(sentSms, [{ to: "+15550003333", body: "Iris is speaking with Avery about something that feels urgent or suspicious. Please check in with them when you can." }]);
+    assert.equal(repositories.listActionRequests("person-a").length, 1);
+    assert.deepEqual(
+      repositories.listEvents("person-a").filter((event) => event.type === "shield.alert_sent").map((event) => event.payload),
+      [{ contactName: "Robin" }],
+    );
   } finally { closeDatabase(database); }
 });
 

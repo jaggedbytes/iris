@@ -240,6 +240,7 @@ export class OutboundCallManager {
         contacts: this.repositories.listTrustedContacts(active.personId).map((contact) => ({ id: contact.id, name: contact.displayName })),
         alertText: createShieldAlertText(this.repositories.getPerson(active.personId)?.displayName ?? "the person"),
         assess: (situation: string) => this.shield!.assess({ callId, personId: active.personId, situation }),
+        sendAlert: (trustedContactId: string, approvalId: string) => this.shield!.sendApprovedAlert({ callId, personId: active.personId, trustedContactId, approvalId }),
       } : undefined;
       active.session = new CallSession(
         callId,
