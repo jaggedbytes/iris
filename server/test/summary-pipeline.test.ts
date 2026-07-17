@@ -84,3 +84,39 @@ test("does not save refused, malformed, or insufficient extraction", async () =>
     assert.deepEqual(repositories.listEvents("person-a").find((event) => event.type === "call.summary_unavailable")?.payload, {});
   } finally { closeDatabase(database); }
 });
+
+test("ready summary state is terminal and finalize rolls back partial memory writes", () => {
+  const { database, repositories } = fixture();
+  try {
+    repositories.completeCall({ id: "call-a", status: "completed", summaryState: "processing" });
+    assert.equal(repositories.finalizeCallSummary({
+      callId: "call-a",
+      personId: "person-a",
+      summaryJson: JSON.stringify({ status: "complete", recap: "Garden talk.", facts: [], people: [], unresolvedTopics: [] }),
+      readyEventId: "event-ready",
+      memories: [{ id: "memory-a", category: "durable_fact", payload: { fact: "Avery gardens." } }],
+    }), true);
+    assert.equal(repositories.listCalls("person-a")[0].summaryState, "ready");
+    assert.equal(repositories.updateCallSummaryState({ id: "call-a", summaryState: "unavailable" }), false);
+    assert.equal(repositories.listCalls("person-a")[0].summaryState, "ready");
+    assert.equal(repositories.listEvents("person-a").some((event) => event.type === "call.summary_unavailable"), false);
+
+    repositories.createCall({ id: "call-b", personId: "person-a", status: "completed" });
+    repositories.completeCall({ id: "call-b", status: "completed", summaryState: "processing" });
+    const duplicateId = "memory-dup";
+    assert.throws(() => repositories.finalizeCallSummary({
+      callId: "call-b",
+      personId: "person-a",
+      summaryJson: JSON.stringify({ status: "complete", recap: "Should not stick.", facts: [], people: [], unresolvedTopics: [] }),
+      readyEventId: "event-ready-b",
+      memories: [
+        { id: duplicateId, category: "durable_fact", payload: { fact: "one" } },
+        { id: duplicateId, category: "durable_fact", payload: { fact: "two" } },
+      ],
+    }));
+    assert.equal(repositories.listCalls("person-a").find((call) => call.id === "call-b")?.summaryJson, null);
+    assert.equal(repositories.listCalls("person-a").find((call) => call.id === "call-b")?.summaryState, "processing");
+    assert.equal(repositories.listMemories("person-a").some((memory) => memory.payload_json.includes("Should not stick")), false);
+    assert.equal(repositories.listEvents("person-a").some((event) => event.id === "event-ready-b"), false);
+  } finally { closeDatabase(database); }
+});

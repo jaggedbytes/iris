@@ -378,9 +378,46 @@ export function createRepositories(database: IrisDatabase) {
         .run(input.summaryJson, input.id).changes === 1;
     },
 
+    /**
+     * Atomically persist a validated summary, its memories, and the ready event.
+     * Any failure rolls back so the call cannot appear ready with partial memory.
+     */
+    finalizeCallSummary(input: {
+      callId: string;
+      personId: string;
+      summaryJson: string;
+      readyEventId: string;
+      memories: Array<{ id: string; category: string; payload: unknown }>;
+    }) {
+      return database.transaction(() => {
+        if (!this.saveCallSummary({ id: input.callId, summaryJson: input.summaryJson })) return false;
+        for (const memory of input.memories) {
+          this.createMemory({
+            id: memory.id,
+            personId: input.personId,
+            sourceCallId: input.callId,
+            category: memory.category,
+            payload: memory.payload,
+          });
+        }
+        this.createEvent({
+          id: input.readyEventId,
+          personId: input.personId,
+          callId: input.callId,
+          type: "call.summary_ready",
+          payload: {},
+        });
+        return true;
+      })();
+    },
+
     updateCallSummaryState(input: { id: string; summaryState: Exclude<CallSummaryState, "ready"> }) {
+      // Once a summary is ready it is terminal: never downgrade to unavailable
+      // or not_requested after a successful finalize.
       return database
-        .prepare("UPDATE calls SET summary_state = ? WHERE id = ? AND summary_state <> ?")
+        .prepare(
+          "UPDATE calls SET summary_state = ? WHERE id = ? AND summary_state <> 'ready' AND summary_state <> ?",
+        )
         .run(input.summaryState, input.id, input.summaryState).changes === 1;
     },
 

@@ -85,11 +85,20 @@ export class CallSummaryPipeline {
         this.markUnavailable(input);
         return;
       }
-      this.repositories.saveCallSummary({ id: input.callId, summaryJson: JSON.stringify(summary) });
-      for (const fact of summary.facts) this.repositories.createMemory({ id: randomUUID(), personId: input.personId, sourceCallId: input.callId, category: "durable_fact", payload: { fact } });
-      for (const person of summary.people) this.repositories.createMemory({ id: randomUUID(), personId: input.personId, sourceCallId: input.callId, category: "named_person", payload: person });
-      for (const topic of summary.unresolvedTopics) this.repositories.createMemory({ id: randomUUID(), personId: input.personId, sourceCallId: input.callId, category: "unresolved_topic", payload: { topic } });
-      this.repositories.createEvent({ id: randomUUID(), personId: input.personId, callId: input.callId, type: "call.summary_ready", payload: {} });
+      const memories = [
+        ...summary.facts.map((fact) => ({ id: randomUUID(), category: "durable_fact", payload: { fact } })),
+        ...summary.people.map((person) => ({ id: randomUUID(), category: "named_person", payload: person })),
+        ...summary.unresolvedTopics.map((topic) => ({ id: randomUUID(), category: "unresolved_topic", payload: { topic } })),
+      ];
+      if (!this.repositories.finalizeCallSummary({
+        callId: input.callId,
+        personId: input.personId,
+        summaryJson: JSON.stringify(summary),
+        readyEventId: randomUUID(),
+        memories,
+      })) {
+        this.markUnavailable(input);
+      }
     } catch {
       // Raw transcript text is never logged or persisted on extraction failure.
       this.markUnavailable(input);
