@@ -5,6 +5,7 @@ import test from "node:test";
 import { ActionDispatcher } from "../src/actions.js";
 import { BridgeService } from "../src/bridge.js";
 import { createDatabase, createRepositories, closeDatabase } from "../src/db/index.js";
+import { ShieldService } from "../src/shield.js";
 import { ActiveCallConflictError, OutboundCallManager, type CallScheduler } from "../src/telephony/outbound.js";
 import { friendlyRequesterToken, type SocketLike } from "../src/telephony/call-session.js";
 
@@ -357,6 +358,72 @@ test("Bridge SMS runs once from a completed response.done function call", async 
     const sent = realtime.sent.slice(1).map((message) => JSON.parse(message) as { type: string; item?: { call_id?: string } });
     assert.deepEqual(sent.map((message) => message.type), ["conversation.item.create", "response.create"]);
     assert.equal(sent[0].item?.call_id, "tool-sms");
+  } finally { closeDatabase(database); }
+});
+
+test("Shield tools dispatch only from completed response.done calls and preserve their privacy boundary", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Robin", relationship: "daughter", phoneE164: "+15550003333" });
+  let assessments = 0;
+  const shield = new ShieldService(repositories, "key", "safe", async () => {
+    assessments += 1;
+    return { ok: true, json: async () => ({ output_text: JSON.stringify({ status: "pause_recommended", redFlags: ["urgency", "gift_card_payment"], safeNextStep: "verify_known_official_number" }) }) } as Response;
+  });
+  const bridge = new BridgeService(repositories, new ActionDispatcher(repositories, telephonyConfig));
+  const realtime = new FakeSocket();
+  const manager = new OutboundCallManager(
+    repositories, telephonyConfig, { calls: { create: async () => ({ sid: "CA123" }) } }, () => realtime,
+    undefined, undefined, undefined, bridge, undefined, undefined, undefined, shield,
+  );
+  try {
+    const { callId } = await manager.startCall("person-a");
+    const token = /streamToken" value="([^"]+)"/.exec(manager.twiml(callId) ?? "")?.[1];
+    assert.ok(token);
+    const socket = new FakeSocket();
+    manager.acceptMediaSocket(socket);
+    socket.emit("message", Buffer.from(JSON.stringify({ event: "start", start: { streamSid: "MZ123", customParameters: { callId, streamToken: token } } })));
+    realtime.emit("open");
+    const sessionUpdate = JSON.parse(realtime.sent[0]) as { session: { instructions: string; tools: Array<{ name: string }> } };
+    assert.match(sessionUpdate.session.instructions, /Never state that something is definitely a scam/);
+    assert.match(sessionUpdate.session.instructions, /Iris is speaking with Avery about something that feels urgent or suspicious\. Please check in with them when you can\./);
+    assert.deepEqual(sessionUpdate.session.tools.map((tool) => tool.name).sort(), ["bridge_send_sms", "end_call", "shield_assess", "shield_send_alert"].sort());
+
+    const assessmentArguments = '{"situation":"A caller claiming to be my bank says I must buy gift cards immediately."}';
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "response.function_call_arguments.done", name: "shield_assess", call_id: "shield-assess", arguments: assessmentArguments })));
+    assert.equal(assessments, 0);
+
+    const assessmentCall = { type: "response.done", response: { id: "response-shield", output: [{ type: "function_call", status: "completed", name: "shield_assess", call_id: "shield-assess", arguments: assessmentArguments }] } };
+    realtime.emit("message", Buffer.from(JSON.stringify(assessmentCall)));
+    realtime.emit("message", Buffer.from(JSON.stringify(assessmentCall)));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(assessments, 1);
+    assert.deepEqual(
+      repositories.listEvents("person-a")
+        .filter((event) => event.type === "shield.pause_offered")
+        .map((event) => event.payload),
+      [{}],
+    );
+
+    const alertCall = (callId: string, trustedContactId: string) => ({ type: "response.done", response: { id: `response-${callId}`, output: [{ type: "function_call", status: "completed", name: "shield_send_alert", call_id: callId, arguments: JSON.stringify({ trusted_contact_id: trustedContactId }) }] } });
+    realtime.emit("message", Buffer.from(JSON.stringify(alertCall("shield-alert-unlisted", "other"))));
+    realtime.emit("message", Buffer.from(JSON.stringify(alertCall("shield-alert-valid", "contact-a"))));
+    realtime.emit("message", Buffer.from(JSON.stringify({
+      type: "response.done",
+      response: { id: "response-shield-malformed", output: [{ type: "function_call", status: "completed", name: "shield_assess", call_id: "shield-assess-malformed", arguments: "not-json" }] },
+    })));
+
+    const outputs = realtime.sent.slice(1)
+      .filter((message) => JSON.parse(message).type === "conversation.item.create")
+      .map((message) => JSON.parse(message) as { item: { call_id: string; output: string } });
+    assert.deepEqual(outputs.map(({ item }) => ({ callId: item.call_id, result: JSON.parse(item.output) })), [
+      { callId: "shield-assess", result: { status: "pause_recommended", redFlags: ["urgency", "gift_card_payment"], safeNextStep: "verify_known_official_number" } },
+      { callId: "shield-alert-unlisted", result: { ok: false, error: "unavailable_contact" } },
+      { callId: "shield-alert-valid", result: { ok: false, error: "alert_delivery_unavailable" } },
+      { callId: "shield-assess-malformed", result: { ok: false, error: "invalid_arguments" } },
+    ]);
+    assert.equal(repositories.listActionRequests("person-a").length, 0);
   } finally { closeDatabase(database); }
 });
 

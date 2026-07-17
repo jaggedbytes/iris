@@ -26,6 +26,11 @@ export type ShieldAssessment =
 
 export type ShieldRequest = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
+/** The only alert body Shield may send once checkpoint 3 enables delivery. */
+export function createShieldAlertText(personDisplayName: string) {
+  return `Iris is speaking with ${personDisplayName} about something that feels urgent or suspicious. Please check in with them when you can.`;
+}
+
 const schema = {
   type: "object",
   additionalProperties: false,
