@@ -111,6 +111,35 @@ test("allows an admin to view a person overview", async () => {
   }
 });
 
+test("shares only a current call state with a check-in-only trusted contact", async () => {
+  const fixture = await createDashboardServer();
+  try {
+    fixture.repositories.createCall({ id: "call-active", personId: "person-a", status: "attempted" });
+    fixture.repositories.grantAccess({
+      id: "grant-checkin", personId: "person-a", trustedContactId: "contact-a",
+      scopes: ["request_check_in"], tokenHash: hash("checkin-token"), expiresAt: futureExpiry(),
+    });
+    fixture.repositories.grantAccess({
+      id: "grant-summaries", personId: "person-a", trustedContactId: "contact-a",
+      scopes: ["view_summaries"], tokenHash: hash("summaries-token"), expiresAt: futureExpiry(),
+    });
+
+    const checkinResponse = await fetch(`${fixture.url}/api/dashboard/people/person-a/overview`, {
+      headers: { Authorization: "Bearer checkin-token" },
+    });
+    const checkinBody = (await checkinResponse.json()) as { activeCall: { id: string; status: string } | null; calls: unknown[] };
+    assert.deepEqual(checkinBody.activeCall, { id: "call-active", status: "attempted", startedAt: fixture.repositories.listCalls("person-a")[0].startedAt });
+    assert.deepEqual(checkinBody.calls, []);
+
+    const summariesResponse = await fetch(`${fixture.url}/api/dashboard/people/person-a/overview`, {
+      headers: { Authorization: "Bearer summaries-token" },
+    });
+    const summariesBody = (await summariesResponse.json()) as { activeCall: unknown; calls: Array<{ id: string }> };
+    assert.equal(summariesBody.activeCall, null);
+    assert.deepEqual(summariesBody.calls.map((call) => call.id), ["call-active"]);
+  } finally { fixture.close(); }
+});
+
 test("limits a trusted contact link to its person and granted scopes", async () => {
   const fixture = await createDashboardServer();
 

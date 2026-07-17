@@ -14,7 +14,9 @@ export type DashboardOverview = {
     status: string;
     startedAt: string;
     summaryJson: string | null;
+    summaryState: "not_requested" | "processing" | "ready" | "unavailable";
   }>;
+  activeCall: { id: string; status: "attempted" | "answered"; startedAt: string } | null;
   events: Array<{
     id: string;
     type: string;

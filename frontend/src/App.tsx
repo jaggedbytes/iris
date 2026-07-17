@@ -8,6 +8,7 @@ import {
 import type { DashboardOverview, DashboardPrincipal } from "./dashboard";
 
 const SESSION_TOKEN_KEY = "iris-dashboard-access-token";
+const DASHBOARD_POLL_INTERVAL_MS = 2_500;
 
 function readMagicLinkToken() {
   const fragment = window.location.hash.replace(/^#/, "");
@@ -30,7 +31,8 @@ function formatDate(value: string) {
   }).format(new Date(value));
 }
 
-function summaryLabel(summaryJson: string | null) {
+function summaryLabel(summaryJson: string | null, summaryState: DashboardOverview["calls"][number]["summaryState"]) {
+  if (summaryState === "processing") return "Preparing call summary…";
   if (!summaryJson) return "No saved summary yet";
   try {
     const summary = JSON.parse(summaryJson) as { recap?: string };
@@ -55,8 +57,10 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(Boolean(token));
   const [magicLink, setMagicLink] = useState<string | null>(null);
-  const [isCalling, setIsCalling] = useState(false);
+  const [isCallRequesting, setIsCallRequesting] = useState(false);
+  const [refreshVersion, setRefreshVersion] = useState(0);
   const magicLinkRequestId = useRef(0);
+  const overviewRequestId = useRef(0);
 
   const personId = useMemo(() => {
     if (overview) return overview.person.id;
@@ -66,6 +70,7 @@ export function App() {
 
   useEffect(() => {
     if (!token) {
+      overviewRequestId.current += 1;
       setPrincipal(null);
       setOverview(null);
       setIsLoading(false);
@@ -73,8 +78,8 @@ export function App() {
     }
 
     let cancelled = false;
-    setIsLoading(true);
-    setError(null);
+    const requestId = ++overviewRequestId.current;
+    if (!overview) setIsLoading(true);
 
     void (async () => {
       try {
@@ -84,25 +89,45 @@ export function App() {
           `/api/dashboard/people/${nextPersonId}/overview`,
           token,
         );
-        if (cancelled) return;
+        if (cancelled || requestId !== overviewRequestId.current) return;
         setPrincipal(nextPrincipal);
         setOverview(nextOverview);
+        setError(null);
       } catch (loadError) {
-        if (cancelled) return;
+        if (cancelled || requestId !== overviewRequestId.current) return;
         if (loadError instanceof DashboardError && loadError.isAuthError) {
           sessionStorage.removeItem(SESSION_TOKEN_KEY);
           setToken("");
         }
         setError(loadError instanceof Error ? loadError.message : "Unable to load the dashboard.");
       } finally {
-        if (!cancelled) setIsLoading(false);
+        if (!cancelled && requestId === overviewRequestId.current) setIsLoading(false);
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [token, refreshVersion]);
+
+  const shouldPoll = Boolean(
+    overview?.activeCall || overview?.calls.some((call) => call.summaryState === "processing"),
+  );
+
+  useEffect(() => {
+    if (!token || !shouldPoll) return;
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") {
+        setRefreshVersion((current) => current + 1);
+      }
+    };
+    const interval = window.setInterval(refreshWhenVisible, DASHBOARD_POLL_INTERVAL_MS);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [token, shouldPoll]);
 
   const signIn = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -114,6 +139,7 @@ export function App() {
 
   const signOut = () => {
     magicLinkRequestId.current += 1;
+    overviewRequestId.current += 1;
     sessionStorage.removeItem(SESSION_TOKEN_KEY);
     setToken("");
     setMagicLink(null);
@@ -145,18 +171,30 @@ export function App() {
   };
 
   const startCall = async () => {
-    setIsCalling(true);
+    if (!personId) return;
+    setIsCallRequesting(true);
     setError(null);
     try {
       await dashboardJson(`/api/dashboard/people/${personId}/calls`, token, {
         method: "POST",
       });
+      setRefreshVersion((current) => current + 1);
     } catch (callError) {
       setError(callError instanceof Error ? callError.message : "Iris could not place the call.");
     } finally {
-      setIsCalling(false);
+      setIsCallRequesting(false);
     }
   };
+
+  const activeCall = overview?.activeCall ?? null;
+  const callStateLabel = activeCall?.status === "answered"
+    ? "Call in progress"
+    : activeCall
+      ? "Calling…"
+      : "Call now";
+  const callDisabled = !overview || isCallRequesting || Boolean(activeCall);
+  const canRequestCheckIn = principal?.role === "trusted_contact"
+    && principal.scopes.includes("request_check_in");
 
   if (!token && !isLoading) {
     return (
@@ -199,8 +237,13 @@ export function App() {
         </div>
         <div className="header-actions">
           {principal?.role === "admin" && (
-            <button className="call-button" type="button" disabled={isCalling} onClick={() => void startCall()}>
-              {isCalling ? "Calling…" : "Call now"}
+            <button className="call-button" type="button" disabled={callDisabled} onClick={() => void startCall()}>
+              {callStateLabel}
+            </button>
+          )}
+          {canRequestCheckIn && (
+            <button className="call-button" type="button" disabled={callDisabled} onClick={() => void startCall()}>
+              {activeCall ? callStateLabel : "Ask Iris to check in"}
             </button>
           )}
           <button className="text-button" type="button" onClick={signOut}>
@@ -211,6 +254,11 @@ export function App() {
 
       {error && <p className="form-error" role="alert">{error}</p>}
       {isLoading && <p className="loading-note">Loading the current picture…</p>}
+      {activeCall && (
+        <p className="call-status" aria-live="polite">
+          {activeCall.status === "answered" ? "Iris is on a call now." : "Iris is calling now."}
+        </p>
+      )}
 
       {overview && (
         <div className="dashboard-grid">
@@ -233,7 +281,7 @@ export function App() {
               <ol className="item-list">
                 {overview.calls.map((call) => (
                   <li key={call.id}>
-                    <strong>{summaryLabel(call.summaryJson)}</strong>
+                    <strong>{summaryLabel(call.summaryJson, call.summaryState)}</strong>
                     <span>{formatDate(call.startedAt)} · {call.status}</span>
                   </li>
                 ))}

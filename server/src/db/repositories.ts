@@ -336,6 +336,18 @@ export function createRepositories(database: IrisDatabase) {
       return rows.map(toCall);
     },
 
+    findActiveCall(personId: string) {
+      const row = database
+        .prepare(
+          `SELECT * FROM calls
+           WHERE person_id = ? AND status IN ('attempted', 'answered')
+           ORDER BY started_at DESC
+           LIMIT 1`,
+        )
+        .get(personId) as CallRow | undefined;
+      return row ? toCall(row) : null;
+    },
+
     interruptActiveCall(id: string) {
       return database
         .prepare(

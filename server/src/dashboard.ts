@@ -149,6 +149,10 @@ export function createDashboardRouter(context: DashboardContext) {
       return;
     }
 
+    const activeCall = hasScope(principal, "request_check_in")
+      ? context.repositories.findActiveCall(personId)
+      : null;
+
     response.json({
       // The phone number is operator-only PII; trusted contacts receive a
       // scope-appropriate projection regardless of their granted view scopes.
@@ -159,6 +163,9 @@ export function createDashboardRouter(context: DashboardContext) {
       calls: hasScope(principal, "view_summaries")
         ? context.repositories.listCalls(personId)
         : [],
+      activeCall: activeCall
+        ? { id: activeCall.id, status: activeCall.status, startedAt: activeCall.startedAt }
+        : null,
       events: hasScope(principal, "view_events")
         ? context.repositories.listEvents(personId)
         : [],
