@@ -34,10 +34,16 @@ test("persists only validated user-stated summary memory", async () => {
     resolveResponse?.(new Response(JSON.stringify({ output_text: JSON.stringify({
       status: "complete", recap: "Avery talked about visiting Ruth.", facts: ["Avery has a friend named Ruth."],
       people: [{ name: "Ruth", relationshipOrContext: "Avery's friend" }], unresolvedTopics: ["Plan a visit with Ruth."],
+      recallAnchor: "  your plans to visit Ruth  ",
     }) }), { status: 200 }));
     await processing;
-    const summary = JSON.parse(repositories.listCalls("person-a")[0].summaryJson!) as { facts: string[] };
+    const summary = JSON.parse(repositories.listCalls("person-a")[0].summaryJson!) as { facts: string[]; recallAnchor: string | null };
     assert.deepEqual(summary.facts, ["Avery has a friend named Ruth."]);
+    assert.equal(summary.recallAnchor, "your plans to visit Ruth");
+    assert.deepEqual(
+      repositories.listMemories("person-a").find((memory) => memory.category === "recall_anchor"),
+      { category: "recall_anchor", payload_json: JSON.stringify({ anchor: "your plans to visit Ruth" }) },
+    );
     assert.equal(repositories.listCalls("person-a")[0].summaryState, "ready");
     assert.equal(repositories.listCalls("person-a")[0].endedAt, endedAt);
     assert.deepEqual(repositories.listEvents("person-a").find((event) => event.type === "call.summary_ready")?.payload, {});
@@ -58,6 +64,7 @@ test("does not call extraction or save anything without active consent", async (
     assert.equal(requested, false);
     assert.equal(repositories.listCalls("person-a")[0].summaryJson, null);
     assert.equal(repositories.listCalls("person-a")[0].summaryState, "not_requested");
+    assert.equal(repositories.listMemories("person-a").some((memory) => memory.category === "recall_anchor"), false);
   } finally { closeDatabase(database); }
 });
 
@@ -76,12 +83,21 @@ test("leaves an empty transcript not_requested without contacting extraction", a
 test("does not save refused, malformed, or insufficient extraction", async () => {
   const { database, repositories } = fixture();
   try {
-    await new CallSummaryPipeline(repositories, "key", "safe-id", async () => new Response(JSON.stringify({ output_text: '{"status":"insufficient_signal","recap":"","facts":[],"people":[],"unresolvedTopics":[]}' }), { status: 200 })).process({
+    await new CallSummaryPipeline(repositories, "key", "safe-id", async () => new Response(JSON.stringify({ output_text: '{"status":"insufficient_signal","recap":"","facts":[],"people":[],"unresolvedTopics":[],"recallAnchor":null}' }), { status: 200 })).process({
       callId: "call-a", personId: "person-a", transcript: [{ speaker: "user", text: "um" }],
     });
     assert.equal(repositories.listCalls("person-a")[0].summaryJson, null);
     assert.equal(repositories.listCalls("person-a")[0].summaryState, "unavailable");
     assert.deepEqual(repositories.listEvents("person-a").find((event) => event.type === "call.summary_unavailable")?.payload, {});
+
+    repositories.createCall({ id: "call-malformed", personId: "person-a", status: "completed" });
+    await new CallSummaryPipeline(repositories, "key", "safe-id", async () => new Response(JSON.stringify({ output_text: JSON.stringify({
+      status: "complete", recap: "Avery talked about a garden.", facts: [], people: [], unresolvedTopics: [], recallAnchor: 42,
+    }) }), { status: 200 })).process({
+      callId: "call-malformed", personId: "person-a", transcript: [{ speaker: "user", text: "I garden." }],
+    });
+    assert.equal(repositories.listCalls("person-a").find((call) => call.id === "call-malformed")?.summaryState, "unavailable");
+    assert.equal(repositories.listMemories("person-a").some((memory) => memory.category === "recall_anchor"), false);
   } finally { closeDatabase(database); }
 });
 
@@ -92,9 +108,12 @@ test("ready summary state is terminal and finalize rolls back partial memory wri
     assert.equal(repositories.finalizeCallSummary({
       callId: "call-a",
       personId: "person-a",
-      summaryJson: JSON.stringify({ status: "complete", recap: "Garden talk.", facts: [], people: [], unresolvedTopics: [] }),
+      summaryJson: JSON.stringify({ status: "complete", recap: "Garden talk.", facts: [], people: [], unresolvedTopics: [], recallAnchor: "your garden" }),
       readyEventId: "event-ready",
-      memories: [{ id: "memory-a", category: "durable_fact", payload: { fact: "Avery gardens." } }],
+      memories: [
+        { id: "memory-a", category: "durable_fact", payload: { fact: "Avery gardens." } },
+        { id: "memory-anchor", category: "recall_anchor", payload: { anchor: "your garden" } },
+      ],
     }), true);
     assert.equal(repositories.listCalls("person-a")[0].summaryState, "ready");
     assert.equal(repositories.updateCallSummaryState({ id: "call-a", summaryState: "unavailable" }), false);
@@ -107,9 +126,10 @@ test("ready summary state is terminal and finalize rolls back partial memory wri
     assert.throws(() => repositories.finalizeCallSummary({
       callId: "call-b",
       personId: "person-a",
-      summaryJson: JSON.stringify({ status: "complete", recap: "Should not stick.", facts: [], people: [], unresolvedTopics: [] }),
+      summaryJson: JSON.stringify({ status: "complete", recap: "Should not stick.", facts: [], people: [], unresolvedTopics: [], recallAnchor: "your garden" }),
       readyEventId: "event-ready-b",
       memories: [
+        { id: "memory-anchor-b", category: "recall_anchor", payload: { anchor: "your garden" } },
         { id: duplicateId, category: "durable_fact", payload: { fact: "one" } },
         { id: duplicateId, category: "durable_fact", payload: { fact: "two" } },
       ],
@@ -117,6 +137,36 @@ test("ready summary state is terminal and finalize rolls back partial memory wri
     assert.equal(repositories.listCalls("person-a").find((call) => call.id === "call-b")?.summaryJson, null);
     assert.equal(repositories.listCalls("person-a").find((call) => call.id === "call-b")?.summaryState, "processing");
     assert.equal(repositories.listMemories("person-a").some((memory) => memory.payload_json.includes("Should not stick")), false);
+    assert.equal(repositories.listMemories("person-a").some((memory) => memory.payload_json.includes("your garden")), true);
+    assert.equal(
+      (database.prepare("SELECT COUNT(*) AS count FROM memories WHERE id = ?").get("memory-anchor-b") as { count: number }).count,
+      0,
+    );
     assert.equal(repositories.listEvents("person-a").some((event) => event.id === "event-ready-b"), false);
+  } finally { closeDatabase(database); }
+});
+
+test("a null recall anchor does not remove an earlier valid anchor", async () => {
+  const { database, repositories } = fixture();
+  try {
+    repositories.createMemory({
+      id: "memory-old-anchor", personId: "person-a", sourceCallId: "call-a",
+      category: "recall_anchor", payload: { anchor: "your garden plans" },
+    });
+    repositories.createCall({ id: "call-b", personId: "person-a", status: "completed" });
+
+    await new CallSummaryPipeline(repositories, "key", "safe-id", async () => new Response(JSON.stringify({
+      output_text: JSON.stringify({
+        status: "complete", recap: "Avery shared a short update.", facts: [], people: [], unresolvedTopics: [], recallAnchor: null,
+      }),
+    }), { status: 200 })).process({
+      callId: "call-b", personId: "person-a", transcript: [{ speaker: "user", text: "Nothing much today." }],
+    });
+
+    assert.deepEqual(
+      repositories.listMemories("person-a").filter((memory) => memory.category === "recall_anchor"),
+      [{ category: "recall_anchor", payload_json: JSON.stringify({ anchor: "your garden plans" }) }],
+    );
+    assert.equal(repositories.listCalls("person-a").find((call) => call.id === "call-b")?.summaryState, "ready");
   } finally { closeDatabase(database); }
 });

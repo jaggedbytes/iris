@@ -10,6 +10,7 @@ import type {
   ConsentKind,
   ConsentStatus,
   CreateActionRequest,
+  MemoryCategory,
   Person,
   TimelineEvent,
   TrustedContact,
@@ -405,7 +406,7 @@ export function createRepositories(database: IrisDatabase) {
       personId: string;
       summaryJson: string;
       readyEventId: string;
-      memories: Array<{ id: string; category: string; payload: unknown }>;
+      memories: Array<{ id: string; category: MemoryCategory; payload: unknown }>;
     }) {
       return database.transaction(() => {
         if (!this.saveCallSummary({ id: input.callId, summaryJson: input.summaryJson })) return false;
@@ -468,7 +469,7 @@ export function createRepositories(database: IrisDatabase) {
       return rows.map(toCall);
     },
 
-    createMemory(input: { id: string; personId: string; sourceCallId: string; category: string; payload: unknown }) {
+    createMemory(input: { id: string; personId: string; sourceCallId: string; category: MemoryCategory; payload: unknown }) {
       database.prepare(
         `INSERT INTO memories (id, person_id, source_call_id, category, payload_json, created_at)
          VALUES (?, ?, ?, ?, ?, ?)`,

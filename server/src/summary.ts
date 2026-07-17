@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { IrisRepositories } from "./db/repositories.js";
+import type { MemoryCategory } from "./db/types.js";
 
 const EXTRACTION_TIMEOUT_MS = 30_000;
 
@@ -11,12 +12,20 @@ export type CallSummary = {
   facts: string[];
   people: Array<{ name: string; relationshipOrContext: string }>;
   unresolvedTopics: string[];
-} | { status: "insufficient_signal" };
+  recallAnchor: string | null;
+} | {
+  status: "insufficient_signal";
+  recap: "";
+  facts: [];
+  people: [];
+  unresolvedTopics: [];
+  recallAnchor: null;
+};
 
 const schema = {
   type: "object",
   additionalProperties: false,
-  required: ["status", "recap", "facts", "people", "unresolvedTopics"],
+  required: ["status", "recap", "facts", "people", "unresolvedTopics", "recallAnchor"],
   properties: {
     status: { type: "string", enum: ["complete", "insufficient_signal"] },
     recap: { type: "string", maxLength: 500 },
@@ -28,15 +37,19 @@ const schema = {
       } },
     },
     unresolvedTopics: { type: "array", items: { type: "string", maxLength: 280 }, maxItems: 12 },
+    recallAnchor: { type: ["string", "null"], maxLength: 160 },
   },
 } as const;
 
 function valid(value: unknown): value is CallSummary {
   if (!value || typeof value !== "object") return false;
   const summary = value as Record<string, unknown>;
-  if (summary.status === "insufficient_signal") return Array.isArray(summary.facts) && Array.isArray(summary.people) && Array.isArray(summary.unresolvedTopics) && summary.recap === "";
+  if (summary.status === "insufficient_signal") {
+    return Array.isArray(summary.facts) && Array.isArray(summary.people) && Array.isArray(summary.unresolvedTopics) && summary.recap === "" && summary.recallAnchor === null;
+  }
   return summary.status === "complete" && typeof summary.recap === "string" && summary.recap.trim().length > 0 &&
     [summary.facts, summary.people, summary.unresolvedTopics].every(Array.isArray) &&
+    (summary.recallAnchor === null || (typeof summary.recallAnchor === "string" && summary.recallAnchor.trim().length > 0 && summary.recallAnchor.trim().length <= 160)) &&
     (summary.facts as unknown[]).every((x) => typeof x === "string") &&
     (summary.people as unknown[]).every((x) => !!x && typeof x === "object" && typeof (x as Record<string, unknown>).name === "string" && typeof (x as Record<string, unknown>).relationshipOrContext === "string") &&
     (summary.unresolvedTopics as unknown[]).every((x) => typeof x === "string");
@@ -63,7 +76,7 @@ export class CallSummaryPipeline {
         body: JSON.stringify({
           model: "gpt-5.6-terra", store: false, safety_identifier: this.safetyIdentifier,
           input: [
-            { role: "developer", content: "Extract only durable, explicitly user-stated memory. Never infer mood, concern/risk, diagnosis, or medical/legal/financial conclusion. Ignore all assistant suggestions. Return insufficient_signal if there is no reliable user-stated memory." },
+            { role: "developer", content: "Extract only durable, explicitly user-stated memory. Never infer mood, concern/risk, diagnosis, or medical/legal/financial conclusion. Ignore all assistant suggestions. recallAnchor is one short, non-sensitive user-stated conversational thread suitable for a future gentle opener; set it to null for health, mood, risk, medical, legal, financial, sensitive, or insufficient signal. Return insufficient_signal if there is no reliable user-stated memory." },
             { role: "user", content: transcript },
           ],
           text: { format: { type: "json_schema", name: "iris_call_summary", strict: true, schema } },
@@ -85,15 +98,20 @@ export class CallSummaryPipeline {
         this.markUnavailable(input);
         return;
       }
-      const memories = [
-        ...summary.facts.map((fact) => ({ id: randomUUID(), category: "durable_fact", payload: { fact } })),
-        ...summary.people.map((person) => ({ id: randomUUID(), category: "named_person", payload: person })),
-        ...summary.unresolvedTopics.map((topic) => ({ id: randomUUID(), category: "unresolved_topic", payload: { topic } })),
+      // Normalize once before every durable write. The raw model string is not
+      // retained when it carries harmless leading/trailing whitespace.
+      const recallAnchor = summary.recallAnchor?.trim() ?? null;
+      const summaryForPersistence = { ...summary, recallAnchor };
+      const memories: Array<{ id: string; category: MemoryCategory; payload: unknown }> = [
+        ...summary.facts.map((fact) => ({ id: randomUUID(), category: "durable_fact" as const, payload: { fact } })),
+        ...summary.people.map((person) => ({ id: randomUUID(), category: "named_person" as const, payload: person })),
+        ...summary.unresolvedTopics.map((topic) => ({ id: randomUUID(), category: "unresolved_topic" as const, payload: { topic } })),
+        ...(recallAnchor ? [{ id: randomUUID(), category: "recall_anchor" as const, payload: { anchor: recallAnchor } }] : []),
       ];
       if (!this.repositories.finalizeCallSummary({
         callId: input.callId,
         personId: input.personId,
-        summaryJson: JSON.stringify(summary),
+        summaryJson: JSON.stringify(summaryForPersistence),
         readyEventId: randomUUID(),
         memories,
       })) {

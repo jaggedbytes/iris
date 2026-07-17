@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import Database from "better-sqlite3";
 
 import { loadDashboardConfig, loadFoundationConfig } from "../src/config.js";
-import { closeDatabase, createDatabase, createRepositories } from "../src/db/index.js";
+import { closeDatabase, createDatabase, createRepositories, migrate } from "../src/db/index.js";
+import { migrations } from "../src/db/schema.js";
 
 function createTestRepositories() {
   const database = createDatabase(":memory:");
@@ -145,6 +147,59 @@ test("stores summary-only call records with no transcript column", () => {
     assert.equal(repositories.listCalls("person-a")[0]?.summaryState, "ready");
   } finally {
     closeDatabase(database);
+  }
+});
+
+test("007 memory category migration preserves legacy rows and constrains new categories", () => {
+  const database = new Database(":memory:");
+  database.pragma("foreign_keys = ON");
+  try {
+    database.exec("CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL)");
+    const record = database.prepare("INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)");
+    for (const migration of migrations) {
+      if (migration.id === "007_memory_categories") break;
+      database.exec(migration.sql);
+      record.run(migration.id, "2026-07-17T00:00:00.000Z");
+    }
+    database.prepare("INSERT INTO people (id, display_name, created_at) VALUES (?, ?, ?)").run("person-a", "Avery", "2026-07-17T00:00:00.000Z");
+    database.prepare(
+      `INSERT INTO memories (id, person_id, source_call_id, category, payload_json, confidence, expires_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run("memory-legacy", "person-a", null, "durable_fact", '{"fact":"Avery gardens."}', 0.9, null, "2026-07-17T00:00:00.000Z");
+    database.prepare(
+      "INSERT INTO memories (id, person_id, category, payload_json, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("memory-person", "person-a", "named_person", '{"name":"Ruth"}', "2026-07-17T00:00:01.000Z");
+    database.prepare(
+      "INSERT INTO memories (id, person_id, category, payload_json, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("memory-topic", "person-a", "unresolved_topic", '{"topic":"Garden plans"}', "2026-07-17T00:00:02.000Z");
+
+    migrate(database);
+
+    assert.deepEqual(
+      database.prepare("SELECT * FROM memories WHERE id = ?").get("memory-legacy"),
+      {
+        id: "memory-legacy", person_id: "person-a", source_call_id: null,
+        category: "durable_fact", payload_json: '{"fact":"Avery gardens."}', confidence: 0.9,
+        expires_at: null, created_at: "2026-07-17T00:00:00.000Z",
+      },
+    );
+    assert.deepEqual(
+      database.prepare("SELECT category FROM memories WHERE id IN (?, ?) ORDER BY id").all("memory-person", "memory-topic"),
+      [{ category: "named_person" }, { category: "unresolved_topic" }],
+    );
+    database.prepare(
+      "INSERT INTO memories (id, person_id, category, payload_json, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("memory-anchor", "person-a", "recall_anchor", '{"anchor":"your garden plans"}', "2026-07-17T00:00:01.000Z");
+    assert.throws(
+      () => database.prepare(
+        "INSERT INTO memories (id, person_id, category, payload_json, created_at) VALUES (?, ?, ?, ?, ?)",
+      ).run("memory-unknown", "person-a", "unknown", "{}", "2026-07-17T00:00:02.000Z"),
+      /CHECK constraint failed/,
+    );
+    const indexes = database.prepare("PRAGMA index_list(memories)").all() as Array<{ name: string }>;
+    assert.equal(indexes.some((index) => index.name === "idx_memories_person_category_created"), true);
+  } finally {
+    database.close();
   }
 });
 
