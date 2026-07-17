@@ -11,7 +11,11 @@ import { friendlyRequesterToken, type SocketLike } from "../src/telephony/call-s
 class FakeSocket extends EventEmitter implements SocketLike {
   sent: string[] = [];
   closed = false;
-  send(data: string) { this.sent.push(data); }
+  throwOnSend = false;
+  send(data: string) {
+    if (this.throwOnSend) throw new Error("socket send failed");
+    this.sent.push(data);
+  }
   close() { this.closed = true; this.emit("close"); }
 }
 
@@ -503,6 +507,40 @@ test("end_call uses its farewell-only timeout when completion events never arriv
     // Late farewell events cannot finalize the already-closed session again.
     realtime.emit("message", Buffer.from(JSON.stringify({ type: "response.done", response: { id: "response-farewell", output: [] } })));
     assert.equal(repositories.listEvents("person-a").filter((event) => event.type === "call.completed").length, 1);
+  } finally { closeDatabase(database); }
+});
+
+test("a failed end_call tool output arms its safety timeout and closes the call", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  const realtime = new FakeSocket();
+  const scheduler = new FakeScheduler();
+  const configuredTelephony = { ...telephonyConfig, farewellCloseTimeoutMs: 91 };
+  const manager = new OutboundCallManager(
+    repositories, configuredTelephony, { calls: { create: async () => ({ sid: "CA123" }) } }, () => realtime,
+    undefined, scheduler, 10_000, undefined, 10_000,
+  );
+  try {
+    const { callId } = await manager.startCall("person-a");
+    const token = /streamToken" value="([^"]+)"/.exec(manager.twiml(callId) ?? "")?.[1];
+    assert.ok(token);
+    const socket = new FakeSocket();
+    manager.acceptMediaSocket(socket);
+    socket.emit("message", Buffer.from(JSON.stringify({ event: "start", start: { streamSid: "MZ123", customParameters: { callId, streamToken: token } } })));
+    realtime.emit("open");
+    realtime.throwOnSend = true;
+
+    realtime.emit("message", Buffer.from(JSON.stringify({
+      type: "response.done",
+      response: { id: "response-end-tool", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-end", arguments: "{}" }] },
+    })));
+    assert.equal(scheduler.scheduled?.delayMs, 91);
+
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(socket.closed, true);
+    assert.equal(repositories.listCalls("person-a")[0].status, "failed");
+    assert.equal(repositories.listEvents("person-a").filter((event) => event.type === "call.failed").length, 1);
   } finally { closeDatabase(database); }
 });
 

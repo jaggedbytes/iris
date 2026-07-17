@@ -297,7 +297,8 @@ export class CallSession {
       for (const item of completedFunctionCalls) {
         if (this.processedToolCallIds.has(item.call_id!)) continue;
         this.processedToolCallIds.add(item.call_id!);
-        void this.dispatchToolCall(item.name!, item.call_id!, item.arguments ?? "");
+        void this.dispatchToolCall(item.name!, item.call_id!, item.arguments ?? "")
+          .catch(() => this.close("failed"));
       }
       return;
     }
@@ -324,8 +325,14 @@ export class CallSession {
         playbackAcked: false,
         timer: null,
       };
-      this.sendToolOutput(callId, { ok: true });
-      this.armFarewellTimeout();
+      try {
+        this.sendToolOutput(callId, { ok: true });
+      } finally {
+        // Keep the safety bound intact even if the Realtime socket rejects the
+        // function output. The caller also handles that rejected dispatch by
+        // closing this session as failed.
+        this.armFarewellTimeout();
+      }
       return;
     }
     if (name !== "bridge_send_sms") {
