@@ -77,11 +77,13 @@ h2 { margin: 0; font-size: 1.35rem; }
 .profile-card, .actions-card { grid-column: span 4; }
 .card-heading, .contact-list li { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; }
 .count-pill { padding: 0.3rem 0.55rem; border-radius: 999px; color: #49664e; background: #e6eee2; font-size: 0.75rem; font-weight: 800; }
-.privacy-note, .empty-state, .loading-note { color: #68736a; font-size: 0.9rem; line-height: 1.55; }
+.privacy-note, .empty-state, .loading-note, .call-status { color: #68736a; font-size: 0.9rem; line-height: 1.55; }
+.call-status { margin: -1rem 0 1.25rem; color: #49664e; font-weight: 700; }
 .item-list, .contact-list { display: grid; gap: 0.7rem; margin: 1.2rem 0 0; padding: 0; list-style: none; }
 .item-list li { display: grid; gap: 0.2rem; padding: 0.8rem; border-radius: 0.7rem; background: #f0eee7; }
 .item-list strong, .contact-list strong { font-size: 0.9rem; }
 .item-list span, .contact-list span, .magic-link span { color: #6d766f; font-size: 0.78rem; }
+.item-list .warning-note { color: #8a4f18; font-weight: 700; }
 .contact-list li { padding: 0.75rem 0; border-bottom: 1px solid #e4dfd5; }
 .contact-list li:last-child { border-bottom: 0; }
 .contact-list li > div { display: grid; gap: 0.15rem; }

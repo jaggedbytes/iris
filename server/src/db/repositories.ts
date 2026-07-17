@@ -5,10 +5,12 @@ import type {
   ActionRequestRecord,
   ActionStatus,
   CallRecord,
+  CallSummaryState,
   CallStatus,
   ConsentKind,
   ConsentStatus,
   CreateActionRequest,
+  MemoryCategory,
   Person,
   TimelineEvent,
   TrustedContact,
@@ -49,6 +51,8 @@ type CallRow = {
   started_at: string;
   ended_at: string | null;
   summary_json: string | null;
+  summary_state: CallSummaryState;
+  requested_by_contact_id: string | null;
 };
 
 type EventRow = {
@@ -109,6 +113,8 @@ const toCall = (row: CallRow): CallRecord => ({
   startedAt: row.started_at,
   endedAt: row.ended_at,
   summaryJson: row.summary_json,
+  summaryState: row.summary_state,
+  requestedByContactId: row.requested_by_contact_id,
 });
 
 const toEvent = (row: EventRow): TimelineEvent => ({
@@ -288,12 +294,13 @@ export function createRepositories(database: IrisDatabase) {
       personId: string;
       status: CallStatus;
       providerCallId?: string | null;
+      requestedByContactId?: string | null;
     }) {
       const startedAt = now();
       database
         .prepare(
-          `INSERT INTO calls (id, person_id, provider_call_id, status, started_at)
-           VALUES (?, ?, ?, ?, ?)`,
+          `INSERT INTO calls (id, person_id, provider_call_id, status, started_at, requested_by_contact_id)
+           VALUES (?, ?, ?, ?, ?, ?)`,
         )
         .run(
           input.id,
@@ -301,6 +308,7 @@ export function createRepositories(database: IrisDatabase) {
           input.providerCallId ?? null,
           input.status,
           startedAt,
+          input.requestedByContactId ?? null,
         );
       const row = database
         .prepare("SELECT * FROM calls WHERE id = ?")
@@ -308,20 +316,128 @@ export function createRepositories(database: IrisDatabase) {
       return toCall(row);
     },
 
-    completeCall(input: { id: string; status: Extract<CallStatus, "completed" | "failed">; summaryJson?: string | null }) {
+    reserveOutboundCall(input: { id: string; personId: string; requestedByContactId?: string | null }) {
+      const requestedByContactId = input.requestedByContactId ?? null;
+      return database.transaction(() => {
+        const active = database
+          .prepare(
+            `SELECT * FROM calls
+             WHERE person_id = ? AND status IN ('attempted', 'answered')
+             ORDER BY started_at DESC
+             LIMIT 1`,
+          )
+          .get(input.personId) as CallRow | undefined;
+        if (active) {
+          // Only treat the reservation as idempotent when the same requester
+          // (admin => null, or the same trusted contact) is asking again.
+          // A different requester must not silently inherit an in-flight call.
+          if (active.requested_by_contact_id === requestedByContactId) {
+            return { call: toCall(active), created: false as const, conflict: false as const };
+          }
+          return { call: toCall(active), created: false as const, conflict: true as const };
+        }
+        const call = this.createCall({
+          id: input.id,
+          personId: input.personId,
+          status: "attempted",
+          requestedByContactId,
+        });
+        return { call, created: true as const, conflict: false as const };
+      })();
+    },
+
+    listActiveCalls() {
+      const rows = database
+        .prepare(
+          "SELECT * FROM calls WHERE status IN ('attempted', 'answered') ORDER BY started_at",
+        )
+        .all() as CallRow[];
+      return rows.map(toCall);
+    },
+
+    findActiveCall(personId: string) {
+      const row = database
+        .prepare(
+          `SELECT * FROM calls
+           WHERE person_id = ? AND status IN ('attempted', 'answered')
+           ORDER BY started_at DESC
+           LIMIT 1`,
+        )
+        .get(personId) as CallRow | undefined;
+      return row ? toCall(row) : null;
+    },
+
+    interruptActiveCall(id: string) {
+      return database
+        .prepare(
+          `UPDATE calls
+             SET status = 'failed', ended_at = ?, summary_state = 'unavailable'
+           WHERE id = ? AND status IN ('attempted', 'answered')`,
+        )
+        .run(now(), id).changes === 1;
+    },
+
+    completeCall(input: { id: string; status: Extract<CallStatus, "completed" | "failed">; summaryJson?: string | null; summaryState?: CallSummaryState }) {
+      const summaryState = input.summaryState ?? (input.summaryJson ? "ready" : input.status === "failed" ? "unavailable" : undefined);
       database
         .prepare(
-          `UPDATE calls SET status = ?, ended_at = ?, summary_json = ? WHERE id = ?`,
+          `UPDATE calls
+             SET status = ?, ended_at = ?, summary_json = COALESCE(?, summary_json),
+                 summary_state = COALESCE(?, summary_state)
+           WHERE id = ?`,
         )
-        .run(input.status, now(), input.summaryJson ?? null, input.id);
+        .run(input.status, now(), input.summaryJson ?? null, summaryState ?? null, input.id);
     },
 
     saveCallSummary(input: { id: string; summaryJson: string }) {
       // Summary persistence happens after the call is already completed, so it
       // must not touch ended_at (doing so would inflate the recorded duration).
-      database
-        .prepare("UPDATE calls SET summary_json = ? WHERE id = ?")
-        .run(input.summaryJson, input.id);
+      return database
+        .prepare("UPDATE calls SET summary_json = ?, summary_state = 'ready' WHERE id = ?")
+        .run(input.summaryJson, input.id).changes === 1;
+    },
+
+    /**
+     * Atomically persist a validated summary, its memories, and the ready event.
+     * Any failure rolls back so the call cannot appear ready with partial memory.
+     */
+    finalizeCallSummary(input: {
+      callId: string;
+      personId: string;
+      summaryJson: string;
+      readyEventId: string;
+      memories: Array<{ id: string; category: MemoryCategory; payload: unknown }>;
+    }) {
+      return database.transaction(() => {
+        if (!this.saveCallSummary({ id: input.callId, summaryJson: input.summaryJson })) return false;
+        for (const memory of input.memories) {
+          this.createMemory({
+            id: memory.id,
+            personId: input.personId,
+            sourceCallId: input.callId,
+            category: memory.category,
+            payload: memory.payload,
+          });
+        }
+        this.createEvent({
+          id: input.readyEventId,
+          personId: input.personId,
+          callId: input.callId,
+          type: "call.summary_ready",
+          payload: {},
+        });
+        return true;
+      })();
+    },
+
+    updateCallSummaryState(input: { id: string; summaryState: Exclude<CallSummaryState, "ready"> }) {
+      // Once a summary is ready it is terminal: never downgrade to unavailable
+      // or not_requested after a successful finalize.
+      return database
+        .prepare(
+          "UPDATE calls SET summary_state = ? WHERE id = ? AND summary_state <> 'ready' AND summary_state <> ?",
+        )
+        .run(input.summaryState, input.id, input.summaryState).changes === 1;
     },
 
     updateCall(input: {
@@ -353,7 +469,7 @@ export function createRepositories(database: IrisDatabase) {
       return rows.map(toCall);
     },
 
-    createMemory(input: { id: string; personId: string; sourceCallId: string; category: string; payload: unknown }) {
+    createMemory(input: { id: string; personId: string; sourceCallId: string; category: MemoryCategory; payload: unknown }) {
       database.prepare(
         `INSERT INTO memories (id, person_id, source_call_id, category, payload_json, created_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
@@ -361,9 +477,33 @@ export function createRepositories(database: IrisDatabase) {
     },
 
     listMemories(personId: string, limit = 20) {
+      // Recall anchors are fetched separately for the call opener. Excluding
+      // them here keeps the limit window available for durable Bridge context.
       return database.prepare(
-        "SELECT category, payload_json FROM memories WHERE person_id = ? ORDER BY created_at DESC LIMIT ?",
+        `SELECT category, payload_json FROM memories
+         WHERE person_id = ? AND category <> 'recall_anchor'
+         ORDER BY created_at DESC
+         LIMIT ?`,
       ).all(personId, limit) as Array<{ category: string; payload_json: string }>;
+    },
+
+    findLatestRecallAnchor(personId: string) {
+      const rows = database.prepare(
+        `SELECT payload_json FROM memories
+         WHERE person_id = ? AND category = 'recall_anchor'
+         ORDER BY created_at DESC, rowid DESC`,
+      ).all(personId) as Array<{ payload_json: string }>;
+      for (const row of rows) {
+        try {
+          const payload = JSON.parse(row.payload_json) as { anchor?: unknown };
+          if (typeof payload.anchor !== "string") continue;
+          const anchor = payload.anchor.trim();
+          if (anchor.length > 0 && anchor.length <= 160) return anchor;
+        } catch {
+          // A malformed legacy payload is not usable as recall context.
+        }
+      }
+      return null;
     },
 
     createEvent(input: {
@@ -531,7 +671,9 @@ export function createRepositories(database: IrisDatabase) {
     },
 
     updateMessageDelivery(providerMessageId: string, deliveryStatus: string) {
-      database.prepare("UPDATE messages SET delivery_status = ? WHERE provider_message_id = ?").run(deliveryStatus, providerMessageId);
+      return database
+        .prepare("UPDATE messages SET delivery_status = ? WHERE provider_message_id = ? AND delivery_status <> ?")
+        .run(deliveryStatus, providerMessageId, deliveryStatus).changes === 1;
     },
 
     listEvents(personId: string) {

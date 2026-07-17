@@ -4,7 +4,7 @@ import twilio from "twilio";
 
 import type { TelephonyConfig } from "../config.js";
 import type { IrisRepositories } from "../db/repositories.js";
-import { CallSession, createRealtimeSocket, type RealtimeSocketFactory, type SocketLike } from "./call-session.js";
+import { CallSession, createRealtimeSocket, type CallSessionScheduler, type RealtimeSocketFactory, type SocketLike } from "./call-session.js";
 import type { TranscriptTurn } from "../summary.js";
 import type { BridgeService } from "../bridge.js";
 
@@ -25,6 +25,7 @@ type TwilioClient = {
 type ActiveCall = {
   personId: string;
   streamToken: string;
+  checkInRequester?: TrustedCheckInRequester;
   session?: CallSession;
   terminalStatus?: "completed" | "failed";
   finalizationTimer?: unknown;
@@ -33,10 +34,16 @@ type ActiveCall = {
 export const DEFAULT_STREAM_CLOSE_GRACE_MS = 10_000;
 export const DEFAULT_MEDIA_HANDSHAKE_TIMEOUT_MS = 10_000;
 export type CallSummaryProcessor = { process(input: { callId: string; personId: string; transcript: TranscriptTurn[] }): Promise<void> };
-export type CallScheduler = {
-  setTimeout(callback: () => void, delayMs: number): { unref?: () => void };
-  clearTimeout(handle: unknown): void;
-};
+export type ProviderCallTerminator = (providerCallId: string) => Promise<void>;
+export type TrustedCheckInRequester = { trustedContactId: string; displayName: string };
+
+export class ActiveCallConflictError extends Error {
+  constructor(readonly callId: string) {
+    super("A call is already in progress for this person.");
+    this.name = "ActiveCallConflictError";
+  }
+}
+export type CallScheduler = CallSessionScheduler;
 const systemScheduler: CallScheduler = { setTimeout, clearTimeout };
 
 export class OutboundCallManager {
@@ -52,16 +59,75 @@ export class OutboundCallManager {
     private readonly streamCloseGraceMs = DEFAULT_STREAM_CLOSE_GRACE_MS,
     private readonly bridge?: BridgeService,
     private readonly handshakeTimeoutMs = DEFAULT_MEDIA_HANDSHAKE_TIMEOUT_MS,
+    private readonly terminateProviderCall: ProviderCallTerminator = async (providerCallId) => {
+      await twilio(config.twilioAccountSid, config.twilioAuthToken)
+        .calls(providerCallId)
+        .update({ status: "completed" });
+    },
+    private readonly farewellCloseTimeoutMs = config.farewellCloseTimeoutMs,
   ) {}
 
-  async startCall(personId: string) {
+  /**
+   * A fresh process cannot resume a prior Media Stream because its in-memory
+   * stream token and Realtime session are gone. End known Twilio calls before
+   * clearing their local guard; if Twilio cannot confirm that termination, keep
+   * the row active to avoid creating a duplicate call.
+   *
+   * Calls with no persisted provider SID are also retained: a crash can occur
+   * after Twilio accepts the call but before the SID is written, so releasing
+   * that guard could place a second simultaneous call.
+   */
+  async recoverInterruptedCalls() {
+    const recovered: string[] = [];
+    for (const call of this.repositories.listActiveCalls()) {
+      if (!call.providerCallId) {
+        console.error("Retaining active call without provider SID; Twilio presence is uncertain", { callId: call.id });
+        continue;
+      }
+      try {
+        await this.terminateProviderCall(call.providerCallId);
+      } catch (error) {
+        const status = (error as { status?: unknown }).status;
+        // A missing Call SID is already terminal at Twilio, so local recovery
+        // can proceed. Other failures leave the guard in place for safety.
+        if (status !== 404) {
+          console.error("Unable to terminate interrupted Twilio call", { callId: call.id, error: error instanceof Error ? error.message : "unknown error" });
+          continue;
+        }
+      }
+      if (!this.repositories.interruptActiveCall(call.id)) continue;
+      this.repositories.createEvent({
+        id: randomUUID(),
+        personId: call.personId,
+        callId: call.id,
+        type: "call.interrupted",
+        payload: { transport: "twilio", recovery: "process_restart" },
+      });
+      recovered.push(call.id);
+    }
+    return recovered;
+  }
+
+  async startCall(personId: string, checkInRequester?: TrustedCheckInRequester) {
     const person = this.repositories.getPerson(personId);
     if (!person?.phoneE164) throw new Error("The person does not have a phone number.");
     const callId = randomUUID();
     const streamToken = randomBytes(32).toString("base64url");
-    this.repositories.createCall({ id: callId, personId, status: "attempted" });
+    const requestedByContactId = checkInRequester?.trustedContactId ?? null;
+    const reservation = this.repositories.reserveOutboundCall({ id: callId, personId, requestedByContactId });
+    if (reservation.conflict) throw new ActiveCallConflictError(reservation.call.id);
+    if (!reservation.created) return { callId: reservation.call.id };
     this.repositories.createEvent({ id: randomUUID(), personId, callId, type: "call.attempted", payload: { transport: "twilio" } });
-    this.activeCalls.set(callId, { personId, streamToken });
+    if (checkInRequester) {
+      this.repositories.createEvent({
+        id: randomUUID(),
+        personId,
+        callId,
+        type: "check_in.requested",
+        payload: { requesterDisplayName: checkInRequester.displayName },
+      });
+    }
+    this.activeCalls.set(callId, { personId, streamToken, checkInRequester });
 
     try {
       const call = await this.client.calls.create({
@@ -166,6 +232,7 @@ export class OutboundCallManager {
       ) { clearHandshakeTimer(); socket.close(); return; }
       socket.off("message", awaitStart);
       clearHandshakeTimer();
+      const bridgeContext = this.bridge?.context(active.personId);
       active.session = new CallSession(
         callId,
         active.streamToken,
@@ -176,10 +243,14 @@ export class OutboundCallManager {
           const status = active.terminalStatus ?? streamStatus;
           this.finish(callId, status, status === "completed" ? "call.completed" : "call.failed", transcript);
         },
-        this.bridge ? {
-          context: JSON.stringify(this.bridge.context(active.personId)),
+        this.bridge && bridgeContext ? {
+          context: JSON.stringify({ memories: bridgeContext.memories, contacts: bridgeContext.contacts }),
+          recallAnchor: bridgeContext.recallAnchor,
           dispatch: (contactId, message, approvalId) => this.bridge!.sendApprovedSms({ personId: active.personId, trustedContactId: contactId, message, approvalId }),
         } : undefined,
+        active.checkInRequester?.displayName,
+        this.scheduler,
+        this.farewellCloseTimeoutMs,
       );
       socket.emit("message", raw);
       this.repositories.createEvent({ id: randomUUID(), personId: active.personId, callId, type: "call.stream_started", payload: { transport: "twilio_media_stream" } });
@@ -192,15 +263,33 @@ export class OutboundCallManager {
     if (!active) return;
     this.activeCalls.delete(callId);
     if (active.finalizationTimer) this.scheduler.clearTimeout(active.finalizationTimer);
-    this.repositories.completeCall({ id: callId, status });
+    const shouldProcessSummary = status === "completed" && transcript.length > 0 && this.repositories.hasActiveConsent(active.personId, "summary_retention");
+    // Set processing before detaching the background promise. This leaves no
+    // observable post-hangup window where an eligible call looks unsummarized.
+    this.repositories.completeCall({
+      id: callId,
+      status,
+      summaryState: shouldProcessSummary ? "processing" : status === "failed" ? "unavailable" : "not_requested",
+    });
     this.repositories.createEvent({ id: randomUUID(), personId: active.personId, callId, type: eventType, payload: { transport: "twilio" } });
-    if (status === "completed") {
+    if (shouldProcessSummary && this.summaries) {
       // Summary processing runs after finalization; a rejection must never
       // surface as an unhandled rejection. Observe it without call context that
       // could carry transcript content.
-      void this.summaries
-        ?.process({ callId, personId: active.personId, transcript })
-        .catch((error) => console.error("Call summary processing failed", { callId, error: error instanceof Error ? error.message : "unknown error" }));
+      try {
+        void this.summaries.process({ callId, personId: active.personId, transcript })
+          .catch((error) => {
+            this.repositories.updateCallSummaryState({ id: callId, summaryState: "unavailable" });
+            console.error("Call summary processing failed", { callId, error: error instanceof Error ? error.message : "unknown error" });
+          });
+      } catch (error) {
+        this.repositories.updateCallSummaryState({ id: callId, summaryState: "unavailable" });
+        console.error("Call summary processing failed", { callId, error: error instanceof Error ? error.message : "unknown error" });
+      }
+    } else if (shouldProcessSummary) {
+      // A consented call with a final transcript must not look permanently
+      // unsummarized if the processor was not configured.
+      this.repositories.updateCallSummaryState({ id: callId, summaryState: "unavailable" });
     }
   }
 }

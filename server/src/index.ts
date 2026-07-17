@@ -26,7 +26,7 @@ const app = createApp({
     adminToken: dashboardConfig.adminToken,
     frontendOrigin: dashboardConfig.frontendOrigin,
     demoPersonId: foundationConfig.demoPersonId,
-    startOutboundCall: (personId) => telephony.startCall(personId),
+    startOutboundCall: ({ personId, checkInRequester }) => telephony.startCall(personId, checkInRequester),
     actions,
   },
   telephony,
@@ -35,8 +35,18 @@ const app = createApp({
 
 const server = createServer(app);
 attachMediaServer(server, telephony);
-server.listen(port, () => {
-  console.log(`Iris server listening on http://localhost:${port}`);
+
+async function start() {
+  await telephony.recoverInterruptedCalls();
+  server.listen(port, () => {
+    console.log(`Iris server listening on http://localhost:${port}`);
+  });
+}
+
+void start().catch((error) => {
+  console.error("Iris server startup failed", error instanceof Error ? error.message : "unknown error");
+  closeDatabase(database);
+  process.exitCode = 1;
 });
 
 // Periodically park stale uncertain SMS claims for manual review (never auto-send).

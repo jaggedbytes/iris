@@ -6,6 +6,12 @@ export type AccessScope =
 export type ConsentKind = "summary_retention";
 export type ConsentStatus = "granted" | "revoked";
 export type CallStatus = "attempted" | "answered" | "completed" | "failed";
+export type CallSummaryState = "not_requested" | "processing" | "ready" | "unavailable";
+export type MemoryCategory =
+  | "durable_fact"
+  | "named_person"
+  | "unresolved_topic"
+  | "recall_anchor";
 export type ActionStatus =
   | "pending_approval"
   | "approved"
@@ -48,6 +54,8 @@ export type CallRecord = {
   startedAt: string;
   endedAt: string | null;
   summaryJson: string | null;
+  summaryState: CallSummaryState;
+  requestedByContactId: string | null;
 };
 
 export type TimelineEvent = {

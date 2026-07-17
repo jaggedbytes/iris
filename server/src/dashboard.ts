@@ -3,8 +3,9 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypt
 import { Router, type Request, type Response } from "express";
 
 import type { IrisRepositories } from "./db/repositories.js";
-import type { AccessScope } from "./db/types.js";
+import type { AccessScope, CallRecord, TimelineEvent } from "./db/types.js";
 import type { ActionDispatcher } from "./actions.js";
+import { ActiveCallConflictError, type TrustedCheckInRequester } from "./telephony/outbound.js";
 
 const ALL_SCOPES: AccessScope[] = [
   "view_summaries",
@@ -26,7 +27,7 @@ export type DashboardContext = {
   adminToken: string;
   frontendOrigin: string;
   demoPersonId: string;
-  startOutboundCall?: (personId: string) => Promise<{ callId: string }>;
+  startOutboundCall?: (input: { personId: string; checkInRequester?: TrustedCheckInRequester }) => Promise<{ callId: string }>;
   actions?: ActionDispatcher;
 };
 
@@ -107,6 +108,64 @@ function requestedScopes(value: unknown) {
   return new Set(scopes).size === scopes.length ? scopes : null;
 }
 
+function stringField(value: unknown, maxLength = 160) {
+  return typeof value === "string" && value.length <= maxLength ? value : undefined;
+}
+
+function objectPayload(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+/**
+ * Events are intentionally projected, not passed through. Event payloads are
+ * durable implementation data; the timeline is a human-facing privacy
+ * boundary and must never inherit new fields by accident.
+ */
+function timelineEvent(event: TimelineEvent) {
+  const source = objectPayload(event.payload);
+  let payload: Record<string, string> = {};
+
+  if (event.type === "check_in.requested") {
+    const requesterDisplayName = stringField(source.requesterDisplayName);
+    payload = requesterDisplayName ? { requesterDisplayName } : {};
+  } else if (event.type === "bridge.sms_sent") {
+    const contactName = stringField(source.contactName);
+    payload = contactName ? { contactName } : {};
+  } else if (event.type === "sms.delivery_updated") {
+    const status = stringField(source.status, 48);
+    payload = status ? { status } : {};
+  }
+
+  return { id: event.id, type: event.type, payload, occurredAt: event.occurredAt };
+}
+
+function summaryRecap(summaryJson: string | null) {
+  if (!summaryJson) return null;
+  try {
+    const summary = JSON.parse(summaryJson) as unknown;
+    if (!summary || typeof summary !== "object" || Array.isArray(summary)) return null;
+    const recap = stringField((summary as Record<string, unknown>).recap, 500)?.trim();
+    return recap || null;
+  } catch {
+    return null;
+  }
+}
+
+function callOverview(call: CallRecord) {
+  return {
+    id: call.id,
+    status: call.status,
+    startedAt: call.startedAt,
+    // summaryJson contains memory-extraction fields which are intentionally
+    // unavailable to dashboard consumers. The recap is the sole call-summary
+    // field exposed here; recall anchors never cross this boundary.
+    summaryRecap: summaryRecap(call.summaryJson),
+    summaryState: call.summaryState,
+  };
+}
+
 export function createDashboardRouter(context: DashboardContext) {
   const router = Router();
 
@@ -148,18 +207,35 @@ export function createDashboardRouter(context: DashboardContext) {
       return;
     }
 
+    const activeCall = hasScope(principal, "request_check_in")
+      ? context.repositories.findActiveCall(personId)
+      : null;
+
     response.json({
       // The phone number is operator-only PII; trusted contacts receive a
       // scope-appropriate projection regardless of their granted view scopes.
       person:
         principal.role === "admin"
-          ? person
-          : { id: person.id, displayName: person.displayName, phoneE164: null },
+          ? {
+              id: person.id,
+              displayName: person.displayName,
+              phoneE164: person.phoneE164,
+              phoneNumberStatus: person.phoneE164 ? "configured" : "not_configured",
+            }
+          : {
+              id: person.id,
+              displayName: person.displayName,
+              phoneE164: null,
+              phoneNumberStatus: "private",
+            },
       calls: hasScope(principal, "view_summaries")
-        ? context.repositories.listCalls(personId)
+        ? context.repositories.listCalls(personId).map(callOverview)
         : [],
+      activeCall: activeCall
+        ? { id: activeCall.id, status: activeCall.status, startedAt: activeCall.startedAt }
+        : null,
       events: hasScope(principal, "view_events")
-        ? context.repositories.listEvents(personId)
+        ? context.repositories.listEvents(personId).map(timelineEvent)
         : [],
       contacts:
         principal.role === "admin"
@@ -167,7 +243,15 @@ export function createDashboardRouter(context: DashboardContext) {
           : [],
       actions:
         principal.role === "admin"
-          ? context.repositories.listActionRequests(personId)
+          ? context.repositories.listActionRequests(personId).map((action) => ({
+              id: action.id,
+              feature: action.feature,
+              actionType: action.actionType,
+              status: action.status,
+              createdAt: action.createdAt,
+              updatedAt: action.updatedAt,
+              dispatchState: context.repositories.getActionDispatch(action.id)?.state ?? null,
+            }))
           : [],
       permissions:
         principal.role === "admin" ? ALL_SCOPES : principal.scopes,
@@ -243,9 +327,22 @@ export function createDashboardRouter(context: DashboardContext) {
     }
 
     try {
-      const call = await context.startOutboundCall(request.params.personId);
+      let checkInRequester: TrustedCheckInRequester | undefined;
+      if (principal.role === "trusted_contact") {
+        const contact = context.repositories.getTrustedContact(principal.trustedContactId);
+        if (!contact || contact.personId !== personId) {
+          response.status(403).json({ error: "Trusted contact is no longer available for this person." });
+          return;
+        }
+        checkInRequester = { trustedContactId: contact.id, displayName: contact.displayName };
+      }
+      const call = await context.startOutboundCall({ personId: request.params.personId, checkInRequester });
       response.status(202).json({ ...call, status: "attempted" });
     } catch (error) {
+      if (error instanceof ActiveCallConflictError) {
+        response.status(409).json({ error: "A call is already in progress for this person." });
+        return;
+      }
       console.error("Unable to initiate outbound call", error);
       response.status(502).json({ error: "Iris could not place the call." });
     }

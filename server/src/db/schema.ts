@@ -160,4 +160,48 @@ export const migrations = [
       ALTER TABLE action_dispatch_outbox_next RENAME TO action_dispatch_outbox;
     `,
   },
+  {
+    id: "005_call_summary_state",
+    sql: `
+      ALTER TABLE calls ADD COLUMN summary_state TEXT NOT NULL
+        DEFAULT 'not_requested'
+        CHECK(summary_state IN ('not_requested', 'processing', 'ready', 'unavailable'));
+      UPDATE calls
+         SET summary_state = 'ready'
+       WHERE summary_json IS NOT NULL;
+    `,
+  },
+  {
+    id: "006_call_requested_by_contact",
+    sql: `
+      ALTER TABLE calls ADD COLUMN requested_by_contact_id TEXT
+        REFERENCES trusted_contacts(id) ON DELETE SET NULL;
+    `,
+  },
+  {
+    id: "007_memory_categories",
+    sql: `
+      CREATE TABLE memories_next (
+        id TEXT PRIMARY KEY,
+        person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+        source_call_id TEXT REFERENCES calls(id) ON DELETE SET NULL,
+        category TEXT NOT NULL CHECK(category IN ('durable_fact', 'named_person', 'unresolved_topic', 'recall_anchor')),
+        payload_json TEXT NOT NULL,
+        confidence REAL,
+        expires_at TEXT,
+        created_at TEXT NOT NULL
+      );
+      -- Pre-constraint rows could use arbitrary category strings. Only the
+      -- allowlisted Bridge categories are copied; unsupported legacy categories
+      -- are dropped so the CHECK migration cannot abort mid-upgrade.
+      INSERT INTO memories_next (id, person_id, source_call_id, category, payload_json, confidence, expires_at, created_at)
+        SELECT id, person_id, source_call_id, category, payload_json, confidence, expires_at, created_at
+        FROM memories
+        WHERE category IN ('durable_fact', 'named_person', 'unresolved_topic', 'recall_anchor');
+      DROP TABLE memories;
+      ALTER TABLE memories_next RENAME TO memories;
+      CREATE INDEX idx_memories_person_created ON memories(person_id, created_at DESC);
+      CREATE INDEX idx_memories_person_category_created ON memories(person_id, category, created_at DESC);
+    `,
+  },
 ] as const;

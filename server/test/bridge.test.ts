@@ -9,6 +9,7 @@ test("Bridge recalls scoped memory and sends only to the selected trusted contac
   const repositories = createRepositories(database);
   repositories.createPerson({ id: "person-a", displayName: "Avery" });
   repositories.createCall({ id: "call-a", personId: "person-a", status: "completed" });
+  repositories.recordConsent({ id: "consent-a", personId: "person-a", kind: "summary_retention", status: "granted", source: "test" });
   repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Robin", relationship: "daughter", phoneE164: "+15550002222" });
   repositories.createMemory({ id: "memory-a", personId: "person-a", sourceCallId: "call-a", category: "durable_fact", payload: { fact: "Avery enjoys gardening." } });
   let sent = 0;
@@ -18,12 +19,67 @@ test("Bridge recalls scoped memory and sends only to the selected trusted contac
     const context = bridge.context("person-a");
     assert.deepEqual(context.contacts.map((contact) => contact.id), ["contact-a"]);
     assert.deepEqual(context.memories, [{ category: "durable_fact", value: { fact: "Avery enjoys gardening." } }]);
+    assert.equal(context.recallAnchor, null);
     assert.equal((await bridge.sendApprovedSms({ personId: "person-a", trustedContactId: "contact-a", message: "Could you call me about the garden?", approvalId: "tool-call-1" })).ok, true);
     assert.equal((await bridge.sendApprovedSms({ personId: "person-a", trustedContactId: "contact-a", message: "Could you call me about the garden?", approvalId: "tool-call-1" })).ok, true);
     assert.equal(sent, 1);
     assert.equal(repositories.listEvents("person-a").some((event) => event.type === "bridge.sms_sent"), true);
     assert.equal((await bridge.sendApprovedSms({ personId: "person-a", trustedContactId: "other", message: "no", approvalId: "tool-call-2" })).ok, false);
     assert.equal(sent, 1);
+  } finally { closeDatabase(database); }
+});
+
+test("Bridge exposes only the latest valid recall anchor while consent is active", () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery" });
+  repositories.createCall({ id: "call-a", personId: "person-a", status: "completed" });
+  repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Robin", relationship: "daughter", phoneE164: "+15550002222" });
+  repositories.recordConsent({ id: "consent-a", personId: "person-a", kind: "summary_retention", status: "granted", source: "test" });
+  repositories.createMemory({ id: "memory-fact", personId: "person-a", sourceCallId: "call-a", category: "durable_fact", payload: { fact: "Avery enjoys gardening." } });
+  repositories.createMemory({ id: "memory-anchor-old", personId: "person-a", sourceCallId: "call-a", category: "recall_anchor", payload: { anchor: "your roses" } });
+  repositories.createMemory({ id: "memory-anchor-new", personId: "person-a", sourceCallId: "call-a", category: "recall_anchor", payload: { anchor: "your garden plans" } });
+  const dispatcher = new ActionDispatcher(repositories, { twilioAccountSid: "AC", twilioAuthToken: "token", twilioPhoneNumber: "+15550001111", publicBaseUrl: "https://iris.test", openaiApiKey: "key", safetyIdentifier: "safe" });
+  const bridge = new BridgeService(repositories, dispatcher);
+  try {
+    const active = bridge.context("person-a");
+    assert.equal(active.recallAnchor, "your garden plans");
+    assert.deepEqual(active.memories, [{ category: "durable_fact", value: { fact: "Avery enjoys gardening." } }]);
+
+    repositories.recordConsent({ id: "consent-revoked", personId: "person-a", kind: "summary_retention", status: "revoked", source: "test" });
+    const revoked = bridge.context("person-a");
+    assert.equal(revoked.recallAnchor, null);
+    assert.deepEqual(revoked.memories, []);
+    assert.deepEqual(revoked.contacts.map((contact) => contact.id), ["contact-a"]);
+  } finally { closeDatabase(database); }
+});
+
+test("Bridge memory context keeps durable facts when many recall anchors exist", () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery" });
+  repositories.createCall({ id: "call-a", personId: "person-a", status: "completed" });
+  repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Robin", relationship: "daughter", phoneE164: "+15550002222" });
+  repositories.recordConsent({ id: "consent-a", personId: "person-a", kind: "summary_retention", status: "granted", source: "test" });
+  repositories.createMemory({ id: "memory-fact", personId: "person-a", sourceCallId: "call-a", category: "durable_fact", payload: { fact: "Avery enjoys gardening." } });
+  for (let index = 0; index < 25; index += 1) {
+    repositories.createMemory({
+      id: `memory-anchor-${index}`,
+      personId: "person-a",
+      sourceCallId: "call-a",
+      category: "recall_anchor",
+      payload: { anchor: `anchor ${index}` },
+    });
+  }
+  const bridge = new BridgeService(
+    repositories,
+    new ActionDispatcher(repositories, { twilioAccountSid: "AC", twilioAuthToken: "token", twilioPhoneNumber: "+15550001111", publicBaseUrl: "https://iris.test", openaiApiKey: "key", safetyIdentifier: "safe" }),
+  );
+  try {
+    const context = bridge.context("person-a");
+    assert.deepEqual(context.memories, [{ category: "durable_fact", value: { fact: "Avery enjoys gardening." } }]);
+    assert.equal(context.recallAnchor, "anchor 24");
+    assert.equal(repositories.listMemories("person-a").some((memory) => memory.category === "recall_anchor"), false);
   } finally { closeDatabase(database); }
 });
 

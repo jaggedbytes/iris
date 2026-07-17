@@ -17,7 +17,10 @@ export type TelephonyConfig = {
   publicBaseUrl: string;
   openaiApiKey: string;
   safetyIdentifier: string;
+  farewellCloseTimeoutMs: number;
 };
+
+export const DEFAULT_FAREWELL_CLOSE_TIMEOUT_MS = 8_000;
 
 /**
  * Configuration used by the durable foundation. Keeping this separate from
@@ -97,6 +100,18 @@ export function loadTelephonyConfig(
     throw new Error("IRIS_PUBLIC_BASE_URL must be a publicly reachable https URL.");
   }
 
+  const configuredFarewellCloseTimeoutMs = environment.IRIS_FAREWELL_CLOSE_TIMEOUT_MS?.trim();
+  const farewellCloseTimeoutMs = configuredFarewellCloseTimeoutMs
+    ? Number(configuredFarewellCloseTimeoutMs)
+    : DEFAULT_FAREWELL_CLOSE_TIMEOUT_MS;
+  if (
+    !Number.isInteger(farewellCloseTimeoutMs) ||
+    farewellCloseTimeoutMs < 1_000 ||
+    farewellCloseTimeoutMs > 30_000
+  ) {
+    throw new Error("IRIS_FAREWELL_CLOSE_TIMEOUT_MS must be an integer between 1000 and 30000 milliseconds.");
+  }
+
   return {
     twilioAccountSid: environment.TWILIO_ACCOUNT_SID!.trim(),
     twilioAuthToken: environment.TWILIO_AUTH_TOKEN!.trim(),
@@ -105,5 +120,6 @@ export function loadTelephonyConfig(
     openaiApiKey: environment.OPENAI_API_KEY!.trim(),
     safetyIdentifier:
       environment.IRIS_SAFETY_IDENTIFIER?.trim() || "iris-local-prototype",
+    farewellCloseTimeoutMs,
   };
 }

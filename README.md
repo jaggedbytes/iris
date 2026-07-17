@@ -1,13 +1,25 @@
 # Iris
 
-Iris is a phone-first AI companion for older adults. This first milestone tests the most important product question: can an Iris conversation feel warm, calm, and human?
+Iris is a phone-first AI companion for older adults. The current demo proves the Bridge path: a family member or operator can ask Iris to check in by phone, Iris can recall consented conversation continuity, and an explicitly approved message can reach a trusted contact.
 
-## Voice prototype
+## Phone-first Bridge demo
 
-The prototype will let a person speak with Iris in the browser before we introduce phone transport. It is intentionally split into two independent applications:
+The dashboard starts an outbound Twilio call. Twilio opens a bidirectional Media Stream to the Iris server, which relays G.711 μ-law audio to OpenAI Realtime without application-side transcoding. Raw audio is never persisted. Transcript text is held only in memory for consent-gated summary extraction after the call, then discarded—it is never written to SQLite. Conversation-derived durable data is limited to a consented structured summary and user-stated memory; required operational audit and outbox records may also be retained.
 
-- `server/` — Express + TypeScript. It will mint a short-lived OpenAI Realtime client secret and own persona configuration.
-- `frontend/` — Vite + React + TypeScript. It will capture microphone input, establish a WebRTC peer connection, and play Iris’s returned audio.
+```text
+Operator or trusted contact dashboard
+  → Iris server → Twilio outbound call → person’s phone
+  ← dashboard timeline and consented call summary
+```
+
+The timeline is a privacy boundary: it renders only allowlisted, human-readable event data. It never exposes message bodies, phone numbers, provider identifiers, raw transcripts, or audit metadata.
+
+## Browser voice prototype
+
+The browser loop remains from the earlier persona experiment. It is intentionally separate from the phone-first demo:
+
+- `server/` — Express + TypeScript. It mints a short-lived OpenAI Realtime client secret and owns persona configuration.
+- `frontend/` — Vite + React + TypeScript. It captures microphone input, establishes a WebRTC peer connection, and plays Iris’s returned audio.
 
 The browser will never receive `OPENAI_API_KEY`. The intended connection flow is:
 
@@ -16,9 +28,9 @@ Browser → Iris server (short-lived token) → OpenAI Realtime
 Browser ─────────────── WebRTC audio + events ─────────────→ OpenAI Realtime
 ```
 
-The browser WebRTC voice loop and token endpoint are implemented. The user’s microphone audio and Iris’s returned audio are live-only; this prototype does not record or persist them.
+The browser WebRTC voice loop and token endpoint are still implemented as the earlier persona experiment. It is not part of the phone-first Bridge demo. The user’s microphone audio and Iris’s returned audio are live-only.
 
-## Planned local development
+## Local development
 
 Prerequisites: Node.js 22+ and an OpenAI API key.
 
@@ -40,11 +52,27 @@ cd frontend && npm run dev
 
 Open the frontend and enter `IRIS_ADMIN_TOKEN` to use the operator view. Operators can create an expiring, revocable trusted-contact link.
 
-## Outbound phone smoke test
+## Phone-first Bridge smoke test
 
-Set the Twilio and `IRIS_PUBLIC_BASE_URL` values in `server/.env`. The public URL must terminate at this server and be reachable by Twilio over HTTPS/WSS (a tunnel is fine for local development). Ensure the demo person's `phone_e164` is a phone you are authorized to call. Start the server and frontend, sign in as the operator, press **Call now**, answer the phone, and speak with Iris.
+Set the Twilio and `IRIS_PUBLIC_BASE_URL` values in `server/.env`. The public URL must terminate at this server and be reachable by Twilio over HTTPS/WSS (a tunnel is fine for local development).
 
-The phone bridge relays Twilio's 8 kHz G.711 μ-law Media Stream directly to and from OpenAI Realtime—there is no application-side transcoding. Calls create lifecycle events (attempted, answered, stream started, completed, or failed). Completed calls may pass through a consent-gated summary pipeline that persists a concise recap and durable memories only when summary-retention consent is active. Audio and raw transcript data remain in the live process only and are discarded when the stream disconnects.
+- `IRIS_DEMO_PHONE_E164` is the authorized destination phone that receives Iris’s call.
+- `TWILIO_PHONE_NUMBER` is Iris’s Twilio sender/from-number. It is not the demo destination.
+- `IRIS_FAREWELL_CLOSE_TIMEOUT_MS` is optional and defaults to `8000`. It bounds only a missing completion event after a tool-driven goodbye; it is not an idle-call timeout.
+
+Set the destination before running `npm run db:seed`. Start the server and frontend, sign in as the operator, press **Call now**, answer the phone, and speak with Iris.
+
+The seed grants summary-retention consent for the demo person. To run the full demo:
+
+1. Start the server and frontend, sign in as the operator, and press **Call now**. Answer the authorized demo phone; Iris should be audible and the dashboard should move from **Calling…** to **Call in progress**.
+2. In the first call, state one durable, non-sensitive fact—for example, “I enjoy gardening.” If demonstrating Bridge, ask Iris to send an approved SMS to a trusted contact.
+3. Say a clear goodbye such as “Goodbye, Iris.” Iris should offer a brief farewell and end the call. The dashboard polls while the summary is processing, then shows only a recap and safe timeline cards.
+4. Place a second call. With active consent and a successful first extraction, Iris may offer one gentle gardening-related opener. This is an invitation, not a claim of certainty; do not expect it if the first call had insufficient signal or ASR captured the fact poorly.
+5. In a separate short call, hang up the handset normally without saying goodbye. The existing Twilio disconnect path still finalizes the call; `end_call` is additive, not required for every demo.
+6. Create a trusted-contact link with `request_check_in`, open it in a separate session, and select **Ask Iris to check in**. The timeline should attribute the request by the contact’s display name.
+7. Check that no recap card or timeline payload exposes a recall anchor, raw transcript, SMS body, phone number, or provider identifier.
+
+Twilio accepting an SMS is not proof of delivery. US long-code delivery may require A2P 10DLC brand/campaign registration, which is external to Iris. ASR can also misrecognize names or short utterances, so use an ordinary durable fact for the recall demonstration. If delivery is confirmed, do not retry. If delivery remains uncertain, an operator may use the recovery card after accepting that **Retry SMS** can create a duplicate message by design.
 
 ## Repository layout
 
@@ -61,6 +89,6 @@ iris/
 └── README.md
 ```
 
-## Privacy boundary for this milestone
+## Privacy boundary
 
-This browser experiment should not record or persist microphone audio, call transcripts, or conversations. It exists solely to evaluate conversation quality. Later persistence must be limited to consented structured summaries.
+Raw microphone and phone audio, raw transcripts, message bodies, phone numbers, and provider identifiers are never rendered in the dashboard timeline. Phone transcripts are never persisted; they remain in memory through consent-gated summary extraction after the call, then are discarded. Conversation-derived durable storage is limited to consented structured summaries, user-stated facts, named people/context, unresolved topics, and recall anchors; the dashboard receives only recap text. Required operational audit and outbox records may also be retained.

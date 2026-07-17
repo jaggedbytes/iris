@@ -21,7 +21,11 @@ test("SMS dispatch requires approval and is idempotent", async () => {
     assert.equal(sends, 1);
     assert.equal(repositories.getActionRequest("action-a")?.status, "dispatched");
     dispatcher.recordDelivery("action-a", "SM123", "delivered");
-    assert.deepEqual(repositories.listEvents("person-a").map((event) => event.type).sort(), ["action.approved", "action.dispatched"].sort());
+    dispatcher.recordDelivery("action-a", "SM123", "delivered");
+    assert.deepEqual(repositories.listEvents("person-a").map((event) => event.type).sort(), ["action.approved", "action.dispatched", "sms.delivery_updated"].sort());
+    assert.equal(repositories.listEvents("person-a").filter((event) => event.type === "sms.delivery_updated").length, 1);
+    const deliveryEvent = repositories.listEvents("person-a").find((event) => event.type === "sms.delivery_updated");
+    assert.deepEqual(deliveryEvent?.payload, { channel: "sms", status: "delivered" });
   } finally { closeDatabase(database); }
 });
 
@@ -226,5 +230,7 @@ test("an early delivery callback makes dispatch finalization idempotent", async 
     assert.equal(repositories.getActionRequest("action-race")?.status, "dispatched");
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM messages WHERE provider_message_id = ?").get("SMrace")?.count, 1);
     assert.equal(repositories.listEvents("person-a").some((event) => event.type === "action.dispatch_uncertain"), false);
+    assert.equal(repositories.listEvents("person-a").filter((event) => event.type === "sms.delivery_updated").length, 1);
+    assert.deepEqual(repositories.listEvents("person-a").find((event) => event.type === "sms.delivery_updated")?.payload, { channel: "sms", status: "sent" });
   } finally { closeDatabase(database); }
 });
