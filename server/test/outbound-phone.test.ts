@@ -454,6 +454,13 @@ test("end_call waits for the farewell response, then finalizes through the exist
     realtime.emit("message", Buffer.from(JSON.stringify({ type: "response.output_audio.done", response_id: "response-farewell" })));
     assert.equal(socket.closed, false);
     realtime.emit("message", Buffer.from(JSON.stringify({ type: "response.done", response: { id: "response-farewell", output: [] } })));
+    // OpenAI completion is not enough: wait for Twilio to acknowledge playback.
+    assert.equal(socket.closed, false);
+    const mark = socket.sent
+      .map((message) => JSON.parse(message) as { event?: string; mark?: { name?: string } })
+      .find((message) => message.event === "mark");
+    assert.deepEqual(mark, { event: "mark", streamSid: "MZ123", mark: { name: "iris-farewell" } });
+    socket.emit("message", Buffer.from(JSON.stringify({ event: "mark", streamSid: "MZ123", mark: { name: "iris-farewell" } })));
 
     assert.equal(socket.closed, true);
     assert.equal(repositories.listCalls("person-a")[0].status, "completed");

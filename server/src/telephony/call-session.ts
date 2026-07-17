@@ -21,6 +21,7 @@ export type CallSessionScheduler = {
   clearTimeout(handle: unknown): void;
 };
 const systemScheduler: CallSessionScheduler = { setTimeout, clearTimeout };
+const FAREWELL_PLAYBACK_MARK = "iris-farewell";
 
 export function friendlyRequesterToken(displayName: string) {
   return displayName.trim().split(/\s+/).find(Boolean) ?? null;
@@ -65,6 +66,8 @@ type PendingFarewell = {
   responseDone: boolean;
   audioStarted: boolean;
   audioDone: boolean;
+  markSent: boolean;
+  playbackAcked: boolean;
   timer: unknown | null;
 };
 
@@ -109,7 +112,7 @@ export class CallSession {
   }
 
   private handleTwilioMessage(data: Buffer | string) {
-    let message: { event?: string; start?: TwilioStart; media?: { payload?: string } };
+    let message: { event?: string; start?: TwilioStart; media?: { payload?: string }; mark?: { name?: string } };
     try {
       message = JSON.parse(data.toString()) as typeof message;
     } catch {
@@ -121,6 +124,9 @@ export class CallSession {
       this.start(message.start);
     } else if (message.event === "media" && message.media?.payload) {
       this.forwardInput(message.media.payload);
+    } else if (message.event === "mark" && message.mark?.name === FAREWELL_PLAYBACK_MARK) {
+      // Twilio echoes marks after the preceding outbound media has played.
+      this.noteFarewellPlaybackAck();
     } else if (message.event === "stop") {
       this.close("completed");
     }
@@ -314,6 +320,8 @@ export class CallSession {
         responseDone: false,
         audioStarted: false,
         audioDone: false,
+        markSent: false,
+        playbackAcked: false,
         timer: null,
       };
       this.sendToolOutput(callId, { ok: true });
@@ -376,12 +384,33 @@ export class CallSession {
   private noteFarewellAudioDone(responseId: string | undefined) {
     if (!this.pendingFarewell || !this.matchesFarewell(responseId)) return;
     this.pendingFarewell.audioDone = true;
+    this.sendFarewellPlaybackMark();
+    this.finishFarewellIfReady();
+  }
+
+  private sendFarewellPlaybackMark() {
+    if (!this.pendingFarewell || this.pendingFarewell.markSent || !this.streamSid) return;
+    this.pendingFarewell.markSent = true;
+    this.twilioSocket.send(JSON.stringify({
+      event: "mark",
+      streamSid: this.streamSid,
+      mark: { name: FAREWELL_PLAYBACK_MARK },
+    }));
+  }
+
+  private noteFarewellPlaybackAck() {
+    if (!this.pendingFarewell?.markSent) return;
+    this.pendingFarewell.playbackAcked = true;
     this.finishFarewellIfReady();
   }
 
   private finishFarewellIfReady() {
     if (!this.pendingFarewell?.responseDone) return;
-    if (this.pendingFarewell.audioStarted && !this.pendingFarewell.audioDone) return;
+    // OpenAI audio-done only means generation finished. Wait for Twilio's mark
+    // ack so the buffered farewell is not cut off mid-playback.
+    if (this.pendingFarewell.audioStarted) {
+      if (!this.pendingFarewell.audioDone || !this.pendingFarewell.playbackAcked) return;
+    }
     this.close("completed");
   }
 
