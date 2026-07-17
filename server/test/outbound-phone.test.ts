@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
 
+import { ActionDispatcher } from "../src/actions.js";
+import { BridgeService } from "../src/bridge.js";
 import { createDatabase, createRepositories, closeDatabase } from "../src/db/index.js";
 import { ActiveCallConflictError, OutboundCallManager, type CallScheduler } from "../src/telephony/outbound.js";
 import { friendlyRequesterToken, type SocketLike } from "../src/telephony/call-session.js";
@@ -184,12 +186,20 @@ test("family-requested calls retain the display name and use a friendly spoken t
   const repositories = createRepositories(database);
   repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
   repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Mary Jane", relationship: "daughter", phoneE164: "+15550002222" });
+  repositories.recordConsent({ id: "consent-a", personId: "person-a", kind: "summary_retention", status: "granted", source: "test" });
+  repositories.createCall({ id: "call-memory", personId: "person-a", status: "completed" });
+  repositories.createMemory({ id: "memory-anchor", personId: "person-a", sourceCallId: "call-memory", category: "recall_anchor", payload: { anchor: "your garden plans" } });
   const realtime = new FakeSocket();
+  const bridge = new BridgeService(repositories, new ActionDispatcher(repositories, telephonyConfig));
   const manager = new OutboundCallManager(
     repositories,
     telephonyConfig,
     { calls: { create: async () => ({ sid: "CA123" }) } },
     () => realtime,
+    undefined,
+    undefined,
+    undefined,
+    bridge,
   );
   try {
     assert.equal(friendlyRequesterToken("  Mary Jane  "), "Mary");
@@ -207,6 +217,94 @@ test("family-requested calls retain the display name and use a friendly spoken t
     const sessionUpdate = JSON.parse(realtime.sent[0]) as { session: { instructions: string } };
     assert.match(sessionUpdate.session.instructions, /Mary Jane/);
     assert.match(sessionUpdate.session.instructions, /"Mary" asked you to check in/);
+    assert.match(sessionUpdate.session.instructions, /your garden plans/);
+    assert.ok(
+      sessionUpdate.session.instructions.indexOf('"Mary" asked you to check in') <
+      sessionUpdate.session.instructions.indexOf("exactly one gentle invitation"),
+    );
+    assert.equal(sessionUpdate.session.instructions.includes('"recall_anchor"'), false);
+  } finally { closeDatabase(database); }
+});
+
+test("a normal Bridge call gets one authoritative recall opener only when an anchor exists", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  repositories.recordConsent({ id: "consent-a", personId: "person-a", kind: "summary_retention", status: "granted", source: "test" });
+  repositories.createCall({ id: "call-memory", personId: "person-a", status: "completed" });
+  repositories.createMemory({ id: "memory-anchor", personId: "person-a", sourceCallId: "call-memory", category: "recall_anchor", payload: { anchor: "your garden plans" } });
+  const realtime = new FakeSocket();
+  const bridge = new BridgeService(repositories, new ActionDispatcher(repositories, telephonyConfig));
+  const manager = new OutboundCallManager(
+    repositories, telephonyConfig, { calls: { create: async () => ({ sid: "CA123" }) } }, () => realtime,
+    undefined, undefined, undefined, bridge,
+  );
+  try {
+    const { callId } = await manager.startCall("person-a");
+    const token = /streamToken" value="([^"]+)"/.exec(manager.twiml(callId) ?? "")?.[1];
+    assert.ok(token);
+    const socket = new FakeSocket();
+    manager.acceptMediaSocket(socket);
+    socket.emit("message", Buffer.from(JSON.stringify({ event: "start", start: { streamSid: "MZ123", customParameters: { callId, streamToken: token } } })));
+    realtime.emit("open");
+    const sessionUpdate = JSON.parse(realtime.sent[0]) as { session: { instructions: string } };
+    assert.match(sessionUpdate.session.instructions, /your garden plans/);
+    assert.match(sessionUpdate.session.instructions, /exactly one gentle invitation/);
+    assert.equal(sessionUpdate.session.instructions.includes("Family-requested check-in metadata"), false);
+  } finally { closeDatabase(database); }
+});
+
+test("an active-consent Bridge call without an anchor does not volunteer prior details", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  repositories.recordConsent({ id: "consent-a", personId: "person-a", kind: "summary_retention", status: "granted", source: "test" });
+  const realtime = new FakeSocket();
+  const bridge = new BridgeService(repositories, new ActionDispatcher(repositories, telephonyConfig));
+  const manager = new OutboundCallManager(
+    repositories, telephonyConfig, { calls: { create: async () => ({ sid: "CA123" }) } }, () => realtime,
+    undefined, undefined, undefined, bridge,
+  );
+  try {
+    const { callId } = await manager.startCall("person-a");
+    const token = /streamToken" value="([^"]+)"/.exec(manager.twiml(callId) ?? "")?.[1];
+    assert.ok(token);
+    const socket = new FakeSocket();
+    manager.acceptMediaSocket(socket);
+    socket.emit("message", Buffer.from(JSON.stringify({ event: "start", start: { streamSid: "MZ123", customParameters: { callId, streamToken: token } } })));
+    realtime.emit("open");
+    const sessionUpdate = JSON.parse(realtime.sent[0]) as { session: { instructions: string } };
+    assert.match(sessionUpdate.session.instructions, /Do not volunteer prior conversation details at the opening/);
+    assert.equal(sessionUpdate.session.instructions.includes("offer exactly one gentle invitation"), false);
+  } finally { closeDatabase(database); }
+});
+
+test("a revoked-consent Bridge call does not volunteer a previously stored anchor", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  repositories.recordConsent({ id: "consent-a", personId: "person-a", kind: "summary_retention", status: "granted", source: "test" });
+  repositories.createCall({ id: "call-memory", personId: "person-a", status: "completed" });
+  repositories.createMemory({ id: "memory-anchor", personId: "person-a", sourceCallId: "call-memory", category: "recall_anchor", payload: { anchor: "your garden plans" } });
+  repositories.recordConsent({ id: "consent-revoked", personId: "person-a", kind: "summary_retention", status: "revoked", source: "test" });
+  const realtime = new FakeSocket();
+  const bridge = new BridgeService(repositories, new ActionDispatcher(repositories, telephonyConfig));
+  const manager = new OutboundCallManager(
+    repositories, telephonyConfig, { calls: { create: async () => ({ sid: "CA123" }) } }, () => realtime,
+    undefined, undefined, undefined, bridge,
+  );
+  try {
+    const { callId } = await manager.startCall("person-a");
+    const token = /streamToken" value="([^"]+)"/.exec(manager.twiml(callId) ?? "")?.[1];
+    assert.ok(token);
+    const socket = new FakeSocket();
+    manager.acceptMediaSocket(socket);
+    socket.emit("message", Buffer.from(JSON.stringify({ event: "start", start: { streamSid: "MZ123", customParameters: { callId, streamToken: token } } })));
+    realtime.emit("open");
+    const sessionUpdate = JSON.parse(realtime.sent[0]) as { session: { instructions: string } };
+    assert.match(sessionUpdate.session.instructions, /Do not volunteer prior conversation details at the opening/);
+    assert.equal(sessionUpdate.session.instructions.includes("offer exactly one gentle invitation"), false);
+    assert.equal(sessionUpdate.session.instructions.includes("your garden plans"), false);
   } finally { closeDatabase(database); }
 });
 

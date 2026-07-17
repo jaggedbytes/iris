@@ -482,6 +482,25 @@ export function createRepositories(database: IrisDatabase) {
       ).all(personId, limit) as Array<{ category: string; payload_json: string }>;
     },
 
+    findLatestRecallAnchor(personId: string) {
+      const rows = database.prepare(
+        `SELECT payload_json FROM memories
+         WHERE person_id = ? AND category = 'recall_anchor'
+         ORDER BY created_at DESC, rowid DESC`,
+      ).all(personId) as Array<{ payload_json: string }>;
+      for (const row of rows) {
+        try {
+          const payload = JSON.parse(row.payload_json) as { anchor?: unknown };
+          if (typeof payload.anchor !== "string") continue;
+          const anchor = payload.anchor.trim();
+          if (anchor.length > 0 && anchor.length <= 160) return anchor;
+        } catch {
+          // A malformed legacy payload is not usable as recall context.
+        }
+      }
+      return null;
+    },
+
     createEvent(input: {
       id: string;
       personId: string;

@@ -234,6 +234,7 @@ export class OutboundCallManager {
       ) { clearHandshakeTimer(); socket.close(); return; }
       socket.off("message", awaitStart);
       clearHandshakeTimer();
+      const bridgeContext = this.bridge?.context(active.personId);
       active.session = new CallSession(
         callId,
         active.streamToken,
@@ -244,8 +245,9 @@ export class OutboundCallManager {
           const status = active.terminalStatus ?? streamStatus;
           this.finish(callId, status, status === "completed" ? "call.completed" : "call.failed", transcript);
         },
-        this.bridge ? {
-          context: JSON.stringify(this.bridge.context(active.personId)),
+        this.bridge && bridgeContext ? {
+          context: JSON.stringify({ memories: bridgeContext.memories, contacts: bridgeContext.contacts }),
+          recallAnchor: bridgeContext.recallAnchor,
           dispatch: (contactId, message, approvalId) => this.bridge!.sendApprovedSms({ personId: active.personId, trustedContactId: contactId, message, approvalId }),
         } : undefined,
         active.checkInRequester?.displayName,

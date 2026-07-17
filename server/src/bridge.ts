@@ -7,9 +7,18 @@ export class BridgeService {
   constructor(private readonly repositories: IrisRepositories, private readonly actions: ActionDispatcher) {}
 
   context(personId: string) {
-    const memories = this.repositories.listMemories(personId).map((memory) => ({ category: memory.category, value: JSON.parse(memory.payload_json) }));
     const contacts = this.repositories.listTrustedContacts(personId).map((contact) => ({ id: contact.id, name: contact.displayName, relationship: contact.relationship }));
-    return { memories, contacts };
+    if (!this.repositories.hasActiveConsent(personId, "summary_retention")) {
+      return { memories: [], recallAnchor: null, contacts };
+    }
+    const memories = this.repositories.listMemories(personId)
+      .filter((memory) => memory.category !== "recall_anchor")
+      .map((memory) => ({ category: memory.category, value: JSON.parse(memory.payload_json) }));
+    return {
+      memories,
+      recallAnchor: this.repositories.findLatestRecallAnchor(personId),
+      contacts,
+    };
   }
 
   async sendApprovedSms(input: { personId: string; trustedContactId: string; message: string; approvalId: string }) {
