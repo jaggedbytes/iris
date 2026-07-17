@@ -143,7 +143,12 @@ export class ShieldService {
 
     const idempotencyKey = `shield:${input.approvalId}`;
     const existing = this.repositories.findActionRequestByIdempotencyKey(idempotencyKey);
-    if (existing?.status === "dispatched") return { ok: true, contactName: contact.displayName };
+    if (existing?.status === "dispatched") {
+      // Tool success follows the durable outbox; reconcile timeline if the first
+      // write after Twilio accept never landed.
+      this.recordAlertSent({ actionId: existing.id, callId: input.callId, personId: input.personId, contactName: contact.displayName });
+      return { ok: true, contactName: contact.displayName };
+    }
     if (existing && existing.status !== "pending_approval" && existing.status !== "approved") {
       return { ok: false, contactName: contact.displayName };
     }
@@ -168,13 +173,26 @@ export class ShieldService {
       // outbox state. Never claim a Shield alert was sent in any of them.
       return { ok: false, contactName: contact.displayName };
     }
-    this.repositories.createEvent({
-      id: randomUUID(),
-      personId: input.personId,
-      callId: input.callId,
-      type: "shield.alert_sent",
-      payload: { contactName: contact.displayName },
-    });
+    this.recordAlertSent({ actionId, callId: input.callId, personId: input.personId, contactName: contact.displayName });
     return { ok: true, contactName: contact.displayName };
+  }
+
+  /**
+   * Timeline write is best-effort and idempotent per action. A durable
+   * `dispatched` SMS must not become a tool failure (and invite a duplicate
+   * send under a new approval id) if event insert fails.
+   */
+  private recordAlertSent(input: { actionId: string; callId: string; personId: string; contactName: string }) {
+    try {
+      this.repositories.createEvent({
+        id: `shield-alert:${input.actionId}`,
+        personId: input.personId,
+        callId: input.callId,
+        type: "shield.alert_sent",
+        payload: { contactName: input.contactName },
+      });
+    } catch {
+      // Duplicate primary key or transient write error — outbox remains source of truth.
+    }
   }
 }

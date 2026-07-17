@@ -165,3 +165,36 @@ test("Shield never creates an alert-sent event for invalid contacts or uncertain
     closeDatabase(database);
   }
 });
+
+test("Shield tool success follows a durable dispatched SMS even when timeline recording fails", async () => {
+  const { database, repositories } = setup();
+  repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Robin", relationship: "daughter", phoneE164: "+15550002222" });
+  const messages: Array<{ to: string; body: string }> = [];
+  const dispatcher = new ActionDispatcher(repositories, { twilioAccountSid: "AC", twilioAuthToken: "token", twilioPhoneNumber: "+15550001111", publicBaseUrl: "https://iris.test" }, { messages: { create: async (input) => {
+    messages.push({ to: input.to, body: input.body });
+    return { sid: "SMshield", status: "queued" };
+  } } });
+  const originalCreateEvent = repositories.createEvent.bind(repositories);
+  let alertEventFailures = 0;
+  repositories.createEvent = ((input) => {
+    if (input.type === "shield.alert_sent" && alertEventFailures < 1) {
+      alertEventFailures += 1;
+      throw new Error("timeline write failed");
+    }
+    return originalCreateEvent(input);
+  }) as typeof repositories.createEvent;
+  const shield = new ShieldService(repositories, "key", "safe", fetch, dispatcher);
+  try {
+    assert.deepEqual(await shield.sendApprovedAlert({ callId: "call-a", personId: "person-a", trustedContactId: "contact-a", approvalId: "tool-a" }), { ok: true, contactName: "Robin" });
+    assert.equal(repositories.findActionRequestByIdempotencyKey("shield:tool-a")?.status, "dispatched");
+    assert.deepEqual(repositories.listEvents("person-a").filter((event) => event.type === "shield.alert_sent"), []);
+    assert.deepEqual(await shield.sendApprovedAlert({ callId: "call-a", personId: "person-a", trustedContactId: "contact-a", approvalId: "tool-a" }), { ok: true, contactName: "Robin" });
+    assert.deepEqual(messages, [{ to: "+15550002222", body: "Iris is speaking with Avery about something that feels urgent or suspicious. Please check in with them when you can." }]);
+    assert.deepEqual(
+      repositories.listEvents("person-a").filter((event) => event.type === "shield.alert_sent").map((event) => event.payload),
+      [{ contactName: "Robin" }],
+    );
+  } finally {
+    closeDatabase(database);
+  }
+});
