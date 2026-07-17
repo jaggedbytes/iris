@@ -65,6 +65,8 @@ function timelineCopy(event: DashboardOverview["events"][number], personName: st
     case "call.summary_ready": return "Call summary is ready";
     case "call.summary_unavailable": return "No call summary was saved";
     case "bridge.sms_sent": return `Iris sent a Bridge message to ${contact}`;
+    case "shield.pause_offered": return "Iris offered a safety pause";
+    case "shield.alert_sent": return `Iris asked ${contact} to check in`;
     case "action.dispatched": return "Message accepted by the SMS provider";
     case "action.reconciled": return "Message delivery was reconciled";
     case "sms.delivery_updated": return `Message delivery ${deliveryStatus}`;
@@ -72,6 +74,12 @@ function timelineCopy(event: DashboardOverview["events"][number], personName: st
     case "action.failed": return "A message could not be sent";
     default: return "Iris activity updated";
   }
+}
+
+function actionLabel(action: DashboardOverview["actions"][number]) {
+  if (action.feature === "shield" && action.actionType === "sms") return "Shield check-in alert";
+  if (action.feature === "bridge" && action.actionType === "sms") return "Bridge message";
+  return `${action.feature} · ${action.actionType}`;
 }
 
 function actionCopy(action: DashboardOverview["actions"][number]) {
@@ -419,7 +427,7 @@ export function App() {
               <ol className="item-list">
                 {overview.actions.map((action) => (
                   <li key={action.id}>
-                    <strong>{action.feature} · {action.actionType}</strong>
+                    <strong>{actionLabel(action)}</strong>
                     <span>{actionCopy(action)}</span>
                     {action.dispatchState === "needs_review" && (
                       <>

@@ -197,6 +197,14 @@ test("projects dashboard data without SMS, provider, transcript, or audit fields
       id: "event-safe", personId: "person-a", type: "bridge.sms_sent",
       payload: { contactName: "Robin", actionId: "action-private", providerMessageId: secretProviderId },
     });
+    fixture.repositories.createEvent({
+      id: "event-shield-pause", personId: "person-a", type: "shield.pause_offered",
+      payload: { situation: secretTranscript, redFlags: ["urgency"], risk: "high" },
+    });
+    fixture.repositories.createEvent({
+      id: "event-shield-alert", personId: "person-a", type: "shield.alert_sent",
+      payload: { contactName: "Robin", body: secretSmsBody, to: secretPhone, providerMessageId: secretProviderId },
+    });
 
     const response = await fetch(`${fixture.url}/api/dashboard/people/person-a/overview`, {
       headers: { Authorization: `Bearer ${adminToken}` },
@@ -217,9 +225,35 @@ test("projects dashboard data without SMS, provider, transcript, or audit fields
     assert.equal("payload" in body.actions[0], false);
     assert.deepEqual(body.events.find((event) => event.type === "call.completed")?.payload, {});
     assert.deepEqual(body.events.find((event) => event.type === "bridge.sms_sent")?.payload, { contactName: "Robin" });
+    assert.deepEqual(body.events.find((event) => event.type === "shield.pause_offered")?.payload, {});
+    assert.deepEqual(body.events.find((event) => event.type === "shield.alert_sent")?.payload, { contactName: "Robin" });
   } finally {
     fixture.close();
   }
+});
+
+test("projects generic Shield safety events to trusted contacts with view_events only", async () => {
+  const fixture = await createDashboardServer();
+  const privateScenario = "A bank caller demanded gift cards and a passcode.";
+  try {
+    fixture.repositories.createEvent({ id: "shield-pause", personId: "person-a", type: "shield.pause_offered", payload: { situation: privateScenario, redFlags: ["urgency"] } });
+    fixture.repositories.createEvent({ id: "shield-alert", personId: "person-a", type: "shield.alert_sent", payload: { contactName: "Robin", body: "private", to: "+15551234567" } });
+    fixture.repositories.grantAccess({
+      id: "grant-events", personId: "person-a", trustedContactId: "contact-a",
+      scopes: ["view_events"], tokenHash: hash("events-token"), expiresAt: futureExpiry(),
+    });
+    const response = await fetch(`${fixture.url}/api/dashboard/people/person-a/overview`, {
+      headers: { Authorization: "Bearer events-token" },
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json() as { events: Array<{ type: string; payload: unknown }> };
+    assert.deepEqual(body.events.map((event) => ({ type: event.type, payload: event.payload })).sort((left, right) => left.type.localeCompare(right.type)), [
+      { type: "shield.alert_sent", payload: { contactName: "Robin" } },
+      { type: "shield.pause_offered", payload: {} },
+    ]);
+    assert.equal(JSON.stringify(body).includes(privateScenario), false);
+    assert.equal(JSON.stringify(body).includes("+15551234567"), false);
+  } finally { fixture.close(); }
 });
 
 test("shares only a current call state with a check-in-only trusted contact", async () => {
