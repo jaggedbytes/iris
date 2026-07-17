@@ -87,6 +87,7 @@ test("stores summary-only call records with no transcript column", () => {
       .all() as Array<{ name: string }>;
     assert.equal(columns.some((column) => column.name.includes("transcript")), false);
     assert.deepEqual(repositories.listCalls("person-a")[0]?.summaryJson, JSON.stringify({ recap: "Talked about gardening." }));
+    assert.equal(repositories.listCalls("person-a")[0]?.summaryState, "ready");
   } finally {
     closeDatabase(database);
   }

@@ -48,7 +48,11 @@ export class CallSummaryPipeline {
   constructor(private readonly repositories: IrisRepositories, private readonly apiKey: string, private readonly safetyIdentifier: string, private readonly request: SummaryRequest = fetch) {}
 
   async process(input: { callId: string; personId: string; transcript: TranscriptTurn[] }) {
-    if (!this.repositories.hasActiveConsent(input.personId, "summary_retention") || input.transcript.length === 0) return;
+    if (!this.repositories.hasActiveConsent(input.personId, "summary_retention") || input.transcript.length === 0) {
+      this.repositories.updateCallSummaryState({ id: input.callId, summaryState: "not_requested" });
+      return;
+    }
+    this.repositories.updateCallSummaryState({ id: input.callId, summaryState: "processing" });
     const transcript = input.transcript.map((turn) => `${turn.speaker === "user" ? "User" : "Iris"}: ${turn.text}`).join("\n");
     try {
       const response = await this.request("https://api.openai.com/v1/responses", {
@@ -65,19 +69,29 @@ export class CallSummaryPipeline {
           text: { format: { type: "json_schema", name: "iris_call_summary", strict: true, schema } },
         }),
       });
-      if (!response.ok) return;
+      if (!response.ok) {
+        this.repositories.updateCallSummaryState({ id: input.callId, summaryState: "unavailable" });
+        return;
+      }
       const body = await response.json() as { output_text?: string; output?: Array<{ content?: Array<{ text?: string }> }> };
       const raw = body.output_text ?? body.output?.flatMap((item) => item.content ?? []).find((content) => content.text)?.text;
-      if (!raw) return;
+      if (!raw) {
+        this.repositories.updateCallSummaryState({ id: input.callId, summaryState: "unavailable" });
+        return;
+      }
       const summary = JSON.parse(raw) as unknown;
       // Recheck revocable consent immediately before every durable write.
-      if (!valid(summary) || summary.status === "insufficient_signal" || !this.repositories.hasActiveConsent(input.personId, "summary_retention")) return;
+      if (!valid(summary) || summary.status === "insufficient_signal" || !this.repositories.hasActiveConsent(input.personId, "summary_retention")) {
+        this.repositories.updateCallSummaryState({ id: input.callId, summaryState: "unavailable" });
+        return;
+      }
       this.repositories.saveCallSummary({ id: input.callId, summaryJson: JSON.stringify(summary) });
       for (const fact of summary.facts) this.repositories.createMemory({ id: randomUUID(), personId: input.personId, sourceCallId: input.callId, category: "durable_fact", payload: { fact } });
       for (const person of summary.people) this.repositories.createMemory({ id: randomUUID(), personId: input.personId, sourceCallId: input.callId, category: "named_person", payload: person });
       for (const topic of summary.unresolvedTopics) this.repositories.createMemory({ id: randomUUID(), personId: input.personId, sourceCallId: input.callId, category: "unresolved_topic", payload: { topic } });
     } catch {
       // Raw transcript text is never logged or persisted on extraction failure.
+      this.repositories.updateCallSummaryState({ id: input.callId, summaryState: "unavailable" });
     }
   }
 }

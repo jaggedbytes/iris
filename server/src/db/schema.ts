@@ -160,4 +160,12 @@ export const migrations = [
       ALTER TABLE action_dispatch_outbox_next RENAME TO action_dispatch_outbox;
     `,
   },
+  {
+    id: "005_call_summary_state",
+    sql: `
+      ALTER TABLE calls ADD COLUMN summary_state TEXT NOT NULL
+        DEFAULT 'not_requested'
+        CHECK(summary_state IN ('not_requested', 'processing', 'ready', 'unavailable'));
+    `,
+  },
 ] as const;

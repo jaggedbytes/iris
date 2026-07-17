@@ -36,6 +36,7 @@ test("outbound calls use a token-bound μ-law stream and discard live transcript
   const database = createDatabase(":memory:");
   const repositories = createRepositories(database);
   repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  repositories.recordConsent({ id: "consent-a", personId: "person-a", kind: "summary_retention", status: "granted", source: "test" });
   const requestedCalls: Record<string, unknown>[] = [];
   const summaryInputs: Array<{ transcript: Array<{ speaker: string; text: string }> }> = [];
   const realtime = new FakeSocket();
@@ -96,6 +97,7 @@ test("outbound calls use a token-bound μ-law stream and discard live transcript
     const call = repositories.listCalls("person-a")[0];
     assert.equal(call.status, "completed");
     assert.equal(call.summaryJson, null);
+    assert.equal(call.summaryState, "processing");
     assert.deepEqual(summaryInputs, [{ callId, personId: "person-a", transcript: [
       { speaker: "user", text: "I am thinking about Ruth." },
       { speaker: "assistant", text: "You should call Ruth today." },
@@ -111,6 +113,7 @@ test("an unsolicited Realtime disconnect fails the call and skips summary", asyn
   const database = createDatabase(":memory:");
   const repositories = createRepositories(database);
   repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  repositories.recordConsent({ id: "consent-a", personId: "person-a", kind: "summary_retention", status: "granted", source: "test" });
   const realtime = new FakeSocket();
   const summaries: unknown[] = [];
   const manager = new OutboundCallManager(
@@ -142,6 +145,7 @@ test("a rejecting summary pipeline does not disrupt call finalization", async ()
   const database = createDatabase(":memory:");
   const repositories = createRepositories(database);
   repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  repositories.recordConsent({ id: "consent-a", personId: "person-a", kind: "summary_retention", status: "granted", source: "test" });
   const realtime = new FakeSocket();
   const manager = new OutboundCallManager(
     repositories, telephonyConfig, { calls: { create: async () => ({ sid: "CA123" }) } }, () => realtime,
@@ -156,11 +160,38 @@ test("a rejecting summary pipeline does not disrupt call finalization", async ()
     socket.emit("message", Buffer.from(JSON.stringify({ event: "start", start: { streamSid: "MZ123", customParameters: { callId, streamToken: token } } })));
     realtime.emit("open");
     realtime.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "Please remember Ruth." })));
     manager.handleStatus(callId, "completed");
     socket.emit("close");
     // Let the rejected summary promise settle; it must be swallowed, not thrown.
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(repositories.listCalls("person-a")[0].status, "completed");
+    assert.equal(repositories.listCalls("person-a")[0].summaryState, "unavailable");
+  } finally { closeDatabase(database); }
+});
+
+test("a consented completed call without a summary processor becomes unavailable", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  repositories.recordConsent({ id: "consent-a", personId: "person-a", kind: "summary_retention", status: "granted", source: "test" });
+  const realtime = new FakeSocket();
+  const manager = new OutboundCallManager(
+    repositories, telephonyConfig, { calls: { create: async () => ({ sid: "CA123" }) } }, () => realtime,
+  );
+  try {
+    const { callId } = await manager.startCall("person-a");
+    const token = /streamToken" value="([^"]+)"/.exec(manager.twiml(callId) ?? "")?.[1];
+    assert.ok(token);
+    const socket = new FakeSocket();
+    manager.acceptMediaSocket(socket);
+    socket.emit("message", Buffer.from(JSON.stringify({ event: "start", start: { streamSid: "MZ123", customParameters: { callId, streamToken: token } } })));
+    realtime.emit("open");
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "Remember Ruth." })));
+    manager.handleStatus(callId, "completed");
+    socket.emit("close");
+    assert.equal(repositories.listCalls("person-a")[0].summaryState, "unavailable");
   } finally { closeDatabase(database); }
 });
 
@@ -192,6 +223,7 @@ test("fallback finalization preserves final turns and is idempotent", async () =
   const database = createDatabase(":memory:");
   const repositories = createRepositories(database);
   repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  repositories.recordConsent({ id: "consent-a", personId: "person-a", kind: "summary_retention", status: "granted", source: "test" });
   const realtime = new FakeSocket();
   const scheduler = new FakeScheduler();
   const summaries: Array<{ transcript: unknown[] }> = [];

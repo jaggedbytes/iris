@@ -192,15 +192,33 @@ export class OutboundCallManager {
     if (!active) return;
     this.activeCalls.delete(callId);
     if (active.finalizationTimer) this.scheduler.clearTimeout(active.finalizationTimer);
-    this.repositories.completeCall({ id: callId, status });
+    const shouldProcessSummary = status === "completed" && transcript.length > 0 && this.repositories.hasActiveConsent(active.personId, "summary_retention");
+    // Set processing before detaching the background promise. This leaves no
+    // observable post-hangup window where an eligible call looks unsummarized.
+    this.repositories.completeCall({
+      id: callId,
+      status,
+      summaryState: shouldProcessSummary ? "processing" : status === "failed" ? "unavailable" : "not_requested",
+    });
     this.repositories.createEvent({ id: randomUUID(), personId: active.personId, callId, type: eventType, payload: { transport: "twilio" } });
-    if (status === "completed") {
+    if (shouldProcessSummary && this.summaries) {
       // Summary processing runs after finalization; a rejection must never
       // surface as an unhandled rejection. Observe it without call context that
       // could carry transcript content.
-      void this.summaries
-        ?.process({ callId, personId: active.personId, transcript })
-        .catch((error) => console.error("Call summary processing failed", { callId, error: error instanceof Error ? error.message : "unknown error" }));
+      try {
+        void this.summaries.process({ callId, personId: active.personId, transcript })
+          .catch((error) => {
+            this.repositories.updateCallSummaryState({ id: callId, summaryState: "unavailable" });
+            console.error("Call summary processing failed", { callId, error: error instanceof Error ? error.message : "unknown error" });
+          });
+      } catch (error) {
+        this.repositories.updateCallSummaryState({ id: callId, summaryState: "unavailable" });
+        console.error("Call summary processing failed", { callId, error: error instanceof Error ? error.message : "unknown error" });
+      }
+    } else if (shouldProcessSummary) {
+      // A consented call with a final transcript must not look permanently
+      // unsummarized if the processor was not configured.
+      this.repositories.updateCallSummaryState({ id: callId, summaryState: "unavailable" });
     }
   }
 }

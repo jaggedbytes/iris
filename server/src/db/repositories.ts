@@ -5,6 +5,7 @@ import type {
   ActionRequestRecord,
   ActionStatus,
   CallRecord,
+  CallSummaryState,
   CallStatus,
   ConsentKind,
   ConsentStatus,
@@ -49,6 +50,7 @@ type CallRow = {
   started_at: string;
   ended_at: string | null;
   summary_json: string | null;
+  summary_state: CallSummaryState;
 };
 
 type EventRow = {
@@ -109,6 +111,7 @@ const toCall = (row: CallRow): CallRecord => ({
   startedAt: row.started_at,
   endedAt: row.ended_at,
   summaryJson: row.summary_json,
+  summaryState: row.summary_state,
 });
 
 const toEvent = (row: EventRow): TimelineEvent => ({
@@ -308,20 +311,30 @@ export function createRepositories(database: IrisDatabase) {
       return toCall(row);
     },
 
-    completeCall(input: { id: string; status: Extract<CallStatus, "completed" | "failed">; summaryJson?: string | null }) {
+    completeCall(input: { id: string; status: Extract<CallStatus, "completed" | "failed">; summaryJson?: string | null; summaryState?: CallSummaryState }) {
+      const summaryState = input.summaryState ?? (input.summaryJson ? "ready" : input.status === "failed" ? "unavailable" : undefined);
       database
         .prepare(
-          `UPDATE calls SET status = ?, ended_at = ?, summary_json = ? WHERE id = ?`,
+          `UPDATE calls
+             SET status = ?, ended_at = ?, summary_json = COALESCE(?, summary_json),
+                 summary_state = COALESCE(?, summary_state)
+           WHERE id = ?`,
         )
-        .run(input.status, now(), input.summaryJson ?? null, input.id);
+        .run(input.status, now(), input.summaryJson ?? null, summaryState ?? null, input.id);
     },
 
     saveCallSummary(input: { id: string; summaryJson: string }) {
       // Summary persistence happens after the call is already completed, so it
       // must not touch ended_at (doing so would inflate the recorded duration).
       database
-        .prepare("UPDATE calls SET summary_json = ? WHERE id = ?")
+        .prepare("UPDATE calls SET summary_json = ?, summary_state = 'ready' WHERE id = ?")
         .run(input.summaryJson, input.id);
+    },
+
+    updateCallSummaryState(input: { id: string; summaryState: Exclude<CallSummaryState, "ready"> }) {
+      database
+        .prepare("UPDATE calls SET summary_state = ? WHERE id = ?")
+        .run(input.summaryState, input.id);
     },
 
     updateCall(input: {

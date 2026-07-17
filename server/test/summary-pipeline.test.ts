@@ -15,25 +15,30 @@ function fixture() {
 
 test("persists only validated user-stated summary memory", async () => {
   const { database, repositories } = fixture();
-  const request = async () => new Response(JSON.stringify({ output_text: JSON.stringify({
-    status: "complete", recap: "Avery talked about visiting Ruth.", facts: ["Avery has a friend named Ruth."],
-    people: [{ name: "Ruth", relationshipOrContext: "Avery's friend" }], unresolvedTopics: ["Plan a visit with Ruth."],
-  }) }), { status: 200 });
+  let resolveResponse: ((response: Response) => void) | undefined;
+  const request = async () => new Promise<Response>((resolve) => { resolveResponse = resolve; });
   try {
     // The call is completed before the summary lands; persisting the summary
     // must not move ended_at (which would inflate the recorded duration).
     repositories.completeCall({ id: "call-a", status: "completed" });
     const endedAt = repositories.listCalls("person-a")[0].endedAt;
     assert.ok(endedAt);
-    await new CallSummaryPipeline(repositories, "key", "safe-id", request).process({
+    const processing = new CallSummaryPipeline(repositories, "key", "safe-id", request).process({
       callId: "call-a", personId: "person-a",
       transcript: [
         { speaker: "user", text: "My friend Ruth lives nearby." },
         { speaker: "assistant", text: "You should message Ruth today." },
       ],
     });
+    assert.equal(repositories.listCalls("person-a")[0].summaryState, "processing");
+    resolveResponse?.(new Response(JSON.stringify({ output_text: JSON.stringify({
+      status: "complete", recap: "Avery talked about visiting Ruth.", facts: ["Avery has a friend named Ruth."],
+      people: [{ name: "Ruth", relationshipOrContext: "Avery's friend" }], unresolvedTopics: ["Plan a visit with Ruth."],
+    }) }), { status: 200 }));
+    await processing;
     const summary = JSON.parse(repositories.listCalls("person-a")[0].summaryJson!) as { facts: string[] };
     assert.deepEqual(summary.facts, ["Avery has a friend named Ruth."]);
+    assert.equal(repositories.listCalls("person-a")[0].summaryState, "ready");
     assert.equal(repositories.listCalls("person-a")[0].endedAt, endedAt);
     const tables = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND sql LIKE '%transcript%'").all();
     assert.deepEqual(tables, []);
@@ -50,6 +55,19 @@ test("does not call extraction or save anything without active consent", async (
     });
     assert.equal(requested, false);
     assert.equal(repositories.listCalls("person-a")[0].summaryJson, null);
+    assert.equal(repositories.listCalls("person-a")[0].summaryState, "not_requested");
+  } finally { closeDatabase(database); }
+});
+
+test("leaves an empty transcript not_requested without contacting extraction", async () => {
+  const { database, repositories } = fixture();
+  let requested = false;
+  try {
+    await new CallSummaryPipeline(repositories, "key", "safe-id", async () => { requested = true; return new Response(); }).process({
+      callId: "call-a", personId: "person-a", transcript: [],
+    });
+    assert.equal(requested, false);
+    assert.equal(repositories.listCalls("person-a")[0].summaryState, "not_requested");
   } finally { closeDatabase(database); }
 });
 
@@ -60,5 +78,6 @@ test("does not save refused, malformed, or insufficient extraction", async () =>
       callId: "call-a", personId: "person-a", transcript: [{ speaker: "user", text: "um" }],
     });
     assert.equal(repositories.listCalls("person-a")[0].summaryJson, null);
+    assert.equal(repositories.listCalls("person-a")[0].summaryState, "unavailable");
   } finally { closeDatabase(database); }
 });
