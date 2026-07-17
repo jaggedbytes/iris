@@ -213,6 +213,9 @@ test("007 memory category migration preserves legacy rows and constrains new cat
     database.prepare(
       "INSERT INTO memories (id, person_id, category, payload_json, created_at) VALUES (?, ?, ?, ?, ?)",
     ).run("memory-topic", "person-a", "unresolved_topic", '{"topic":"Garden plans"}', "2026-07-17T00:00:02.000Z");
+    database.prepare(
+      "INSERT INTO memories (id, person_id, category, payload_json, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("memory-unsupported", "person-a", "mood_inference", '{"mood":"tired"}', "2026-07-17T00:00:03.000Z");
 
     migrate(database);
 
@@ -227,6 +230,14 @@ test("007 memory category migration preserves legacy rows and constrains new cat
     assert.deepEqual(
       database.prepare("SELECT category FROM memories WHERE id IN (?, ?) ORDER BY id").all("memory-person", "memory-topic"),
       [{ category: "named_person" }, { category: "unresolved_topic" }],
+    );
+    assert.equal(
+      (database.prepare("SELECT COUNT(*) AS count FROM memories WHERE id = ?").get("memory-unsupported") as { count: number }).count,
+      0,
+    );
+    assert.equal(
+      (database.prepare("SELECT COUNT(*) AS count FROM memories").get() as { count: number }).count,
+      3,
     );
     database.prepare(
       "INSERT INTO memories (id, person_id, category, payload_json, created_at) VALUES (?, ?, ?, ?, ?)",

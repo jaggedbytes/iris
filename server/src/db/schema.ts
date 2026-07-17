@@ -191,9 +191,13 @@ export const migrations = [
         expires_at TEXT,
         created_at TEXT NOT NULL
       );
+      -- Pre-constraint rows could use arbitrary category strings. Only the
+      -- allowlisted Bridge categories are copied; unsupported legacy categories
+      -- are dropped so the CHECK migration cannot abort mid-upgrade.
       INSERT INTO memories_next (id, person_id, source_call_id, category, payload_json, confidence, expires_at, created_at)
         SELECT id, person_id, source_call_id, category, payload_json, confidence, expires_at, created_at
-        FROM memories;
+        FROM memories
+        WHERE category IN ('durable_fact', 'named_person', 'unresolved_topic', 'recall_anchor');
       DROP TABLE memories;
       ALTER TABLE memories_next RENAME TO memories;
       CREATE INDEX idx_memories_person_created ON memories(person_id, created_at DESC);
