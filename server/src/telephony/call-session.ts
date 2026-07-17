@@ -15,6 +15,12 @@ export type RealtimeSocketFactory = (input: {
   safetyIdentifier: string;
 }) => SocketLike;
 export type LiveTranscriptTurn = { speaker: "user" | "assistant"; text: string };
+export type CallSessionScheduler = {
+  setTimeout(callback: () => void, delayMs: number): { unref?: () => void };
+  clearTimeout(handle: unknown): void;
+};
+const systemScheduler: CallSessionScheduler = { setTimeout, clearTimeout };
+export const DEFAULT_FAREWELL_CLOSE_TIMEOUT_MS = 8_000;
 
 export function friendlyRequesterToken(displayName: string) {
   return displayName.trim().split(/\s+/).find(Boolean) ?? null;
@@ -40,8 +46,26 @@ type RealtimeEvent = {
   type?: string;
   delta?: string;
   transcript?: string;
+  response_id?: string;
+  response?: {
+    id?: string;
+    output?: Array<{
+      type?: string;
+      status?: string;
+      name?: string;
+      call_id?: string;
+      arguments?: string;
+    }>;
+  };
   error?: { code?: string; message?: string };
-  name?: string; call_id?: string; arguments?: string;
+};
+
+type PendingFarewell = {
+  responseId: string | null;
+  responseDone: boolean;
+  audioStarted: boolean;
+  audioDone: boolean;
+  timer: unknown | null;
 };
 
 /**
@@ -56,6 +80,8 @@ export class CallSession {
   private bufferedAudio: string[] = [];
   private liveTranscript: LiveTranscriptTurn[] = [];
   private closed = false;
+  private readonly processedToolCallIds = new Set<string>();
+  private pendingFarewell: PendingFarewell | null = null;
   private readonly debugRealtime = process.env.IRIS_REALTIME_DEBUG === "true";
 
   constructor(
@@ -74,6 +100,8 @@ export class CallSession {
       dispatch: (contactId: string, message: string, approvalId: string) => Promise<{ ok: boolean; contactName?: string }>;
     },
     private readonly checkInRequesterDisplayName?: string,
+    private readonly scheduler: CallSessionScheduler = systemScheduler,
+    private readonly farewellCloseTimeoutMs = DEFAULT_FAREWELL_CLOSE_TIMEOUT_MS,
   ) {
     twilioSocket.on("message", (data: Buffer | string) => this.handleTwilioMessage(data));
     twilioSocket.on("close", () => this.close("completed"));
@@ -120,6 +148,7 @@ export class CallSession {
           this.bridge
             ? `Bridge context:\n${this.bridge.context}\n\nAuthoritative phone-session instructions: the configured bridge_send_sms tool is allowed only after the person clearly says yes to sending a specific message to a listed trusted contact. First say who you would contact and what you would send, then ask for approval. Never call it on ambiguity. ${this.bridge.recallAnchor ? `After any family-requested greeting, offer exactly one gentle invitation based on this prior user-stated thread: ${JSON.stringify(this.bridge.recallAnchor)}. Do not present it as certain, and do not repeat it later in the call.` : "Do not volunteer prior conversation details at the opening of this call."}`
             : "",
+          "Authoritative phone-session instructions: use end_call only after an unmistakable direct goodbye or explicit request to end the call. Never use it for silence, hesitation, or ambiguous language. When using it, give a brief warm farewell after the tool result.",
         ].filter(Boolean).join("\n\n");
         this.realtime.send(
           JSON.stringify({
@@ -128,7 +157,10 @@ export class CallSession {
               type: "realtime",
               instructions,
               output_modalities: ["audio"],
-              tools: this.bridge ? [{ type: "function", name: "bridge_send_sms", description: "Send an explicitly approved SMS to a listed trusted contact.", parameters: { type: "object", additionalProperties: false, required: ["trusted_contact_id", "message"], properties: { trusted_contact_id: { type: "string" }, message: { type: "string", maxLength: 480 } } } }] : [],
+              tools: [
+                ...(this.bridge ? [{ type: "function", name: "bridge_send_sms", description: "Send an explicitly approved SMS to a listed trusted contact.", parameters: { type: "object", additionalProperties: false, required: ["trusted_contact_id", "message"], properties: { trusted_contact_id: { type: "string" }, message: { type: "string", maxLength: 480 } } } }] : []),
+                { type: "function", name: "end_call", description: "End the phone call after the person has clearly said goodbye or explicitly asked to end it.", parameters: { type: "object", additionalProperties: false, required: [], properties: {} } },
+              ],
               audio: {
                 input: {
                   // Twilio Media Streams use G.711 μ-law, named PCMU by the
@@ -196,16 +228,25 @@ export class CallSession {
       for (const audio of this.bufferedAudio.splice(0)) this.appendAudio(audio);
       return;
     }
-    if (event.type === "response.function_call_arguments.done" && event.name === "bridge_send_sms" && event.call_id && event.arguments && this.bridge) {
-      void this.handleBridgeTool(event.call_id, event.arguments);
+    if (event.type === "response.done") {
+      this.handleResponseDone(event);
+      return;
+    }
+    if (event.type === "response.created") {
+      this.handleResponseCreated(event);
       return;
     }
     if (event.type === "response.output_audio.delta" && event.delta && this.streamSid) {
+      this.noteFarewellAudio(event.response_id);
       this.twilioSocket.send(JSON.stringify({
         event: "media",
         streamSid: this.streamSid,
         media: { payload: event.delta },
       }));
+    }
+    if (event.type === "response.output_audio.done") {
+      this.noteFarewellAudioDone(event.response_id);
+      return;
     }
     if (event.type === "input_audio_buffer.speech_started" && this.streamSid) {
       this.twilioSocket.send(JSON.stringify({ event: "clear", streamSid: this.streamSid }));
@@ -235,19 +276,120 @@ export class CallSession {
     if (this.debugRealtime) console.info(`[Iris Realtime ${this.callId}] ${message}`);
   }
 
-  private async handleBridgeTool(callId: string, argumentsJson: string) {
+  private handleResponseDone(event: RealtimeEvent) {
+    const responseId = event.response?.id;
+    const completedFunctionCalls = (event.response?.output ?? []).filter((item) =>
+      item.type === "function_call" &&
+      item.status === "completed" &&
+      Boolean(item.name) &&
+      Boolean(item.call_id),
+    );
+    // A response which contains a tool call is the response that *requested*
+    // work, never the farewell produced after an end_call tool result. This
+    // distinction also makes duplicate provider events harmless.
+    if (completedFunctionCalls.length > 0) {
+      for (const item of completedFunctionCalls) {
+        if (this.processedToolCallIds.has(item.call_id!)) continue;
+        this.processedToolCallIds.add(item.call_id!);
+        void this.dispatchToolCall(item.name!, item.call_id!, item.arguments ?? "");
+      }
+      return;
+    }
+    if (this.pendingFarewell && this.matchesFarewell(responseId)) {
+      this.pendingFarewell.responseId ??= responseId ?? null;
+      this.pendingFarewell.responseDone = true;
+      this.finishFarewellIfReady();
+    }
+  }
+
+  private async dispatchToolCall(name: string, callId: string, argumentsJson: string) {
+    if (!this.realtime || this.closed) return;
+    if (name === "end_call") {
+      if (this.pendingFarewell) {
+        this.sendToolOutput(callId, { ok: true, ending: true }, false);
+        return;
+      }
+      this.pendingFarewell = {
+        responseId: null,
+        responseDone: false,
+        audioStarted: false,
+        audioDone: false,
+        timer: null,
+      };
+      this.sendToolOutput(callId, { ok: true });
+      this.armFarewellTimeout();
+      return;
+    }
+    if (name !== "bridge_send_sms") {
+      this.sendToolOutput(callId, { ok: false, error: "unsupported_tool" });
+      return;
+    }
+    if (!this.bridge) {
+      this.sendToolOutput(callId, { ok: false, error: "tool_unavailable" });
+      return;
+    }
     let args: { trusted_contact_id?: unknown; message?: unknown };
-    try { args = JSON.parse(argumentsJson) as typeof args; } catch { return; }
+    try { args = JSON.parse(argumentsJson) as typeof args; } catch {
+      this.sendToolOutput(callId, { ok: false, error: "invalid_arguments" });
+      return;
+    }
     const result = typeof args.trusted_contact_id === "string" && typeof args.message === "string"
       ? await this.bridge!.dispatch(args.trusted_contact_id, args.message, callId).catch(() => ({ ok: false }))
       : { ok: false };
-    this.realtime?.send(JSON.stringify({ type: "conversation.item.create", item: { type: "function_call_output", call_id: callId, output: JSON.stringify(result) } }));
-    this.realtime?.send(JSON.stringify({ type: "response.create" }));
+    this.sendToolOutput(callId, result);
+  }
+
+  private sendToolOutput(callId: string, result: unknown, createResponse = true) {
+    if (!this.realtime || this.closed) return;
+    this.realtime.send(JSON.stringify({ type: "conversation.item.create", item: { type: "function_call_output", call_id: callId, output: JSON.stringify(result) } }));
+    if (createResponse) this.realtime.send(JSON.stringify({ type: "response.create" }));
+  }
+
+  private armFarewellTimeout() {
+    if (!this.pendingFarewell || this.pendingFarewell.timer) return;
+    const timer = this.scheduler.setTimeout(() => this.close("completed"), this.farewellCloseTimeoutMs);
+    (timer as { unref?: () => void }).unref?.();
+    this.pendingFarewell.timer = timer;
+  }
+
+  private handleResponseCreated(event: RealtimeEvent) {
+    // response.create is emitted only after the function-call output. Realtime
+    // serializes these server events, so the next response.created is that
+    // farewell response; do not accept audio or done events before this bind.
+    if (!this.pendingFarewell || this.pendingFarewell.responseId || !event.response?.id) return;
+    this.pendingFarewell.responseId = event.response.id;
+  }
+
+  private matchesFarewell(responseId: string | undefined) {
+    return Boolean(
+      this.pendingFarewell?.responseId &&
+      responseId &&
+      responseId === this.pendingFarewell.responseId,
+    );
+  }
+
+  private noteFarewellAudio(responseId: string | undefined) {
+    if (!this.pendingFarewell || !this.matchesFarewell(responseId)) return;
+    this.pendingFarewell.audioStarted = true;
+  }
+
+  private noteFarewellAudioDone(responseId: string | undefined) {
+    if (!this.pendingFarewell || !this.matchesFarewell(responseId)) return;
+    this.pendingFarewell.audioDone = true;
+    this.finishFarewellIfReady();
+  }
+
+  private finishFarewellIfReady() {
+    if (!this.pendingFarewell?.responseDone) return;
+    if (this.pendingFarewell.audioStarted && !this.pendingFarewell.audioDone) return;
+    this.close("completed");
   }
 
   close(reason: "completed" | "failed") {
     if (this.closed) return;
     this.closed = true;
+    if (this.pendingFarewell?.timer) this.scheduler.clearTimeout(this.pendingFarewell.timer);
+    this.pendingFarewell = null;
     this.bufferedAudio.length = 0;
     const transcript = this.liveTranscript.splice(0);
     this.realtimeReady = false;

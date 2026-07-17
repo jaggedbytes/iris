@@ -308,6 +308,228 @@ test("a revoked-consent Bridge call does not volunteer a previously stored ancho
   } finally { closeDatabase(database); }
 });
 
+test("Bridge SMS runs once from a completed response.done function call", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Robin", relationship: "daughter", phoneE164: "+15550003333" });
+  repositories.recordConsent({ id: "consent-a", personId: "person-a", kind: "summary_retention", status: "granted", source: "test" });
+  let sends = 0;
+  const dispatcher = new ActionDispatcher(repositories, telephonyConfig, { messages: { create: async () => { sends += 1; return { sid: "SM123", status: "queued" }; } } });
+  const realtime = new FakeSocket();
+  const manager = new OutboundCallManager(
+    repositories, telephonyConfig, { calls: { create: async () => ({ sid: "CA123" }) } }, () => realtime,
+    undefined, undefined, undefined, new BridgeService(repositories, dispatcher),
+  );
+  try {
+    const { callId } = await manager.startCall("person-a");
+    const token = /streamToken" value="([^"]+)"/.exec(manager.twiml(callId) ?? "")?.[1];
+    assert.ok(token);
+    const socket = new FakeSocket();
+    manager.acceptMediaSocket(socket);
+    socket.emit("message", Buffer.from(JSON.stringify({ event: "start", start: { streamSid: "MZ123", customParameters: { callId, streamToken: token } } })));
+    realtime.emit("open");
+
+    // Argument deltas are intentionally not a dispatch boundary anymore.
+    realtime.emit("message", Buffer.from(JSON.stringify({
+      type: "response.function_call_arguments.done", name: "bridge_send_sms", call_id: "tool-sms", arguments: '{"trusted_contact_id":"contact-a","message":"Please call me."}',
+    })));
+    assert.equal(sends, 0);
+
+    const toolResponse = {
+      type: "response.done",
+      response: {
+        id: "response-tool",
+        output: [{ type: "function_call", status: "completed", name: "bridge_send_sms", call_id: "tool-sms", arguments: '{"trusted_contact_id":"contact-a","message":"Please call me."}' }],
+      },
+    };
+    realtime.emit("message", Buffer.from(JSON.stringify(toolResponse)));
+    await new Promise((resolve) => setImmediate(resolve));
+    realtime.emit("message", Buffer.from(JSON.stringify(toolResponse)));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(sends, 1);
+    const sent = realtime.sent.slice(1).map((message) => JSON.parse(message) as { type: string; item?: { call_id?: string } });
+    assert.deepEqual(sent.map((message) => message.type), ["conversation.item.create", "response.create"]);
+    assert.equal(sent[0].item?.call_id, "tool-sms");
+  } finally { closeDatabase(database); }
+});
+
+test("completed tools always receive a result, including malformed and unsupported calls", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  const dispatcher = new ActionDispatcher(repositories, telephonyConfig, { messages: { create: async () => ({ sid: "SM123", status: "queued" }) } });
+  const realtime = new FakeSocket();
+  const manager = new OutboundCallManager(
+    repositories, telephonyConfig, { calls: { create: async () => ({ sid: "CA123" }) } }, () => realtime,
+    undefined, undefined, undefined, new BridgeService(repositories, dispatcher),
+  );
+  try {
+    const { callId } = await manager.startCall("person-a");
+    const token = /streamToken" value="([^"]+)"/.exec(manager.twiml(callId) ?? "")?.[1];
+    assert.ok(token);
+    const socket = new FakeSocket();
+    manager.acceptMediaSocket(socket);
+    socket.emit("message", Buffer.from(JSON.stringify({ event: "start", start: { streamSid: "MZ123", customParameters: { callId, streamToken: token } } })));
+    realtime.emit("open");
+
+    realtime.emit("message", Buffer.from(JSON.stringify({
+      type: "response.done",
+      response: {
+        id: "response-tools",
+        output: [
+          { type: "function_call", status: "completed", name: "bridge_send_sms", call_id: "tool-malformed", arguments: "not-json" },
+          { type: "function_call", status: "completed", name: "unconfigured_tool", call_id: "tool-unknown", arguments: "{}" },
+        ],
+      },
+    })));
+
+    const outputs = realtime.sent.slice(1)
+      .filter((message) => JSON.parse(message).type === "conversation.item.create")
+      .map((message) => JSON.parse(message) as { item: { call_id: string; output: string } });
+    assert.deepEqual(outputs.map(({ item }) => ({ callId: item.call_id, result: JSON.parse(item.output) })), [
+      { callId: "tool-malformed", result: { ok: false, error: "invalid_arguments" } },
+      { callId: "tool-unknown", result: { ok: false, error: "unsupported_tool" } },
+    ]);
+    assert.equal(realtime.sent.slice(1).filter((message) => JSON.parse(message).type === "response.create").length, 2);
+  } finally { closeDatabase(database); }
+});
+
+test("end_call waits for the farewell response, then finalizes through the existing call lifecycle", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  repositories.recordConsent({ id: "consent-a", personId: "person-a", kind: "summary_retention", status: "granted", source: "test" });
+  const realtime = new FakeSocket();
+  const scheduler = new FakeScheduler();
+  const summaries: Array<{ transcript: unknown[] }> = [];
+  const manager = new OutboundCallManager(
+    repositories, telephonyConfig, { calls: { create: async () => ({ sid: "CA123" }) } }, () => realtime,
+    { process: async (input) => { summaries.push(input); } }, scheduler, 10_000, undefined, 10_000, undefined, 77,
+  );
+  try {
+    const { callId } = await manager.startCall("person-a");
+    const token = /streamToken" value="([^"]+)"/.exec(manager.twiml(callId) ?? "")?.[1];
+    assert.ok(token);
+    const socket = new FakeSocket();
+    manager.acceptMediaSocket(socket);
+    socket.emit("message", Buffer.from(JSON.stringify({ event: "start", start: { streamSid: "MZ123", customParameters: { callId, streamToken: token } } })));
+    realtime.emit("open");
+    const sessionUpdate = JSON.parse(realtime.sent[0]) as { session: { instructions: string; tools: Array<{ name: string }> } };
+    assert.match(sessionUpdate.session.instructions, /Never use it for silence, hesitation, or ambiguous language/);
+    assert.equal(sessionUpdate.session.tools.some((tool) => tool.name === "end_call"), true);
+    // A tentative remark in a transcript is never a local teardown signal.
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "Maybe we can wrap up later." })));
+    assert.equal(socket.closed, false);
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "Goodbye, Iris." })));
+
+    const endResponse = {
+      type: "response.done",
+      response: { id: "response-end-tool", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-end", arguments: "{}" }] },
+    };
+    realtime.emit("message", Buffer.from(JSON.stringify(endResponse)));
+    realtime.emit("message", Buffer.from(JSON.stringify(endResponse)));
+    assert.equal(scheduler.scheduled?.delayMs, 77);
+    assert.equal(socket.closed, false);
+    assert.equal(realtime.sent.filter((message) => JSON.parse(message).type === "response.create").length, 1);
+
+    // A non-tool response that predates the tool result cannot masquerade as
+    // the farewell before response.created binds the newly requested response.
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "response.done", response: { id: "response-stale", output: [] } })));
+    assert.equal(socket.closed, false);
+
+    // A second end request acknowledges its tool call but cannot create a
+    // second farewell or a second call finalization.
+    realtime.emit("message", Buffer.from(JSON.stringify({
+      type: "response.done",
+      response: { id: "response-end-duplicate", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-end-second", arguments: "{}" }] },
+    })));
+    assert.equal(realtime.sent.filter((message) => JSON.parse(message).type === "response.create").length, 1);
+
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "response.created", response: { id: "response-farewell" } })));
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "response.output_audio.delta", response_id: "response-farewell", delta: "farewell-audio" })));
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "response.output_audio.done", response_id: "response-farewell" })));
+    assert.equal(socket.closed, false);
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "response.done", response: { id: "response-farewell", output: [] } })));
+
+    assert.equal(socket.closed, true);
+    assert.equal(repositories.listCalls("person-a")[0].status, "completed");
+    assert.equal(repositories.listCalls("person-a")[0].summaryState, "processing");
+    assert.deepEqual(summaries, [{ callId, personId: "person-a", transcript: [
+      { speaker: "user", text: "Maybe we can wrap up later." },
+      { speaker: "user", text: "Goodbye, Iris." },
+    ] }]);
+  } finally { closeDatabase(database); }
+});
+
+test("end_call uses its farewell-only timeout when completion events never arrive", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  const realtime = new FakeSocket();
+  const scheduler = new FakeScheduler();
+  const manager = new OutboundCallManager(
+    repositories, telephonyConfig, { calls: { create: async () => ({ sid: "CA123" }) } }, () => realtime,
+    undefined, scheduler, 10_000, undefined, 10_000, undefined, 91,
+  );
+  try {
+    const { callId } = await manager.startCall("person-a");
+    const token = /streamToken" value="([^"]+)"/.exec(manager.twiml(callId) ?? "")?.[1];
+    assert.ok(token);
+    const socket = new FakeSocket();
+    manager.acceptMediaSocket(socket);
+    socket.emit("message", Buffer.from(JSON.stringify({ event: "start", start: { streamSid: "MZ123", customParameters: { callId, streamToken: token } } })));
+    realtime.emit("open");
+    realtime.emit("message", Buffer.from(JSON.stringify({
+      type: "response.done",
+      response: { id: "response-end-tool", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-end", arguments: "{}" }] },
+    })));
+    assert.equal(scheduler.scheduled?.delayMs, 91);
+    scheduler.scheduled?.callback();
+    assert.equal(socket.closed, true);
+    assert.equal(repositories.listCalls("person-a")[0].status, "completed");
+
+    // Late farewell events cannot finalize the already-closed session again.
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "response.done", response: { id: "response-farewell", output: [] } })));
+    assert.equal(repositories.listEvents("person-a").filter((event) => event.type === "call.completed").length, 1);
+  } finally { closeDatabase(database); }
+});
+
+test("handset hangup clears a pending farewell timeout through the normal close path", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  const realtime = new FakeSocket();
+  const scheduler = new FakeScheduler();
+  const manager = new OutboundCallManager(
+    repositories, telephonyConfig, { calls: { create: async () => ({ sid: "CA123" }) } }, () => realtime,
+    undefined, scheduler, 10_000, undefined, 10_000, undefined, 91,
+  );
+  try {
+    const { callId } = await manager.startCall("person-a");
+    const token = /streamToken" value="([^"]+)"/.exec(manager.twiml(callId) ?? "")?.[1];
+    assert.ok(token);
+    const socket = new FakeSocket();
+    manager.acceptMediaSocket(socket);
+    socket.emit("message", Buffer.from(JSON.stringify({ event: "start", start: { streamSid: "MZ123", customParameters: { callId, streamToken: token } } })));
+    realtime.emit("open");
+    realtime.emit("message", Buffer.from(JSON.stringify({
+      type: "response.done",
+      response: { id: "response-end-tool", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-end", arguments: "{}" }] },
+    })));
+    const farewellTimeout = scheduler.scheduled;
+    const clearsBeforeHangup = scheduler.cleared;
+
+    socket.emit("close");
+    assert.equal(socket.closed, true);
+    assert.equal(scheduler.cleared, clearsBeforeHangup + 1);
+    assert.equal(repositories.listCalls("person-a")[0].status, "completed");
+    farewellTimeout?.callback();
+    assert.equal(repositories.listEvents("person-a").filter((event) => event.type === "call.completed").length, 1);
+  } finally { closeDatabase(database); }
+});
+
 test("startup recovery ends known Twilio calls before releasing their local guard", async () => {
   const database = createDatabase(":memory:");
   const repositories = createRepositories(database);
