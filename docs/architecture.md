@@ -13,7 +13,8 @@ flowchart LR
   Server <-->|"Realtime audio + events"| OpenAI["OpenAI Realtime"]
   Twilio --> Phone["Person’s phone"]
   Server --> SQLite["SQLite\nconsented summaries, memories, events"]
-  SQLite --> Dashboard["Adaptive-polling dashboard"]
+  SQLite --> DashboardAPI["/api/dashboard\nallowlisted projection"]
+  DashboardAPI --> Dashboard["Adaptive-polling dashboard"]
   Persona["Iris persona\niris-v1.ts"] --> Server
 ```
 
@@ -21,7 +22,7 @@ flowchart LR
 
 - `OPENAI_API_KEY` and Twilio credentials belong only in `server/.env`.
 - Twilio connects to the public server over HTTPS/WSS; audio is relayed without application-side transcoding.
-- Raw audio and transcript text live only for the active call and are discarded on finalization.
+- Raw audio is never persisted. Transcript text is held only in memory through consent-gated summary extraction after the call, then discarded; it is never written to SQLite.
 - Summary extraction runs only with active, revocable `summary_retention` consent. It uses structured output, stores no raw transcript, and persists only explicit durable facts, named people/context, unresolved topics, a recap, and an optional recall anchor. Dashboard call projections expose only the recap; anchors never enter timeline payloads.
 - Trusted contacts receive only their scoped dashboard projection. A family-requested call derives attribution from the grant, never a client-supplied name.
 - Timeline payloads are allowlisted: no SMS body, phone number, provider ID, raw transcript, or audit metadata reaches the browser.
@@ -32,7 +33,7 @@ flowchart LR
 
 `end_call` is available only for an unmistakable direct goodbye or explicit request to end. Once Iris returns the tool result, the session binds the next `response.created` event and waits for that response’s audio/done completion before closing through the ordinary `CallSession` → call-manager finalization path. `IRIS_FAREWELL_CLOSE_TIMEOUT_MS` defaults to 8,000 ms and may be set to a whole value from 1,000 to 30,000 ms; it is a safety bound for that farewell only, never an idle-call timeout.
 
-An ordinary handset hangup remains a fully supported completion path. Both paths discard live transcript text and preserve the same consent-gated summary lifecycle.
+An ordinary handset hangup remains a fully supported completion path. Both paths clear the live session transcript into the same consent-gated summary lifecycle; transcript text is discarded after extraction and is never persisted.
 
 ## Deliberate deferrals
 

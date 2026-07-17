@@ -166,6 +166,9 @@ export const migrations = [
       ALTER TABLE calls ADD COLUMN summary_state TEXT NOT NULL
         DEFAULT 'not_requested'
         CHECK(summary_state IN ('not_requested', 'processing', 'ready', 'unavailable'));
+      UPDATE calls
+         SET summary_state = 'ready'
+       WHERE summary_json IS NOT NULL;
     `,
   },
   {

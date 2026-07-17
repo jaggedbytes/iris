@@ -155,6 +155,42 @@ test("stores summary-only call records with no transcript column", () => {
   }
 });
 
+test("005 summary_state migration backfills ready for calls that already have a summary", () => {
+  const database = new Database(":memory:");
+  database.pragma("foreign_keys = ON");
+  try {
+    database.exec("CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL)");
+    const record = database.prepare("INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)");
+    for (const migration of migrations) {
+      if (migration.id === "005_call_summary_state") break;
+      database.exec(migration.sql);
+      record.run(migration.id, "2026-07-17T00:00:00.000Z");
+    }
+    database.prepare("INSERT INTO people (id, display_name, created_at) VALUES (?, ?, ?)").run("person-a", "Avery", "2026-07-17T00:00:00.000Z");
+    database.prepare(
+      `INSERT INTO calls (id, person_id, provider_call_id, status, started_at, ended_at, summary_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run("call-with-summary", "person-a", null, "completed", "2026-07-17T00:00:00.000Z", "2026-07-17T00:01:00.000Z", '{"recap":"Avery gardens."}');
+    database.prepare(
+      `INSERT INTO calls (id, person_id, provider_call_id, status, started_at, ended_at, summary_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run("call-without-summary", "person-a", null, "completed", "2026-07-17T00:02:00.000Z", "2026-07-17T00:03:00.000Z", null);
+
+    migrate(database);
+
+    assert.equal(
+      (database.prepare("SELECT summary_state FROM calls WHERE id = ?").get("call-with-summary") as { summary_state: string }).summary_state,
+      "ready",
+    );
+    assert.equal(
+      (database.prepare("SELECT summary_state FROM calls WHERE id = ?").get("call-without-summary") as { summary_state: string }).summary_state,
+      "not_requested",
+    );
+  } finally {
+    database.close();
+  }
+});
+
 test("007 memory category migration preserves legacy rows and constrains new categories", () => {
   const database = new Database(":memory:");
   database.pragma("foreign_keys = ON");
