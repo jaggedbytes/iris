@@ -64,7 +64,7 @@ The seed grants summary-retention consent for the demo person. To run the full d
 4. Hang up. The dashboard polls while the summary is processing, then shows a recap when it is ready. Check that the timeline contains readable call, summary, and SMS/delivery cards with no private transport data.
 5. Create a trusted-contact link with `request_check_in`, open it in a separate session, and select **Ask Iris to check in**. The timeline should attribute the request by the contact’s display name.
 
-For a simulated uncertain send, use the operator recovery card only after confirming delivery with the recipient or Twilio: **Retry SMS** can create a duplicate message by design.
+If delivery is confirmed, do not retry. If delivery remains uncertain, an operator may use the recovery card after accepting that **Retry SMS** can create a duplicate message by design.
 
 ## Repository layout
 
