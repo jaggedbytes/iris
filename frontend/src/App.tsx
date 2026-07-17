@@ -35,7 +35,9 @@ function summaryLabel(summaryRecap: string | null, summaryState: DashboardOvervi
   if (summaryState === "processing") return "Preparing call summary…";
   if (summaryState === "unavailable") return "Call summary unavailable";
   if (summaryRecap) return summaryRecap;
-  return summaryState === "ready" ? "Saved call summary" : "No saved summary yet";
+  if (summaryState === "ready") return "Saved call summary";
+  // not_requested: hangups with no transcript never enter extraction.
+  return "No conversation to summarize";
 }
 
 function phoneNumberLabel(person: DashboardOverview["person"]) {
