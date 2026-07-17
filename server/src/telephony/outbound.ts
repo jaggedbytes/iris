@@ -67,21 +67,27 @@ export class OutboundCallManager {
    * stream token and Realtime session are gone. End known Twilio calls before
    * clearing their local guard; if Twilio cannot confirm that termination, keep
    * the row active to avoid creating a duplicate call.
+   *
+   * Calls with no persisted provider SID are also retained: a crash can occur
+   * after Twilio accepts the call but before the SID is written, so releasing
+   * that guard could place a second simultaneous call.
    */
   async recoverInterruptedCalls() {
     const recovered: string[] = [];
     for (const call of this.repositories.listActiveCalls()) {
-      if (call.providerCallId) {
-        try {
-          await this.terminateProviderCall(call.providerCallId);
-        } catch (error) {
-          const status = (error as { status?: unknown }).status;
-          // A missing Call SID is already terminal at Twilio, so local recovery
-          // can proceed. Other failures leave the guard in place for safety.
-          if (status !== 404) {
-            console.error("Unable to terminate interrupted Twilio call", { callId: call.id, error: error instanceof Error ? error.message : "unknown error" });
-            continue;
-          }
+      if (!call.providerCallId) {
+        console.error("Retaining active call without provider SID; Twilio presence is uncertain", { callId: call.id });
+        continue;
+      }
+      try {
+        await this.terminateProviderCall(call.providerCallId);
+      } catch (error) {
+        const status = (error as { status?: unknown }).status;
+        // A missing Call SID is already terminal at Twilio, so local recovery
+        // can proceed. Other failures leave the guard in place for safety.
+        if (status !== 404) {
+          console.error("Unable to terminate interrupted Twilio call", { callId: call.id, error: error instanceof Error ? error.message : "unknown error" });
+          continue;
         }
       }
       if (!this.repositories.interruptActiveCall(call.id)) continue;

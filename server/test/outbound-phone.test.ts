@@ -181,10 +181,11 @@ test("startup recovery ends known Twilio calls before releasing their local guar
   repositories.createPerson({ id: "person-b", displayName: "Blair", phoneE164: "+15550003333" });
   repositories.createCall({ id: "call-without-sid", personId: "person-b", status: "attempted" });
   const terminated: string[] = [];
+  let providerCalls = 0;
   const manager = new OutboundCallManager(
     repositories,
     telephonyConfig,
-    { calls: { create: async () => ({ sid: "CAnew" }) } },
+    { calls: { create: async () => { providerCalls += 1; return { sid: "CAnew" }; } } },
     () => new FakeSocket(),
     undefined,
     undefined,
@@ -194,12 +195,17 @@ test("startup recovery ends known Twilio calls before releasing their local guar
     async (providerCallId) => { terminated.push(providerCallId); },
   );
   try {
-    assert.deepEqual(await manager.recoverInterruptedCalls(), ["call-with-sid", "call-without-sid"]);
+    assert.deepEqual(await manager.recoverInterruptedCalls(), ["call-with-sid"]);
     assert.deepEqual(terminated, ["CAknown"]);
     assert.equal(repositories.listCalls("person-a")[0].status, "failed");
-    assert.equal(repositories.listCalls("person-b")[0].status, "failed");
     assert.equal(repositories.listEvents("person-a").some((event) => event.type === "call.interrupted"), true);
-    assert.equal(repositories.listEvents("person-b").some((event) => event.type === "call.interrupted"), true);
+
+    // No SID means Twilio may still have accepted the call before persistence.
+    // Retain the guard rather than interrupting and risking a duplicate dial.
+    assert.equal(repositories.listCalls("person-b")[0].status, "attempted");
+    assert.equal(repositories.listEvents("person-b").some((event) => event.type === "call.interrupted"), false);
+    assert.equal((await manager.startCall("person-b")).callId, "call-without-sid");
+    assert.equal(providerCalls, 0);
   } finally { closeDatabase(database); }
 });
 
