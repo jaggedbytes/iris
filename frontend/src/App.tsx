@@ -33,6 +33,7 @@ function formatDate(value: string) {
 
 function summaryLabel(summaryRecap: string | null, summaryState: DashboardOverview["calls"][number]["summaryState"]) {
   if (summaryState === "processing") return "Preparing call summary…";
+  if (summaryState === "unavailable") return "Call summary unavailable";
   if (summaryRecap) return summaryRecap;
   return summaryState === "ready" ? "Saved call summary" : "No saved summary yet";
 }
