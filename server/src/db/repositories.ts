@@ -51,6 +51,7 @@ type CallRow = {
   ended_at: string | null;
   summary_json: string | null;
   summary_state: CallSummaryState;
+  requested_by_contact_id: string | null;
 };
 
 type EventRow = {
@@ -112,6 +113,7 @@ const toCall = (row: CallRow): CallRecord => ({
   endedAt: row.ended_at,
   summaryJson: row.summary_json,
   summaryState: row.summary_state,
+  requestedByContactId: row.requested_by_contact_id,
 });
 
 const toEvent = (row: EventRow): TimelineEvent => ({
@@ -291,12 +293,13 @@ export function createRepositories(database: IrisDatabase) {
       personId: string;
       status: CallStatus;
       providerCallId?: string | null;
+      requestedByContactId?: string | null;
     }) {
       const startedAt = now();
       database
         .prepare(
-          `INSERT INTO calls (id, person_id, provider_call_id, status, started_at)
-           VALUES (?, ?, ?, ?, ?)`,
+          `INSERT INTO calls (id, person_id, provider_call_id, status, started_at, requested_by_contact_id)
+           VALUES (?, ?, ?, ?, ?, ?)`,
         )
         .run(
           input.id,
@@ -304,6 +307,7 @@ export function createRepositories(database: IrisDatabase) {
           input.providerCallId ?? null,
           input.status,
           startedAt,
+          input.requestedByContactId ?? null,
         );
       const row = database
         .prepare("SELECT * FROM calls WHERE id = ?")
@@ -311,7 +315,8 @@ export function createRepositories(database: IrisDatabase) {
       return toCall(row);
     },
 
-    reserveOutboundCall(input: { id: string; personId: string }) {
+    reserveOutboundCall(input: { id: string; personId: string; requestedByContactId?: string | null }) {
+      const requestedByContactId = input.requestedByContactId ?? null;
       return database.transaction(() => {
         const active = database
           .prepare(
@@ -321,9 +326,22 @@ export function createRepositories(database: IrisDatabase) {
              LIMIT 1`,
           )
           .get(input.personId) as CallRow | undefined;
-        if (active) return { call: toCall(active), created: false };
-        const call = this.createCall({ id: input.id, personId: input.personId, status: "attempted" });
-        return { call, created: true };
+        if (active) {
+          // Only treat the reservation as idempotent when the same requester
+          // (admin => null, or the same trusted contact) is asking again.
+          // A different requester must not silently inherit an in-flight call.
+          if (active.requested_by_contact_id === requestedByContactId) {
+            return { call: toCall(active), created: false as const, conflict: false as const };
+          }
+          return { call: toCall(active), created: false as const, conflict: true as const };
+        }
+        const call = this.createCall({
+          id: input.id,
+          personId: input.personId,
+          status: "attempted",
+          requestedByContactId,
+        });
+        return { call, created: true as const, conflict: false as const };
       })();
     },
 

@@ -59,6 +59,41 @@ test("reserves one active outbound call per person until it reaches a terminal s
   }
 });
 
+test("scopes active outbound-call reuse to the requesting trusted contact", () => {
+  const { database, repositories } = createTestRepositories();
+
+  try {
+    repositories.createPerson({ id: "person-a", displayName: "Avery" });
+    repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Robin", relationship: "daughter", phoneE164: "+15550002222" });
+    repositories.createTrustedContact({ id: "contact-b", personId: "person-a", displayName: "Sam", relationship: "son", phoneE164: "+15550003333" });
+
+    const first = repositories.reserveOutboundCall({ id: "call-a", personId: "person-a", requestedByContactId: "contact-a" });
+    assert.equal(first.created, true);
+    assert.equal(first.conflict, false);
+    assert.equal(first.call.requestedByContactId, "contact-a");
+
+    // Same contact re-requesting is idempotent reuse, not a conflict.
+    const sameContact = repositories.reserveOutboundCall({ id: "call-b", personId: "person-a", requestedByContactId: "contact-a" });
+    assert.equal(sameContact.created, false);
+    assert.equal(sameContact.conflict, false);
+    assert.equal(sameContact.call.id, "call-a");
+
+    // A different contact must not inherit the in-flight call.
+    const otherContact = repositories.reserveOutboundCall({ id: "call-c", personId: "person-a", requestedByContactId: "contact-b" });
+    assert.equal(otherContact.created, false);
+    assert.equal(otherContact.conflict, true);
+    assert.equal(otherContact.call.id, "call-a");
+
+    // An admin (no requester) also conflicts with a contact-owned call.
+    const admin = repositories.reserveOutboundCall({ id: "call-d", personId: "person-a" });
+    assert.equal(admin.created, false);
+    assert.equal(admin.conflict, true);
+    assert.equal(admin.call.id, "call-a");
+  } finally {
+    closeDatabase(database);
+  }
+});
+
 test("uses the latest summary-retention consent state", () => {
   const { database, repositories } = createTestRepositories();
 

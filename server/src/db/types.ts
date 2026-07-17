@@ -50,6 +50,7 @@ export type CallRecord = {
   endedAt: string | null;
   summaryJson: string | null;
   summaryState: CallSummaryState;
+  requestedByContactId: string | null;
 };
 
 export type TimelineEvent = {

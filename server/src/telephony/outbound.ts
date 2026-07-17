@@ -36,6 +36,13 @@ export const DEFAULT_MEDIA_HANDSHAKE_TIMEOUT_MS = 10_000;
 export type CallSummaryProcessor = { process(input: { callId: string; personId: string; transcript: TranscriptTurn[] }): Promise<void> };
 export type ProviderCallTerminator = (providerCallId: string) => Promise<void>;
 export type TrustedCheckInRequester = { trustedContactId: string; displayName: string };
+
+export class ActiveCallConflictError extends Error {
+  constructor(readonly callId: string) {
+    super("A call is already in progress for this person.");
+    this.name = "ActiveCallConflictError";
+  }
+}
 export type CallScheduler = {
   setTimeout(callback: () => void, delayMs: number): { unref?: () => void };
   clearTimeout(handle: unknown): void;
@@ -108,7 +115,9 @@ export class OutboundCallManager {
     if (!person?.phoneE164) throw new Error("The person does not have a phone number.");
     const callId = randomUUID();
     const streamToken = randomBytes(32).toString("base64url");
-    const reservation = this.repositories.reserveOutboundCall({ id: callId, personId });
+    const requestedByContactId = checkInRequester?.trustedContactId ?? null;
+    const reservation = this.repositories.reserveOutboundCall({ id: callId, personId, requestedByContactId });
+    if (reservation.conflict) throw new ActiveCallConflictError(reservation.call.id);
     if (!reservation.created) return { callId: reservation.call.id };
     this.repositories.createEvent({ id: randomUUID(), personId, callId, type: "call.attempted", payload: { transport: "twilio" } });
     if (checkInRequester) {

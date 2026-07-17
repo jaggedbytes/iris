@@ -5,7 +5,7 @@ import { Router, type Request, type Response } from "express";
 import type { IrisRepositories } from "./db/repositories.js";
 import type { AccessScope, CallRecord, TimelineEvent } from "./db/types.js";
 import type { ActionDispatcher } from "./actions.js";
-import type { TrustedCheckInRequester } from "./telephony/outbound.js";
+import { ActiveCallConflictError, type TrustedCheckInRequester } from "./telephony/outbound.js";
 
 const ALL_SCOPES: AccessScope[] = [
   "view_summaries",
@@ -314,6 +314,10 @@ export function createDashboardRouter(context: DashboardContext) {
       const call = await context.startOutboundCall({ personId: request.params.personId, checkInRequester });
       response.status(202).json({ ...call, status: "attempted" });
     } catch (error) {
+      if (error instanceof ActiveCallConflictError) {
+        response.status(409).json({ error: "A call is already in progress for this person." });
+        return;
+      }
       console.error("Unable to initiate outbound call", error);
       response.status(502).json({ error: "Iris could not place the call." });
     }

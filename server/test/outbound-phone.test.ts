@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import test from "node:test";
 
 import { createDatabase, createRepositories, closeDatabase } from "../src/db/index.js";
-import { OutboundCallManager, type CallScheduler } from "../src/telephony/outbound.js";
+import { ActiveCallConflictError, OutboundCallManager, type CallScheduler } from "../src/telephony/outbound.js";
 import { friendlyRequesterToken, type SocketLike } from "../src/telephony/call-session.js";
 
 class FakeSocket extends EventEmitter implements SocketLike {
@@ -143,10 +143,47 @@ test("reuses an active call instead of creating a duplicate provider call", asyn
   } finally { closeDatabase(database); }
 });
 
+test("rejects a second trusted contact instead of reusing another contact's active call", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Robin", relationship: "daughter", phoneE164: "+15550002222" });
+  repositories.createTrustedContact({ id: "contact-b", personId: "person-a", displayName: "Sam", relationship: "son", phoneE164: "+15550003333" });
+  let providerCalls = 0;
+  let resolveProviderCall: ((value: { sid: string }) => void) | undefined;
+  const manager = new OutboundCallManager(
+    repositories,
+    telephonyConfig,
+    { calls: { create: async () => {
+      providerCalls += 1;
+      return new Promise<{ sid: string }>((resolve) => { resolveProviderCall = resolve; });
+    } } },
+    () => new FakeSocket(),
+  );
+  try {
+    const firstPending = manager.startCall("person-a", { trustedContactId: "contact-a", displayName: "Robin" });
+
+    await assert.rejects(
+      manager.startCall("person-a", { trustedContactId: "contact-b", displayName: "Sam" }),
+      (error: unknown) => error instanceof ActiveCallConflictError,
+    );
+    assert.equal(providerCalls, 1);
+    assert.equal(repositories.listCalls("person-a").length, 1);
+
+    // The same contact still reuses the in-flight call idempotently.
+    const sameContact = await manager.startCall("person-a", { trustedContactId: "contact-a", displayName: "Robin" });
+    resolveProviderCall?.({ sid: "CA1" });
+    const first = await firstPending;
+    assert.equal(sameContact.callId, first.callId);
+    assert.equal(providerCalls, 1);
+  } finally { closeDatabase(database); }
+});
+
 test("family-requested calls retain the display name and use a friendly spoken token", async () => {
   const database = createDatabase(":memory:");
   const repositories = createRepositories(database);
   repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Mary Jane", relationship: "daughter", phoneE164: "+15550002222" });
   const realtime = new FakeSocket();
   const manager = new OutboundCallManager(
     repositories,

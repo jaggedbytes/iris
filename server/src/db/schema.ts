@@ -168,4 +168,11 @@ export const migrations = [
         CHECK(summary_state IN ('not_requested', 'processing', 'ready', 'unavailable'));
     `,
   },
+  {
+    id: "006_call_requested_by_contact",
+    sql: `
+      ALTER TABLE calls ADD COLUMN requested_by_contact_id TEXT
+        REFERENCES trusted_contacts(id) ON DELETE SET NULL;
+    `,
+  },
 ] as const;

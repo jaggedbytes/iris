@@ -4,6 +4,7 @@ import test from "node:test";
 
 import { createApp } from "../src/app.js";
 import { closeDatabase, createDatabase, createRepositories } from "../src/db/index.js";
+import { ActiveCallConflictError } from "../src/telephony/outbound.js";
 
 const adminToken = "dashboard-test-admin-token";
 const hash = (value: string) =>
@@ -88,6 +89,31 @@ test("permits check-in calls for admins and request_check_in trusted contacts", 
       { personId: "person-a", checkInRequester: undefined },
       { personId: "person-a", checkInRequester: { trustedContactId: "contact-a", displayName: "Robin" } },
     ]);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("returns a conflict when another requester already has a call in progress", async () => {
+  const fixture = await createDashboardServer({
+    startOutboundCall: async () => {
+      throw new ActiveCallConflictError("call-in-progress");
+    },
+  });
+
+  try {
+    fixture.repositories.grantAccess({
+      id: "grant-checkin", personId: "person-a", trustedContactId: "contact-a",
+      scopes: ["request_check_in"], tokenHash: hash("checkin-token"),
+      expiresAt: futureExpiry(),
+    });
+
+    const response = await fetch(`${fixture.url}/api/dashboard/people/person-a/calls`, {
+      method: "POST", headers: { Authorization: "Bearer checkin-token" },
+    });
+    assert.equal(response.status, 409);
+    const body = (await response.json()) as { error: string };
+    assert.match(body.error, /already in progress/i);
   } finally {
     fixture.close();
   }
