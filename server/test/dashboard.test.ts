@@ -128,13 +128,39 @@ test("allows an admin to view a person overview", async () => {
       { headers: { Authorization: `Bearer ${adminToken}` } },
     );
     assert.equal(response.status, 200);
-    const body = (await response.json()) as { person: { id: string; phoneE164: string | null }; contacts: unknown[] };
+    const body = (await response.json()) as {
+      person: { id: string; phoneE164: string | null; phoneNumberStatus: string };
+      contacts: unknown[];
+    };
     assert.equal(body.person.id, "person-a");
     assert.equal(body.person.phoneE164, "+15550009999");
+    assert.equal(body.person.phoneNumberStatus, "configured");
     assert.equal(body.contacts.length, 1);
   } finally {
     fixture.close();
   }
+});
+
+test("distinguishes an unconfigured operator number from a trusted-contact redaction", async () => {
+  const fixture = await createDashboardServer();
+  try {
+    fixture.repositories.grantAccess({
+      id: "grant-summaries", personId: "person-a", trustedContactId: "contact-a",
+      scopes: ["view_summaries"], tokenHash: hash("summaries-token"), expiresAt: futureExpiry(),
+    });
+    const [operatorResponse, trustedResponse] = await Promise.all([
+      fetch(`${fixture.url}/api/dashboard/people/person-b/overview`, {
+        headers: { Authorization: `Bearer ${adminToken}` },
+      }),
+      fetch(`${fixture.url}/api/dashboard/people/person-a/overview`, {
+        headers: { Authorization: "Bearer summaries-token" },
+      }),
+    ]);
+    const operatorBody = (await operatorResponse.json()) as { person: { phoneE164: string | null; phoneNumberStatus: string } };
+    const trustedBody = (await trustedResponse.json()) as { person: { phoneE164: string | null; phoneNumberStatus: string } };
+    assert.deepEqual(operatorBody.person, { id: "person-b", displayName: "Blair", phoneE164: null, phoneNumberStatus: "not_configured" });
+    assert.deepEqual(trustedBody.person, { id: "person-a", displayName: "Avery", phoneE164: null, phoneNumberStatus: "private" });
+  } finally { fixture.close(); }
 });
 
 test("projects dashboard data without SMS, provider, transcript, or audit fields", async () => {
@@ -143,13 +169,21 @@ test("projects dashboard data without SMS, provider, transcript, or audit fields
   const secretPhone = "+15551234567";
   const secretProviderId = "SM-private-provider-id";
   const secretTranscript = "private raw transcript words";
+  const secretFact = "private durable fact";
+  const secretAnchor = "private recall anchor";
 
   try {
     fixture.repositories.createCall({
       id: "call-private", personId: "person-a", providerCallId: "CA-private-provider-id", status: "completed",
     });
     fixture.repositories.completeCall({
-      id: "call-private", status: "completed", summaryJson: JSON.stringify({ recap: "A safe recap." }),
+      id: "call-private", status: "completed", summaryJson: JSON.stringify({
+        recap: "A safe recap.",
+        facts: [secretFact],
+        people: [{ name: "Private person", relationshipOrContext: "private context" }],
+        unresolvedTopics: ["private topic"],
+        recallAnchor: secretAnchor,
+      }),
     });
     fixture.repositories.createActionRequest({
       id: "action-private", personId: "person-a", feature: "bridge", actionType: "sms", idempotencyKey: "private-action",
@@ -174,10 +208,12 @@ test("projects dashboard data without SMS, provider, transcript, or audit fields
       actions: Array<Record<string, unknown>>;
     };
     const serialized = JSON.stringify(body);
-    for (const value of [secretSmsBody, secretPhone, secretProviderId, secretTranscript, "CA-private-provider-id"]) {
+    for (const value of [secretSmsBody, secretPhone, secretProviderId, secretTranscript, secretFact, secretAnchor, "Private person", "private context", "private topic", "CA-private-provider-id", "summaryJson"]) {
       assert.equal(serialized.includes(value), false);
     }
     assert.equal("providerCallId" in body.calls[0], false);
+    assert.equal("summaryJson" in body.calls[0], false);
+    assert.equal(body.calls[0].summaryRecap, "A safe recap.");
     assert.equal("payload" in body.actions[0], false);
     assert.deepEqual(body.events.find((event) => event.type === "call.completed")?.payload, {});
     assert.deepEqual(body.events.find((event) => event.type === "bridge.sms_sent")?.payload, { contactName: "Robin" });

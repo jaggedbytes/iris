@@ -8,12 +8,17 @@ export type DashboardPrincipal =
     };
 
 export type DashboardOverview = {
-  person: { id: string; displayName: string; phoneE164: string | null };
+  person: {
+    id: string;
+    displayName: string;
+    phoneE164: string | null;
+    phoneNumberStatus: "configured" | "not_configured" | "private";
+  };
   calls: Array<{
     id: string;
     status: string;
     startedAt: string;
-    summaryJson: string | null;
+    summaryRecap: string | null;
     summaryState: "not_requested" | "processing" | "ready" | "unavailable";
   }>;
   activeCall: { id: string; status: "attempted" | "answered"; startedAt: string } | null;

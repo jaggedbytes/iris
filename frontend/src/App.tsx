@@ -31,15 +31,16 @@ function formatDate(value: string) {
   }).format(new Date(value));
 }
 
-function summaryLabel(summaryJson: string | null, summaryState: DashboardOverview["calls"][number]["summaryState"]) {
+function summaryLabel(summaryRecap: string | null, summaryState: DashboardOverview["calls"][number]["summaryState"]) {
   if (summaryState === "processing") return "Preparing call summary…";
-  if (!summaryJson) return "No saved summary yet";
-  try {
-    const summary = JSON.parse(summaryJson) as { recap?: string };
-    return summary.recap ?? "Saved call summary";
-  } catch {
-    return "Saved call summary";
-  }
+  if (summaryRecap) return summaryRecap;
+  return summaryState === "ready" ? "Saved call summary" : "No saved summary yet";
+}
+
+function phoneNumberLabel(person: DashboardOverview["person"]) {
+  if (person.phoneNumberStatus === "private") return "Phone number is private in this view.";
+  if (person.phoneNumberStatus === "not_configured") return "Phone number not configured";
+  return person.phoneE164 ?? "Phone number unavailable";
 }
 
 function timelineCopy(event: DashboardOverview["events"][number], personName: string) {
@@ -329,7 +330,7 @@ export function App() {
           <section className="overview-card profile-card">
             <p className="card-kicker">Person</p>
             <h2>{overview.person.displayName}</h2>
-            <p>{overview.person.phoneE164 ?? "Phone number not configured"}</p>
+            <p>{phoneNumberLabel(overview.person)}</p>
             <p className="privacy-note">Only consented summaries are retained. Call audio and raw transcripts are not saved.</p>
           </section>
 
@@ -345,7 +346,7 @@ export function App() {
               <ol className="item-list">
                 {overview.calls.map((call) => (
                   <li key={call.id}>
-                    <strong>{summaryLabel(call.summaryJson, call.summaryState)}</strong>
+                    <strong>{summaryLabel(call.summaryRecap, call.summaryState)}</strong>
                     <span>{formatDate(call.startedAt)} · {call.status}</span>
                   </li>
                 ))}

@@ -141,12 +141,27 @@ function timelineEvent(event: TimelineEvent) {
   return { id: event.id, type: event.type, payload, occurredAt: event.occurredAt };
 }
 
+function summaryRecap(summaryJson: string | null) {
+  if (!summaryJson) return null;
+  try {
+    const summary = JSON.parse(summaryJson) as unknown;
+    if (!summary || typeof summary !== "object" || Array.isArray(summary)) return null;
+    const recap = stringField((summary as Record<string, unknown>).recap, 500)?.trim();
+    return recap || null;
+  } catch {
+    return null;
+  }
+}
+
 function callOverview(call: CallRecord) {
   return {
     id: call.id,
     status: call.status,
     startedAt: call.startedAt,
-    summaryJson: call.summaryJson,
+    // summaryJson contains memory-extraction fields which are intentionally
+    // unavailable to dashboard consumers. The recap is the sole call-summary
+    // field exposed here; recall anchors never cross this boundary.
+    summaryRecap: summaryRecap(call.summaryJson),
     summaryState: call.summaryState,
   };
 }
@@ -201,8 +216,18 @@ export function createDashboardRouter(context: DashboardContext) {
       // scope-appropriate projection regardless of their granted view scopes.
       person:
         principal.role === "admin"
-          ? person
-          : { id: person.id, displayName: person.displayName, phoneE164: null },
+          ? {
+              id: person.id,
+              displayName: person.displayName,
+              phoneE164: person.phoneE164,
+              phoneNumberStatus: person.phoneE164 ? "configured" : "not_configured",
+            }
+          : {
+              id: person.id,
+              displayName: person.displayName,
+              phoneE164: null,
+              phoneNumberStatus: "private",
+            },
       calls: hasScope(principal, "view_summaries")
         ? context.repositories.listCalls(personId).map(callOverview)
         : [],
