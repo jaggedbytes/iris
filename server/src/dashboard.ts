@@ -3,7 +3,7 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypt
 import { Router, type Request, type Response } from "express";
 
 import type { IrisRepositories } from "./db/repositories.js";
-import type { AccessScope } from "./db/types.js";
+import type { AccessScope, CallRecord, TimelineEvent } from "./db/types.js";
 import type { ActionDispatcher } from "./actions.js";
 import type { TrustedCheckInRequester } from "./telephony/outbound.js";
 
@@ -108,6 +108,49 @@ function requestedScopes(value: unknown) {
   return new Set(scopes).size === scopes.length ? scopes : null;
 }
 
+function stringField(value: unknown, maxLength = 160) {
+  return typeof value === "string" && value.length <= maxLength ? value : undefined;
+}
+
+function objectPayload(value: unknown) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+/**
+ * Events are intentionally projected, not passed through. Event payloads are
+ * durable implementation data; the timeline is a human-facing privacy
+ * boundary and must never inherit new fields by accident.
+ */
+function timelineEvent(event: TimelineEvent) {
+  const source = objectPayload(event.payload);
+  let payload: Record<string, string> = {};
+
+  if (event.type === "check_in.requested") {
+    const requesterDisplayName = stringField(source.requesterDisplayName);
+    payload = requesterDisplayName ? { requesterDisplayName } : {};
+  } else if (event.type === "bridge.sms_sent") {
+    const contactName = stringField(source.contactName);
+    payload = contactName ? { contactName } : {};
+  } else if (event.type === "sms.delivery_updated") {
+    const status = stringField(source.status, 48);
+    payload = status ? { status } : {};
+  }
+
+  return { id: event.id, type: event.type, payload, occurredAt: event.occurredAt };
+}
+
+function callOverview(call: CallRecord) {
+  return {
+    id: call.id,
+    status: call.status,
+    startedAt: call.startedAt,
+    summaryJson: call.summaryJson,
+    summaryState: call.summaryState,
+  };
+}
+
 export function createDashboardRouter(context: DashboardContext) {
   const router = Router();
 
@@ -161,13 +204,13 @@ export function createDashboardRouter(context: DashboardContext) {
           ? person
           : { id: person.id, displayName: person.displayName, phoneE164: null },
       calls: hasScope(principal, "view_summaries")
-        ? context.repositories.listCalls(personId)
+        ? context.repositories.listCalls(personId).map(callOverview)
         : [],
       activeCall: activeCall
         ? { id: activeCall.id, status: activeCall.status, startedAt: activeCall.startedAt }
         : null,
       events: hasScope(principal, "view_events")
-        ? context.repositories.listEvents(personId)
+        ? context.repositories.listEvents(personId).map(timelineEvent)
         : [],
       contacts:
         principal.role === "admin"
@@ -175,7 +218,15 @@ export function createDashboardRouter(context: DashboardContext) {
           : [],
       actions:
         principal.role === "admin"
-          ? context.repositories.listActionRequests(personId)
+          ? context.repositories.listActionRequests(personId).map((action) => ({
+              id: action.id,
+              feature: action.feature,
+              actionType: action.actionType,
+              status: action.status,
+              createdAt: action.createdAt,
+              updatedAt: action.updatedAt,
+              dispatchState: context.repositories.getActionDispatch(action.id)?.state ?? null,
+            }))
           : [],
       permissions:
         principal.role === "admin" ? ALL_SCOPES : principal.scopes,

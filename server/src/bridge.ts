@@ -34,7 +34,7 @@ export class BridgeService {
     this.actions.approve(actionId, "spoken_call");
     const dispatched = await this.actions.dispatchSms(actionId);
     if (!dispatched) return { ok: false, contactName: contact.displayName };
-    this.repositories.createEvent({ id: randomUUID(), personId: input.personId, type: "bridge.sms_sent", payload: { trustedContactId: contact.id, contactName: contact.displayName, actionId } });
+    this.repositories.createEvent({ id: randomUUID(), personId: input.personId, type: "bridge.sms_sent", payload: { contactName: contact.displayName } });
     return { ok: true, contactName: contact.displayName };
   }
 }

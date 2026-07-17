@@ -70,28 +70,35 @@ export class CallSummaryPipeline {
         }),
       });
       if (!response.ok) {
-        this.repositories.updateCallSummaryState({ id: input.callId, summaryState: "unavailable" });
+        this.markUnavailable(input);
         return;
       }
       const body = await response.json() as { output_text?: string; output?: Array<{ content?: Array<{ text?: string }> }> };
       const raw = body.output_text ?? body.output?.flatMap((item) => item.content ?? []).find((content) => content.text)?.text;
       if (!raw) {
-        this.repositories.updateCallSummaryState({ id: input.callId, summaryState: "unavailable" });
+        this.markUnavailable(input);
         return;
       }
       const summary = JSON.parse(raw) as unknown;
       // Recheck revocable consent immediately before every durable write.
       if (!valid(summary) || summary.status === "insufficient_signal" || !this.repositories.hasActiveConsent(input.personId, "summary_retention")) {
-        this.repositories.updateCallSummaryState({ id: input.callId, summaryState: "unavailable" });
+        this.markUnavailable(input);
         return;
       }
       this.repositories.saveCallSummary({ id: input.callId, summaryJson: JSON.stringify(summary) });
       for (const fact of summary.facts) this.repositories.createMemory({ id: randomUUID(), personId: input.personId, sourceCallId: input.callId, category: "durable_fact", payload: { fact } });
       for (const person of summary.people) this.repositories.createMemory({ id: randomUUID(), personId: input.personId, sourceCallId: input.callId, category: "named_person", payload: person });
       for (const topic of summary.unresolvedTopics) this.repositories.createMemory({ id: randomUUID(), personId: input.personId, sourceCallId: input.callId, category: "unresolved_topic", payload: { topic } });
+      this.repositories.createEvent({ id: randomUUID(), personId: input.personId, callId: input.callId, type: "call.summary_ready", payload: {} });
     } catch {
       // Raw transcript text is never logged or persisted on extraction failure.
-      this.repositories.updateCallSummaryState({ id: input.callId, summaryState: "unavailable" });
+      this.markUnavailable(input);
+    }
+  }
+
+  private markUnavailable(input: { callId: string; personId: string }) {
+    if (this.repositories.updateCallSummaryState({ id: input.callId, summaryState: "unavailable" })) {
+      this.repositories.createEvent({ id: randomUUID(), personId: input.personId, callId: input.callId, type: "call.summary_unavailable", payload: {} });
     }
   }
 }

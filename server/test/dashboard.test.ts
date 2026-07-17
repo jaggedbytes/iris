@@ -111,6 +111,55 @@ test("allows an admin to view a person overview", async () => {
   }
 });
 
+test("projects dashboard data without SMS, provider, transcript, or audit fields", async () => {
+  const fixture = await createDashboardServer();
+  const secretSmsBody = "Private SMS body must never reach the dashboard";
+  const secretPhone = "+15551234567";
+  const secretProviderId = "SM-private-provider-id";
+  const secretTranscript = "private raw transcript words";
+
+  try {
+    fixture.repositories.createCall({
+      id: "call-private", personId: "person-a", providerCallId: "CA-private-provider-id", status: "completed",
+    });
+    fixture.repositories.completeCall({
+      id: "call-private", status: "completed", summaryJson: JSON.stringify({ recap: "A safe recap." }),
+    });
+    fixture.repositories.createActionRequest({
+      id: "action-private", personId: "person-a", feature: "bridge", actionType: "sms", idempotencyKey: "private-action",
+      payload: { to: secretPhone, body: secretSmsBody },
+    });
+    fixture.repositories.createEvent({
+      id: "event-private", personId: "person-a", type: "call.completed",
+      payload: { providerMessageId: secretProviderId, transcript: secretTranscript, body: secretSmsBody, to: secretPhone },
+    });
+    fixture.repositories.createEvent({
+      id: "event-safe", personId: "person-a", type: "bridge.sms_sent",
+      payload: { contactName: "Robin", actionId: "action-private", providerMessageId: secretProviderId },
+    });
+
+    const response = await fetch(`${fixture.url}/api/dashboard/people/person-a/overview`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json() as {
+      calls: Array<Record<string, unknown>>;
+      events: Array<{ type: string; payload: unknown }>;
+      actions: Array<Record<string, unknown>>;
+    };
+    const serialized = JSON.stringify(body);
+    for (const value of [secretSmsBody, secretPhone, secretProviderId, secretTranscript, "CA-private-provider-id"]) {
+      assert.equal(serialized.includes(value), false);
+    }
+    assert.equal("providerCallId" in body.calls[0], false);
+    assert.equal("payload" in body.actions[0], false);
+    assert.deepEqual(body.events.find((event) => event.type === "call.completed")?.payload, {});
+    assert.deepEqual(body.events.find((event) => event.type === "bridge.sms_sent")?.payload, { contactName: "Robin" });
+  } finally {
+    fixture.close();
+  }
+});
+
 test("shares only a current call state with a check-in-only trusted contact", async () => {
   const fixture = await createDashboardServer();
   try {

@@ -373,15 +373,15 @@ export function createRepositories(database: IrisDatabase) {
     saveCallSummary(input: { id: string; summaryJson: string }) {
       // Summary persistence happens after the call is already completed, so it
       // must not touch ended_at (doing so would inflate the recorded duration).
-      database
+      return database
         .prepare("UPDATE calls SET summary_json = ?, summary_state = 'ready' WHERE id = ?")
-        .run(input.summaryJson, input.id);
+        .run(input.summaryJson, input.id).changes === 1;
     },
 
     updateCallSummaryState(input: { id: string; summaryState: Exclude<CallSummaryState, "ready"> }) {
-      database
-        .prepare("UPDATE calls SET summary_state = ? WHERE id = ?")
-        .run(input.summaryState, input.id);
+      return database
+        .prepare("UPDATE calls SET summary_state = ? WHERE id = ? AND summary_state <> ?")
+        .run(input.summaryState, input.id, input.summaryState).changes === 1;
     },
 
     updateCall(input: {
@@ -591,7 +591,9 @@ export function createRepositories(database: IrisDatabase) {
     },
 
     updateMessageDelivery(providerMessageId: string, deliveryStatus: string) {
-      database.prepare("UPDATE messages SET delivery_status = ? WHERE provider_message_id = ?").run(deliveryStatus, providerMessageId);
+      return database
+        .prepare("UPDATE messages SET delivery_status = ? WHERE provider_message_id = ? AND delivery_status <> ?")
+        .run(deliveryStatus, providerMessageId, deliveryStatus).changes === 1;
     },
 
     listEvents(personId: string) {

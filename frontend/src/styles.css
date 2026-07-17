@@ -83,6 +83,7 @@ h2 { margin: 0; font-size: 1.35rem; }
 .item-list li { display: grid; gap: 0.2rem; padding: 0.8rem; border-radius: 0.7rem; background: #f0eee7; }
 .item-list strong, .contact-list strong { font-size: 0.9rem; }
 .item-list span, .contact-list span, .magic-link span { color: #6d766f; font-size: 0.78rem; }
+.item-list .warning-note { color: #8a4f18; font-weight: 700; }
 .contact-list li { padding: 0.75rem 0; border-bottom: 1px solid #e4dfd5; }
 .contact-list li:last-child { border-bottom: 0; }
 .contact-list li > div { display: grid; gap: 0.15rem; }

@@ -47,7 +47,13 @@ export class ActionDispatcher {
         statusCallback: `${this.config.publicBaseUrl}/api/actions/${actionId}/messages/status`,
       });
       const finalized = this.repositories.finalizeActionDispatch({ id: randomUUID(), personId: action.personId, actionRequestId: action.id, providerMessageId: message.sid, deliveryStatus: message.status });
-      if (finalized) this.audit(action.personId, actionId, "action.dispatched", { channel: "sms", providerMessageId: message.sid, status: message.status });
+      if (finalized) this.audit(
+        action.personId,
+        actionId,
+        "action.dispatched",
+        { channel: "sms", providerMessageId: message.sid, status: message.status },
+        { channel: "sms", status: message.status },
+      );
       return { messageId: message.sid, status: message.status };
     } catch (error) {
       const providerError = error as TwilioRequestError;
@@ -70,11 +76,32 @@ export class ActionDispatcher {
   recordDelivery(actionId: string, providerMessageId: string, status: string) {
     const action = this.repositories.getActionRequest(actionId);
     const dispatch = this.repositories.getActionDispatch(actionId);
+    let deliveryChanged = false;
     if (action && (dispatch?.state === "dispatching" || dispatch?.state === "needs_review")) {
       const finalized = this.repositories.finalizeActionDispatch({ id: randomUUID(), personId: action.personId, actionRequestId: action.id, providerMessageId, deliveryStatus: status });
-      if (finalized) this.audit(action.personId, actionId, "action.reconciled", { channel: "sms", providerMessageId, status });
+      if (finalized) {
+        deliveryChanged = true;
+        this.audit(
+          action.personId,
+          actionId,
+          "action.reconciled",
+          { channel: "sms", providerMessageId, status },
+          { channel: "sms", status },
+        );
+      }
     }
-    this.repositories.updateMessageDelivery(providerMessageId, status);
+    if (action && this.repositories.updateMessageDelivery(providerMessageId, status)) {
+      deliveryChanged = true;
+    }
+    if (action && deliveryChanged) {
+      this.audit(
+        action.personId,
+        actionId,
+        "sms.delivery_updated",
+        { channel: "sms", providerMessageId, status },
+        { channel: "sms", status },
+      );
+    }
   }
 
   /**
@@ -105,8 +132,8 @@ export class ActionDispatcher {
     return !!signature && twilio.validateRequest(this.config.twilioAuthToken, signature, `${this.config.publicBaseUrl}${path}`, body);
   }
 
-  private audit(personId: string, actionId: string, action: string, metadata: unknown) {
-    this.repositories.createEvent({ id: randomUUID(), personId, type: action, payload: metadata });
-    this.repositories.createAuditEvent({ id: randomUUID(), personId, action, targetId: actionId, metadata });
+  private audit(personId: string, actionId: string, action: string, auditMetadata: unknown, timelineMetadata: unknown = auditMetadata) {
+    this.repositories.createEvent({ id: randomUUID(), personId, type: action, payload: timelineMetadata });
+    this.repositories.createAuditEvent({ id: randomUUID(), personId, action, targetId: actionId, metadata: auditMetadata });
   }
 }

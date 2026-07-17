@@ -40,6 +40,8 @@ test("persists only validated user-stated summary memory", async () => {
     assert.deepEqual(summary.facts, ["Avery has a friend named Ruth."]);
     assert.equal(repositories.listCalls("person-a")[0].summaryState, "ready");
     assert.equal(repositories.listCalls("person-a")[0].endedAt, endedAt);
+    assert.deepEqual(repositories.listEvents("person-a").find((event) => event.type === "call.summary_ready")?.payload, {});
+    assert.equal(JSON.stringify(repositories.listEvents("person-a")).includes("My friend Ruth lives nearby."), false);
     const tables = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND sql LIKE '%transcript%'").all();
     assert.deepEqual(tables, []);
   } finally { closeDatabase(database); }
@@ -79,5 +81,6 @@ test("does not save refused, malformed, or insufficient extraction", async () =>
     });
     assert.equal(repositories.listCalls("person-a")[0].summaryJson, null);
     assert.equal(repositories.listCalls("person-a")[0].summaryState, "unavailable");
+    assert.deepEqual(repositories.listEvents("person-a").find((event) => event.type === "call.summary_unavailable")?.payload, {});
   } finally { closeDatabase(database); }
 });

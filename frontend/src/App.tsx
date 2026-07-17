@@ -42,6 +42,45 @@ function summaryLabel(summaryJson: string | null, summaryState: DashboardOvervie
   }
 }
 
+function timelineCopy(event: DashboardOverview["events"][number], personName: string) {
+  const payload = event.payload && typeof event.payload === "object"
+    ? event.payload as { requesterDisplayName?: unknown; contactName?: unknown; status?: unknown }
+    : {};
+  const requester = typeof payload.requesterDisplayName === "string" ? payload.requesterDisplayName : "Family";
+  const contact = typeof payload.contactName === "string" ? payload.contactName : "a trusted contact";
+  const deliveryStatus = typeof payload.status === "string" ? payload.status : "updated";
+
+  switch (event.type) {
+    case "check_in.requested": return `${requester} requested an Iris check-in`;
+    case "call.attempted": return `Iris started calling ${personName}`;
+    case "call.answered": return `${personName} answered Iris’s call`;
+    case "call.stream_started": return "Iris began listening";
+    case "call.completed": return "Call ended";
+    case "call.failed": return "Call could not be completed";
+    case "call.interrupted": return "Call was interrupted";
+    case "call.summary_ready": return "Call summary is ready";
+    case "call.summary_unavailable": return "No call summary was saved";
+    case "bridge.sms_sent": return `Iris sent a Bridge message to ${contact}`;
+    case "action.dispatched": return "Message accepted by the SMS provider";
+    case "action.reconciled": return "Message delivery was reconciled";
+    case "sms.delivery_updated": return `Message delivery ${deliveryStatus}`;
+    case "action.dispatch_needs_review": return "A message send needs operator review";
+    case "action.failed": return "A message could not be sent";
+    default: return "Iris activity updated";
+  }
+}
+
+function actionCopy(action: DashboardOverview["actions"][number]) {
+  if (action.dispatchState === "needs_review") {
+    return "Delivery is uncertain. Confirm with the recipient or Twilio before retrying.";
+  }
+  if (action.dispatchState === "retryable") return "This send can be retried manually.";
+  if (action.dispatchState === "dispatching") return "Waiting for delivery confirmation.";
+  if (action.dispatchState === "failed" || action.status === "failed") return "This message was not sent.";
+  if (action.dispatchState === "dispatched") return "Message sent.";
+  return action.status === "pending_approval" ? "Waiting for approval." : action.status;
+}
+
 export function App() {
   const [token, setToken] = useState(() => {
     const magicLinkToken = readMagicLinkToken();
@@ -58,6 +97,7 @@ export function App() {
   const [isLoading, setIsLoading] = useState(Boolean(token));
   const [magicLink, setMagicLink] = useState<string | null>(null);
   const [isCallRequesting, setIsCallRequesting] = useState(false);
+  const [dispatchingActionId, setDispatchingActionId] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const magicLinkRequestId = useRef(0);
   const overviewRequestId = useRef(0);
@@ -186,6 +226,19 @@ export function App() {
     }
   };
 
+  const retrySms = async (actionId: string) => {
+    setDispatchingActionId(actionId);
+    setError(null);
+    try {
+      await dashboardJson(`/api/dashboard/actions/${actionId}/dispatch`, token, { method: "POST" });
+      setRefreshVersion((current) => current + 1);
+    } catch (dispatchError) {
+      setError(dispatchError instanceof Error ? dispatchError.message : "Iris could not retry the message.");
+    } finally {
+      setDispatchingActionId(null);
+    }
+  };
+
   const activeCall = overview?.activeCall ?? null;
   const callStateLabel = activeCall?.status === "answered"
     ? "Call in progress"
@@ -303,7 +356,7 @@ export function App() {
               <ol className="item-list">
                 {overview.events.map((event) => (
                   <li key={event.id}>
-                    <strong>{event.type.replaceAll(".", " · ")}</strong>
+                    <strong>{timelineCopy(event, overview.person.displayName)}</strong>
                     <span>{formatDate(event.occurredAt)}</span>
                   </li>
                 ))}
@@ -352,7 +405,20 @@ export function App() {
                 {overview.actions.map((action) => (
                   <li key={action.id}>
                     <strong>{action.feature} · {action.actionType}</strong>
-                    <span>{action.status}</span>
+                    <span>{actionCopy(action)}</span>
+                    {action.dispatchState === "needs_review" && (
+                      <>
+                        <span className="warning-note">Retrying may create a duplicate message.</span>
+                        <button
+                          className="secondary-button"
+                          type="button"
+                          disabled={dispatchingActionId === action.id}
+                          onClick={() => void retrySms(action.id)}
+                        >
+                          {dispatchingActionId === action.id ? "Retrying…" : "Retry SMS"}
+                        </button>
+                      </>
+                    )}
                   </li>
                 ))}
               </ol>

@@ -35,6 +35,8 @@ export type DashboardOverview = {
     actionType: string;
     status: string;
     createdAt: string;
+    updatedAt: string;
+    dispatchState: "dispatching" | "dispatched" | "failed" | "retryable" | "needs_review" | null;
   }>;
   permissions: string[];
 };
