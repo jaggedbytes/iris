@@ -27,6 +27,18 @@ export function friendlyRequesterToken(displayName: string) {
   return displayName.trim().split(/\s+/).find(Boolean) ?? null;
 }
 
+/** Parse tool arguments as a plain object; JSON null/arrays/primitives are invalid. */
+function parseToolArgumentsObject(argumentsJson: string): Record<string, unknown> | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(argumentsJson) as unknown;
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  return parsed as Record<string, unknown>;
+}
+
 export const createRealtimeSocket: RealtimeSocketFactory = ({
   apiKey,
   safetyIdentifier,
@@ -366,8 +378,8 @@ export class CallSession {
       this.sendToolOutput(callId, { ok: false, error: "tool_unavailable" });
       return;
     }
-    let args: { trusted_contact_id?: unknown; message?: unknown };
-    try { args = JSON.parse(argumentsJson) as typeof args; } catch {
+    const args = parseToolArgumentsObject(argumentsJson);
+    if (!args) {
       this.sendToolOutput(callId, { ok: false, error: "invalid_arguments" });
       return;
     }
@@ -382,12 +394,8 @@ export class CallSession {
       this.sendToolOutput(callId, { ok: false, error: "tool_unavailable" });
       return;
     }
-    let args: { situation?: unknown };
-    try { args = JSON.parse(argumentsJson) as typeof args; } catch {
-      this.sendToolOutput(callId, { ok: false, error: "invalid_arguments" });
-      return;
-    }
-    if (typeof args.situation !== "string") {
+    const args = parseToolArgumentsObject(argumentsJson);
+    if (!args || typeof args.situation !== "string") {
       this.sendToolOutput(callId, { ok: false, error: "invalid_arguments" });
       return;
     }
@@ -400,8 +408,8 @@ export class CallSession {
       this.sendToolOutput(callId, { ok: false, error: "tool_unavailable" });
       return;
     }
-    let args: { trusted_contact_id?: unknown };
-    try { args = JSON.parse(argumentsJson) as typeof args; } catch {
+    const args = parseToolArgumentsObject(argumentsJson);
+    if (!args) {
       this.sendToolOutput(callId, { ok: false, error: "invalid_arguments" });
       return;
     }

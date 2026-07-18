@@ -418,6 +418,14 @@ test("Shield tools dispatch only from completed response.done calls and preserve
       type: "response.done",
       response: { id: "response-shield-malformed", output: [{ type: "function_call", status: "completed", name: "shield_assess", call_id: "shield-assess-malformed", arguments: "not-json" }] },
     })));
+    realtime.emit("message", Buffer.from(JSON.stringify({
+      type: "response.done",
+      response: { id: "response-shield-null-assess", output: [{ type: "function_call", status: "completed", name: "shield_assess", call_id: "shield-assess-null", arguments: "null" }] },
+    })));
+    realtime.emit("message", Buffer.from(JSON.stringify({
+      type: "response.done",
+      response: { id: "response-shield-null-alert", output: [{ type: "function_call", status: "completed", name: "shield_send_alert", call_id: "shield-alert-null", arguments: "null" }] },
+    })));
 
     await new Promise((resolve) => setImmediate(resolve));
     const outputs = realtime.sent.slice(1)
@@ -430,7 +438,10 @@ test("Shield tools dispatch only from completed response.done calls and preserve
       { callId: "shield-alert-valid", result: { ok: true, contactName: "Robin" } },
       { callId: "shield-alert-unlisted", result: { ok: false, error: "unavailable_contact" } },
       { callId: "shield-assess-malformed", result: { ok: false, error: "invalid_arguments" } },
+      { callId: "shield-assess-null", result: { ok: false, error: "invalid_arguments" } },
+      { callId: "shield-alert-null", result: { ok: false, error: "invalid_arguments" } },
     ].sort((left, right) => left.callId.localeCompare(right.callId)));
+    assert.notEqual(repositories.listCalls("person-a")[0].status, "failed");
     assert.deepEqual(sentSms, [{ to: "+15550003333", body: "Iris is speaking with Avery about something that feels urgent or suspicious. Please check in with them when you can." }]);
     assert.equal(repositories.listActionRequests("person-a").length, 1);
     assert.deepEqual(
