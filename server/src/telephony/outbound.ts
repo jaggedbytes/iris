@@ -237,7 +237,9 @@ export class OutboundCallManager {
       clearHandshakeTimer();
       const bridgeContext = this.bridge?.context(active.personId);
       const shield = this.shield ? {
-        contacts: this.repositories.listTrustedContacts(active.personId).map((contact) => ({ id: contact.id, name: contact.displayName })),
+        contacts: this.repositories.listTrustedContacts(active.personId)
+          .filter((contact) => Boolean(contact.phoneE164))
+          .map((contact) => ({ id: contact.id, name: contact.displayName })),
         alertText: createShieldAlertText(this.repositories.getPerson(active.personId)?.displayName ?? "the person"),
         assess: (situation: string) => this.shield!.assess({ callId, personId: active.personId, situation }),
         sendAlert: (trustedContactId: string, approvalId: string) => this.shield!.sendApprovedAlert({ callId, personId: active.personId, trustedContactId, approvalId }),

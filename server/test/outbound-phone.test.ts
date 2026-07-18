@@ -366,6 +366,7 @@ test("Shield tools dispatch only from completed response.done calls and preserve
   const repositories = createRepositories(database);
   repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
   repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Robin", relationship: "daughter", phoneE164: "+15550003333" });
+  repositories.createTrustedContact({ id: "contact-no-phone", personId: "person-a", displayName: "NoPhone", relationship: "friend" });
   let assessments = 0;
   const sentSms: Array<{ to: string; body: string }> = [];
   const dispatcher = new ActionDispatcher(repositories, telephonyConfig, { messages: { create: async (input) => {
@@ -393,6 +394,7 @@ test("Shield tools dispatch only from completed response.done calls and preserve
     const sessionUpdate = JSON.parse(realtime.sent[0]) as { session: { instructions: string; tools: Array<{ name: string }> } };
     assert.match(sessionUpdate.session.instructions, /Never state that something is definitely a scam/);
     assert.match(sessionUpdate.session.instructions, /Iris is speaking with Avery about something that feels urgent or suspicious\. Please check in with them when you can\./);
+    assert.match(sessionUpdate.session.instructions, /Shield context: the listed trusted contacts are \[\{"id":"contact-a","name":"Robin"\}\]/);
     assert.deepEqual(sessionUpdate.session.tools.map((tool) => tool.name).sort(), ["bridge_send_sms", "end_call", "shield_assess", "shield_send_alert"].sort());
 
     const assessmentArguments = '{"situation":"A caller claiming to be my bank says I must buy gift cards immediately."}';
