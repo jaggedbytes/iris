@@ -1,8 +1,8 @@
-# Phone-first Bridge architecture
+# Phone-first Bridge + Shield architecture
 
 ## Goal
 
-Demonstrate a safe, phone-first Bridge workflow: an operator or authorized trusted contact requests an outbound Iris check-in, Iris has a warm conversation, and consented continuity and approval-gated messaging appear in a privacy-preserving dashboard.
+Demonstrate safe, phone-first Bridge and Shield workflows: an operator or authorized trusted contact requests an outbound Iris check-in, Iris has a warm conversation with consented continuity, and Iris can offer a scam-safety pause followed by an explicitly approved, privacy-safe alert to a trusted contact.
 
 ```mermaid
 flowchart LR
@@ -27,6 +27,8 @@ flowchart LR
 - Trusted contacts receive only their scoped dashboard projection. A family-requested call derives attribution from the grant, never a client-supplied name.
 - Timeline payloads are allowlisted: no SMS body, phone number, provider ID, raw transcript, or audit metadata reaches the browser.
 - SMS dispatch is approval-gated and uses a durable outbox. Uncertain sends require an explicit operator retry because retrying can duplicate a message.
+- Shield assessment is live-only at Iris: it sends only the Realtime-provided situation summary to `gpt-5.6-terra` with `store: false` (disabling OpenAI application-state / Logs retention for that request), then discards both input and assessment output locally. Prompts and outputs may still be retained under OpenAI’s default abuse-monitoring policy unless the organization has Zero Data Retention or Modified Abuse Monitoring. A pause recommendation persists only `shield.pause_offered` with an empty payload.
+- A Shield alert uses one server-owned fixed SMS template and the same approval-gated outbox. `shield.alert_sent` is created only after Twilio accepts the send and projects only the trusted contact’s display name. Scenario text, red flags, assessment output, SMS body, phone number, and provider ID never enter the dashboard.
 - Persona text is versioned in source so its changes are reviewable.
 
 ## Call completion
@@ -38,6 +40,6 @@ An ordinary handset hangup remains a fully supported completion path. Both paths
 ## Deliberate deferrals
 
 - Browser WebRTC remains as a separate persona experiment, not the demo transport.
-- Shield and Translator are not yet vertical slices.
+- Translator is not yet a vertical slice.
 - There is no automatic retry for uncertain SMS dispatches.
 - Call recording, raw transcript storage, and analytics persistence are intentionally out of scope.

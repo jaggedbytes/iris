@@ -1,8 +1,8 @@
 # Iris
 
-Iris is a phone-first AI companion for older adults. The current demo proves the Bridge path: a family member or operator can ask Iris to check in by phone, Iris can recall consented conversation continuity, and an explicitly approved message can reach a trusted contact.
+Iris is a phone-first AI companion for older adults. The current demo proves Bridge and Shield: a family member or operator can ask Iris to check in by phone, Iris can recall consented conversation continuity, and Iris can offer a calm scam-safety pause with an explicitly approved, privacy-safe trusted-contact alert.
 
-## Phone-first Bridge demo
+## Phone-first Bridge + Shield demo
 
 The dashboard starts an outbound Twilio call. Twilio opens a bidirectional Media Stream to the Iris server, which relays G.711 μ-law audio to OpenAI Realtime without application-side transcoding. Raw audio is never persisted. Transcript text is held only in memory for consent-gated summary extraction after the call, then discarded—it is never written to SQLite. Conversation-derived durable data is limited to a consented structured summary and user-stated memory; required operational audit and outbox records may also be retained.
 
@@ -52,7 +52,7 @@ cd frontend && npm run dev
 
 Open the frontend and enter `IRIS_ADMIN_TOKEN` to use the operator view. Operators can create an expiring, revocable trusted-contact link.
 
-## Phone-first Bridge smoke test
+## Phone-first Bridge + Shield smoke test
 
 Set the Twilio and `IRIS_PUBLIC_BASE_URL` values in `server/.env`. The public URL must terminate at this server and be reachable by Twilio over HTTPS/WSS (a tunnel is fine for local development).
 
@@ -66,11 +66,12 @@ The seed grants summary-retention consent for the demo person. To run the full d
 
 1. Start the server and frontend, sign in as the operator, and press **Call now**. Answer the authorized demo phone; Iris should be audible and the dashboard should move from **Calling…** to **Call in progress**.
 2. In the first call, state one durable, non-sensitive fact—for example, “I enjoy gardening.” If demonstrating Bridge, ask Iris to send an approved SMS to a trusted contact.
-3. Say a clear goodbye such as “Goodbye, Iris.” Iris should offer a brief farewell and end the call. The dashboard polls while the summary is processing, then shows only a recap and safe timeline cards.
-4. Place a second call. With active consent and a successful first extraction, Iris may offer one gentle gardening-related opener. This is an invitation, not a claim of certainty; do not expect it if the first call had insufficient signal or ASR captured the fact poorly.
-5. In a separate short call, hang up the handset normally without saying goodbye. The existing Twilio disconnect path still finalizes the call; `end_call` is additive, not required for every demo.
-6. Create a trusted-contact link with `request_check_in`, open it in a separate session, and select **Ask Iris to check in**. The timeline should attribute the request by the contact’s display name.
-7. Check that no recap card or timeline payload exposes a recall anchor, raw transcript, SMS body, phone number, or provider identifier.
+3. For Shield, describe an observable scenario such as: “Someone claiming to be my bank says I need to buy gift cards right now and read them a passcode.” Iris should recommend a pause and using a known official number. After Iris names the selected contact and reads the exact fixed check-in alert, give direct approval. The timeline should show only **Iris offered a safety pause** and **Iris asked Evelyn Carter to check in**—never the scenario or assessment.
+4. Say a clear goodbye such as “Goodbye, Iris.” Iris should offer a brief farewell and end the call. The dashboard polls while the summary is processing, then shows only a recap and safe timeline cards.
+5. Place a second call. With active consent and a successful first extraction, Iris may offer one gentle gardening-related opener. This is an invitation, not a claim of certainty; do not expect it if the first call had insufficient signal or ASR captured the fact poorly.
+6. In a separate short call, hang up the handset normally without saying goodbye. The existing Twilio disconnect path still finalizes the call; `end_call` is additive, not required for every demo.
+7. Create a trusted-contact link with `request_check_in` and `view_events`, open it in a separate session, and select **Ask Iris to check in**. The timeline should attribute the request by the contact’s display name and may show the two generic Shield cards.
+8. Check that no recap card or timeline payload exposes a recall anchor, raw transcript, SMS body, phone number, provider identifier, Shield scenario, or red-flag label.
 
 Twilio accepting an SMS is not proof of delivery. US long-code delivery may require A2P 10DLC brand/campaign registration, which is external to Iris. ASR can also misrecognize names or short utterances, so use an ordinary durable fact for the recall demonstration. If delivery is confirmed, do not retry. If delivery remains uncertain, an operator may use the recovery card after accepting that **Retry SMS** can create a duplicate message by design.
 

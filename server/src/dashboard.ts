@@ -133,6 +133,9 @@ function timelineEvent(event: TimelineEvent) {
   } else if (event.type === "bridge.sms_sent") {
     const contactName = stringField(source.contactName);
     payload = contactName ? { contactName } : {};
+  } else if (event.type === "shield.alert_sent") {
+    const contactName = stringField(source.contactName);
+    payload = contactName ? { contactName } : {};
   } else if (event.type === "sms.delivery_updated") {
     const status = stringField(source.status, 48);
     payload = status ? { status } : {};

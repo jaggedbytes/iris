@@ -7,6 +7,8 @@ import type { IrisRepositories } from "../db/repositories.js";
 import { CallSession, createRealtimeSocket, type CallSessionScheduler, type RealtimeSocketFactory, type SocketLike } from "./call-session.js";
 import type { TranscriptTurn } from "../summary.js";
 import type { BridgeService } from "../bridge.js";
+import type { ShieldService } from "../shield.js";
+import { createShieldAlertText } from "../shield.js";
 
 type TwilioClient = {
   calls: {
@@ -65,6 +67,7 @@ export class OutboundCallManager {
         .update({ status: "completed" });
     },
     private readonly farewellCloseTimeoutMs = config.farewellCloseTimeoutMs,
+    private readonly shield?: ShieldService,
   ) {}
 
   /**
@@ -233,6 +236,14 @@ export class OutboundCallManager {
       socket.off("message", awaitStart);
       clearHandshakeTimer();
       const bridgeContext = this.bridge?.context(active.personId);
+      const shield = this.shield ? {
+        contacts: this.repositories.listTrustedContacts(active.personId)
+          .filter((contact) => Boolean(contact.phoneE164))
+          .map((contact) => ({ id: contact.id, name: contact.displayName })),
+        alertText: createShieldAlertText(this.repositories.getPerson(active.personId)?.displayName ?? "the person"),
+        assess: (situation: string) => this.shield!.assess({ callId, personId: active.personId, situation }),
+        sendAlert: (trustedContactId: string, approvalId: string) => this.shield!.sendApprovedAlert({ callId, personId: active.personId, trustedContactId, approvalId }),
+      } : undefined;
       active.session = new CallSession(
         callId,
         active.streamToken,
@@ -251,6 +262,7 @@ export class OutboundCallManager {
         active.checkInRequester?.displayName,
         this.scheduler,
         this.farewellCloseTimeoutMs,
+        shield,
       );
       socket.emit("message", raw);
       this.repositories.createEvent({ id: randomUUID(), personId: active.personId, callId, type: "call.stream_started", payload: { transport: "twilio_media_stream" } });

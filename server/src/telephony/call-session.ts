@@ -27,6 +27,18 @@ export function friendlyRequesterToken(displayName: string) {
   return displayName.trim().split(/\s+/).find(Boolean) ?? null;
 }
 
+/** Parse tool arguments as a plain object; JSON null/arrays/primitives are invalid. */
+function parseToolArgumentsObject(argumentsJson: string): Record<string, unknown> | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(argumentsJson) as unknown;
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  return parsed as Record<string, unknown>;
+}
+
 export const createRealtimeSocket: RealtimeSocketFactory = ({
   apiKey,
   safetyIdentifier,
@@ -71,6 +83,13 @@ type PendingFarewell = {
   timer: unknown | null;
 };
 
+type ShieldSession = {
+  contacts: Array<{ id: string; name: string }>;
+  alertText: string;
+  assess: (situation: string) => Promise<unknown>;
+  sendAlert: (contactId: string, approvalId: string) => Promise<{ ok: boolean; contactName?: string }>;
+};
+
 /**
  * Owns one live phone conversation. Its transcript buffer is intentionally
  * private and is cleared on every close; no raw text ever crosses this class's
@@ -105,6 +124,7 @@ export class CallSession {
     private readonly checkInRequesterDisplayName?: string,
     private readonly scheduler: CallSessionScheduler = systemScheduler,
     private readonly farewellCloseTimeoutMs = DEFAULT_FAREWELL_CLOSE_TIMEOUT_MS,
+    private readonly shield?: ShieldSession,
   ) {
     twilioSocket.on("message", (data: Buffer | string) => this.handleTwilioMessage(data));
     twilioSocket.on("close", () => this.close("completed"));
@@ -154,6 +174,9 @@ export class CallSession {
           this.bridge
             ? `Bridge context:\n${this.bridge.context}\n\nAuthoritative phone-session instructions: the configured bridge_send_sms tool is allowed only after the person clearly says yes to sending a specific message to a listed trusted contact. First say who you would contact and what you would send, then ask for approval. Never call it on ambiguity. ${this.bridge.recallAnchor ? `After any family-requested greeting, offer exactly one gentle invitation based on this prior user-stated thread: ${JSON.stringify(this.bridge.recallAnchor)}. Do not present it as certain, and do not repeat it later in the call.` : "Do not volunteer prior conversation details at the opening of this call."}`
             : "",
+          this.shield
+            ? `Shield context: the listed trusted contacts are ${JSON.stringify(this.shield.contacts)}. The exact fixed Shield alert text is ${JSON.stringify(this.shield.alertText)}. Authoritative phone-session instructions: use shield_assess only after the person explicitly describes observable suspicious pressure. Summarize only what they said; never invent or embellish details. Its result can guide you to calmly recommend a pause, name only the returned observable signals, and suggest verifying through a known official number or speaking with a trusted person. Never state that something is definitely a scam, ask for credentials, or give financial, legal, or medical advice. The shield_send_alert tool is allowed only after Iris has stated the selected contact's name and that exact fixed alert text, and the person has then clearly and directly approved sending that exact alert to that listed contact. Never call it on ambiguity or for an unlisted contact.`
+            : "",
           "Authoritative phone-session instructions: use end_call only after an unmistakable direct goodbye or explicit request to end the call. Never use it for silence, hesitation, or ambiguous language. When using it, give a brief warm farewell after the tool result.",
         ].filter(Boolean).join("\n\n");
         this.realtime.send(
@@ -165,6 +188,10 @@ export class CallSession {
               output_modalities: ["audio"],
               tools: [
                 ...(this.bridge ? [{ type: "function", name: "bridge_send_sms", description: "Send an explicitly approved SMS to a listed trusted contact.", parameters: { type: "object", additionalProperties: false, required: ["trusted_contact_id", "message"], properties: { trusted_contact_id: { type: "string" }, message: { type: "string", maxLength: 480 } } } }] : []),
+                ...(this.shield ? [
+                  { type: "function", name: "shield_assess", description: "Assess an explicitly stated suspicious or urgent situation before offering a safety pause. Do not use for vague or inferred concerns.", parameters: { type: "object", additionalProperties: false, required: ["situation"], properties: { situation: { type: "string", minLength: 1, maxLength: 2000 } } } },
+                  { type: "function", name: "shield_send_alert", description: "Send the fixed Shield check-in alert only after direct spoken approval of the named recipient and exact alert text.", parameters: { type: "object", additionalProperties: false, required: ["trusted_contact_id"], properties: { trusted_contact_id: { type: "string" } } } },
+                ] : []),
                 { type: "function", name: "end_call", description: "End the phone call after the person has clearly said goodbye or explicitly asked to end it.", parameters: { type: "object", additionalProperties: false, required: [], properties: {} } },
               ],
               audio: {
@@ -335,6 +362,14 @@ export class CallSession {
       }
       return;
     }
+    if (name === "shield_assess") {
+      await this.dispatchShieldAssessment(callId, argumentsJson);
+      return;
+    }
+    if (name === "shield_send_alert") {
+      await this.dispatchShieldAlert(callId, argumentsJson);
+      return;
+    }
     if (name !== "bridge_send_sms") {
       this.sendToolOutput(callId, { ok: false, error: "unsupported_tool" });
       return;
@@ -343,14 +378,46 @@ export class CallSession {
       this.sendToolOutput(callId, { ok: false, error: "tool_unavailable" });
       return;
     }
-    let args: { trusted_contact_id?: unknown; message?: unknown };
-    try { args = JSON.parse(argumentsJson) as typeof args; } catch {
+    const args = parseToolArgumentsObject(argumentsJson);
+    if (!args) {
       this.sendToolOutput(callId, { ok: false, error: "invalid_arguments" });
       return;
     }
     const result = typeof args.trusted_contact_id === "string" && typeof args.message === "string"
       ? await this.bridge!.dispatch(args.trusted_contact_id, args.message, callId).catch(() => ({ ok: false }))
       : { ok: false };
+    this.sendToolOutput(callId, result);
+  }
+
+  private async dispatchShieldAssessment(callId: string, argumentsJson: string) {
+    if (!this.shield) {
+      this.sendToolOutput(callId, { ok: false, error: "tool_unavailable" });
+      return;
+    }
+    const args = parseToolArgumentsObject(argumentsJson);
+    if (!args || typeof args.situation !== "string") {
+      this.sendToolOutput(callId, { ok: false, error: "invalid_arguments" });
+      return;
+    }
+    const result = await this.shield.assess(args.situation).catch(() => ({ status: "unavailable", redFlags: [], safeNextStep: null }));
+    this.sendToolOutput(callId, result);
+  }
+
+  private async dispatchShieldAlert(callId: string, argumentsJson: string) {
+    if (!this.shield) {
+      this.sendToolOutput(callId, { ok: false, error: "tool_unavailable" });
+      return;
+    }
+    const args = parseToolArgumentsObject(argumentsJson);
+    if (!args) {
+      this.sendToolOutput(callId, { ok: false, error: "invalid_arguments" });
+      return;
+    }
+    if (typeof args.trusted_contact_id !== "string" || !this.shield.contacts.some((contact) => contact.id === args.trusted_contact_id)) {
+      this.sendToolOutput(callId, { ok: false, error: "unavailable_contact" });
+      return;
+    }
+    const result = await this.shield.sendAlert(args.trusted_contact_id, callId).catch(() => ({ ok: false }));
     this.sendToolOutput(callId, result);
   }
 
