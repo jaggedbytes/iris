@@ -463,6 +463,10 @@
     @apply grid gap-[0.2rem] rounded-[0.7rem] bg-subtle p-[0.8rem];
   }
 
+  .empty-state-card {
+    @apply mt-[1.2rem] rounded-[0.7rem] bg-subtle p-[0.8rem];
+  }
+
   .item-list strong {
     @apply text-[0.9rem];
   }

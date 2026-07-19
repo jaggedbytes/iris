@@ -988,8 +988,8 @@ function DashboardApp() {
             <div className="card-heading">
               <div className="card-header">
                 <p className="card-kicker">Recent calls</p>
-                <h2>Conversation continuity</h2>
-                <p className="privacy-note">Review the gentle care recaps shared from recent conversations.</p>
+                <h2>Calls with Iris</h2>
+                <p className="privacy-note">Shared notes from recent calls.</p>
               </div>
               <span className="count-pill">{overview.calls.length}</span>
             </div>
@@ -1019,7 +1019,9 @@ function DashboardApp() {
                 ))}
               </ol>
             ) : (
-              <p className="empty-state">Calls will appear here after the phone foundation is connected.</p>
+              <div className="empty-state-card">
+                <p className="empty-state">Shared notes from calls with Iris will appear here.</p>
+              </div>
             )}
           </section>
 
@@ -1041,7 +1043,7 @@ function DashboardApp() {
                 ))}
               </ol>
             ) : (
-              <p className="empty-state">Bridge, Shield, and Translator events will appear here.</p>
+              <p className="empty-state">Bridge, Shield, and Translator (WIP) events will appear here.</p>
             )}
           </section>
 
@@ -1308,8 +1310,8 @@ function DashboardApp() {
           <section className="overview-card actions-card">
             <div className="card-header">
               <p className="card-kicker">Actions</p>
-              <h2>Approval queue</h2>
-              <p className="privacy-note">Review text-message activity that needs your attention.</p>
+              <h2>Text messages</h2>
+              <p className="privacy-note">Message updates and anything that needs your attention.</p>
             </div>
             {overview.actions.length ? (
               <ol className="item-list">
@@ -1334,7 +1336,9 @@ function DashboardApp() {
                 ))}
               </ol>
             ) : (
-              <p className="empty-state">Approved actions will appear here before anything is sent.</p>
+              <div className="empty-state-card">
+                <p className="empty-state">No text-message updates yet.</p>
+              </div>
             )}
           </section>
             </>
