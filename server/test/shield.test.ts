@@ -17,6 +17,13 @@ function setup() {
   return { database, repositories };
 }
 
+function grantSmsOptIn(repositories: ReturnType<typeof createRepositories>, trustedContactId: string, phoneE164 = "+15550002222") {
+  repositories.recordTrustedContactSmsConsent({
+    id: `sms-consent-${trustedContactId}`, trustedContactId, phoneE164,
+    status: "granted", source: "web_form", disclosureVersion: "test",
+  });
+}
+
 test("Shield makes a strict ephemeral Terra assessment and records only a generic pause event", async () => {
   const { database, repositories } = setup();
   let requestInput: RequestInfo | URL | undefined;
@@ -112,6 +119,7 @@ test("Shield keeps refusals, malformed output, timeouts, and provider failures u
 test("Shield alert is fixed, approval-gated, idempotent, and exposes only the contact name in its event", async () => {
   const { database, repositories } = setup();
   repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Robin", relationship: "daughter", phoneE164: "+15550002222" });
+  grantSmsOptIn(repositories, "contact-a");
   const messages: Array<{ to: string; body: string }> = [];
   const dispatcher = new ActionDispatcher(repositories, { twilioAccountSid: "AC", twilioAuthToken: "token", twilioPhoneNumber: "+15550001111", publicBaseUrl: "https://iris.test" }, { messages: { create: async (input) => {
     messages.push({ to: input.to, body: input.body });
@@ -121,7 +129,7 @@ test("Shield alert is fixed, approval-gated, idempotent, and exposes only the co
   try {
     assert.deepEqual(await shield.sendApprovedAlert({ callId: "call-a", personId: "person-a", trustedContactId: "contact-a", approvalId: "tool-a" }), { ok: true, contactName: "Robin" });
     assert.deepEqual(await shield.sendApprovedAlert({ callId: "call-a", personId: "person-a", trustedContactId: "contact-a", approvalId: "tool-a" }), { ok: true, contactName: "Robin" });
-    assert.deepEqual(messages, [{ to: "+15550002222", body: "Iris is speaking with Avery about something that feels urgent or suspicious. Please check in with them when you can." }]);
+    assert.deepEqual(messages, [{ to: "+15550002222", body: "Iris: Iris is speaking with Avery about something that feels urgent or suspicious. Please check in with them when you can. Reply HELP for help. Reply STOP to opt out." }]);
     const action = repositories.listActionRequests("person-a")[0];
     assert.equal(action.feature, "shield");
     assert.equal(action.status, "dispatched");
@@ -140,6 +148,7 @@ test("Shield never creates an alert-sent event for invalid contacts or uncertain
   const { database, repositories } = setup();
   repositories.createTrustedContact({ id: "contact-no-phone", personId: "person-a", displayName: "Robin", relationship: "daughter" });
   repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Sam", relationship: "son", phoneE164: "+15550002222" });
+  grantSmsOptIn(repositories, "contact-a");
   let attempts = 0;
   const dispatcher = new ActionDispatcher(repositories, { twilioAccountSid: "AC", twilioAuthToken: "token", twilioPhoneNumber: "+15550001111", publicBaseUrl: "https://iris.test" }, { messages: { create: async () => {
     attempts += 1;
@@ -169,6 +178,7 @@ test("Shield never creates an alert-sent event for invalid contacts or uncertain
 test("Shield tool success follows a durable dispatched SMS even when timeline recording fails", async () => {
   const { database, repositories } = setup();
   repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Robin", relationship: "daughter", phoneE164: "+15550002222" });
+  grantSmsOptIn(repositories, "contact-a");
   const messages: Array<{ to: string; body: string }> = [];
   const dispatcher = new ActionDispatcher(repositories, { twilioAccountSid: "AC", twilioAuthToken: "token", twilioPhoneNumber: "+15550001111", publicBaseUrl: "https://iris.test" }, { messages: { create: async (input) => {
     messages.push({ to: input.to, body: input.body });
@@ -189,7 +199,7 @@ test("Shield tool success follows a durable dispatched SMS even when timeline re
     assert.equal(repositories.findActionRequestByIdempotencyKey("shield:tool-a")?.status, "dispatched");
     assert.deepEqual(repositories.listEvents("person-a").filter((event) => event.type === "shield.alert_sent"), []);
     assert.deepEqual(await shield.sendApprovedAlert({ callId: "call-a", personId: "person-a", trustedContactId: "contact-a", approvalId: "tool-a" }), { ok: true, contactName: "Robin" });
-    assert.deepEqual(messages, [{ to: "+15550002222", body: "Iris is speaking with Avery about something that feels urgent or suspicious. Please check in with them when you can." }]);
+    assert.deepEqual(messages, [{ to: "+15550002222", body: "Iris: Iris is speaking with Avery about something that feels urgent or suspicious. Please check in with them when you can. Reply HELP for help. Reply STOP to opt out." }]);
     assert.deepEqual(
       repositories.listEvents("person-a").filter((event) => event.type === "shield.alert_sent").map((event) => event.payload),
       [{ contactName: "Robin" }],

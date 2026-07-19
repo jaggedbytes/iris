@@ -6,6 +6,7 @@ import rateLimit from "express-rate-limit";
 import type { ActionDispatcher } from "./actions.js";
 import type { EnrollmentConfig } from "./config.js";
 import type { IrisRepositories } from "./db/repositories.js";
+import { formatIrisSms } from "./sms.js";
 
 const E164_PATTERN = /^\+[1-9]\d{7,14}$/;
 
@@ -18,7 +19,7 @@ function isE164(value: unknown): value is string {
 }
 
 export function createSmsOptInConfirmation(personDisplayName: string) {
-  return `Iris: You’re subscribed to care check-in and Shield alert texts for ${personDisplayName}. Msg frequency varies. Msg & data rates may apply. Reply HELP for help. Reply STOP to opt out.`;
+  return formatIrisSms(`You’re subscribed to care check-in and Shield alert texts for ${personDisplayName}. Msg frequency varies. Msg & data rates may apply.`)!;
 }
 
 export class EnrollmentService {

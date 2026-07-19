@@ -295,9 +295,10 @@ export function createDashboardRouter(context: DashboardContext) {
         principal.role === "admin"
           ? context.repositories.listTrustedContacts(personId).map((contact) => {
               const status = context.repositories.getTrustedContactSmsOptInStatus(contact.id);
+              const eligible = context.repositories.isTrustedContactSmsEligible(contact.id);
               return {
                 ...contact,
-                smsOptInStatus: status === "granted"
+                smsOptInStatus: status === "granted" && eligible
                   ? "opted_in"
                   : status === "revoked"
                     ? "opted_out"

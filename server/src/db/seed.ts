@@ -21,6 +21,16 @@ export function seedDemoFoundation(
     phoneE164: "+15555550101",
     relationship: "neighbor",
   });
+  // This non-routable fixture is explicitly opted in so automated demo flows
+  // exercise the same eligibility gate as a real web-form enrollment.
+  repositories.recordTrustedContactSmsConsent({
+    id: "consent-evelyn-sms-demo",
+    trustedContactId: "contact-evelyn",
+    phoneE164: "+15555550101",
+    status: "granted",
+    source: "demo_seed",
+    disclosureVersion: "demo-seed",
+  });
   repositories.recordConsent({
     id: "consent-summary-retention",
     personId,

@@ -34,11 +34,20 @@ const telephonyConfig = {
   twilioAccountSid: "ACtest",
   twilioAuthToken: "test-auth-token",
   twilioPhoneNumber: "+15550001111",
+  twilioMessagingServiceSid: "MGtest",
+  smsHelpText: "Iris support: Reply STOP to opt out.",
   publicBaseUrl: "https://iris.test",
   openaiApiKey: "test-openai-key",
   safetyIdentifier: "iris-test",
   farewellCloseTimeoutMs: 8_000,
 };
+
+function grantSmsOptIn(repositories: ReturnType<typeof createRepositories>, trustedContactId: string, phoneE164: string) {
+  repositories.recordTrustedContactSmsConsent({
+    id: `sms-consent-${trustedContactId}`, trustedContactId, phoneE164,
+    status: "granted", source: "web_form", disclosureVersion: "test",
+  });
+}
 
 test("outbound calls use a token-bound μ-law stream and discard live transcript state", async () => {
   const database = createDatabase(":memory:");
@@ -319,6 +328,7 @@ test("Bridge SMS runs once from a completed response.done function call", async 
   const repositories = createRepositories(database);
   repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
   repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Robin", relationship: "daughter", phoneE164: "+15550003333" });
+  grantSmsOptIn(repositories, "contact-a", "+15550003333");
   repositories.recordConsent({ id: "consent-a", personId: "person-a", kind: "summary_retention", status: "granted", source: "test" });
   let sends = 0;
   const dispatcher = new ActionDispatcher(repositories, telephonyConfig, { messages: { create: async () => { sends += 1; return { sid: "SM123", status: "queued" }; } } });
@@ -366,6 +376,7 @@ test("Shield tools dispatch only from completed response.done calls and preserve
   const repositories = createRepositories(database);
   repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
   repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Robin", relationship: "daughter", phoneE164: "+15550003333" });
+  grantSmsOptIn(repositories, "contact-a", "+15550003333");
   repositories.createTrustedContact({ id: "contact-no-phone", personId: "person-a", displayName: "NoPhone", relationship: "friend" });
   let assessments = 0;
   const sentSms: Array<{ to: string; body: string }> = [];
@@ -444,7 +455,7 @@ test("Shield tools dispatch only from completed response.done calls and preserve
       { callId: "shield-alert-null", result: { ok: false, error: "invalid_arguments" } },
     ].sort((left, right) => left.callId.localeCompare(right.callId)));
     assert.notEqual(repositories.listCalls("person-a")[0].status, "failed");
-    assert.deepEqual(sentSms, [{ to: "+15550003333", body: "Iris is speaking with Avery about something that feels urgent or suspicious. Please check in with them when you can." }]);
+    assert.deepEqual(sentSms, [{ to: "+15550003333", body: "Iris: Iris is speaking with Avery about something that feels urgent or suspicious. Please check in with them when you can. Reply HELP for help. Reply STOP to opt out." }]);
     assert.equal(repositories.listActionRequests("person-a").length, 1);
     assert.deepEqual(
       repositories.listEvents("person-a").filter((event) => event.type === "shield.alert_sent").map((event) => event.payload),

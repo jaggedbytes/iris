@@ -312,6 +312,42 @@ export function createRepositories(database: IrisDatabase) {
       return row?.status ?? null;
     },
 
+    isTrustedContactSmsEligible(trustedContactId: string) {
+      const row = database.prepare(
+        `SELECT latest.status, latest.phone_e164 AS consent_phone_e164, c.phone_e164 AS contact_phone_e164
+           FROM trusted_contacts c
+           LEFT JOIN trusted_contact_sms_consents latest
+             ON latest.id = (
+               SELECT id FROM trusted_contact_sms_consents
+                WHERE trusted_contact_id = c.id
+                ORDER BY occurred_at DESC, rowid DESC
+                LIMIT 1
+             )
+          WHERE c.id = ?`,
+      ).get(trustedContactId) as {
+        status: "granted" | "revoked" | null;
+        consent_phone_e164: string | null;
+        contact_phone_e164: string | null;
+      } | undefined;
+      return row?.status === "granted"
+        && !!row.contact_phone_e164
+        && row.consent_phone_e164 === row.contact_phone_e164;
+    },
+
+    getSmsEligibleTrustedContact(input: { id: string; personId: string }) {
+      const contact = this.getTrustedContact(input.id);
+      return contact
+        && contact.personId === input.personId
+        && this.isTrustedContactSmsEligible(contact.id)
+        ? contact
+        : null;
+    },
+
+    listSmsEligibleTrustedContacts(personId: string) {
+      return this.listTrustedContacts(personId)
+        .filter((contact) => this.isTrustedContactSmsEligible(contact.id));
+    },
+
     createSmsOptInInvitation(input: {
       id: string;
       personId: string;

@@ -20,6 +20,8 @@ export type TelephonyConfig = {
   twilioAccountSid: string;
   twilioAuthToken: string;
   twilioPhoneNumber: string;
+  twilioMessagingServiceSid: string;
+  smsHelpText: string;
   publicBaseUrl: string;
   openaiApiKey: string;
   safetyIdentifier: string;
@@ -129,6 +131,8 @@ export function loadTelephonyConfig(
     "TWILIO_ACCOUNT_SID",
     "TWILIO_AUTH_TOKEN",
     "TWILIO_PHONE_NUMBER",
+    "TWILIO_MESSAGING_SERVICE_SID",
+    "IRIS_SMS_HELP_TEXT",
     "IRIS_PUBLIC_BASE_URL",
     "OPENAI_API_KEY",
   ] as const;
@@ -159,6 +163,8 @@ export function loadTelephonyConfig(
     twilioAccountSid: environment.TWILIO_ACCOUNT_SID!.trim(),
     twilioAuthToken: environment.TWILIO_AUTH_TOKEN!.trim(),
     twilioPhoneNumber: environment.TWILIO_PHONE_NUMBER!.trim(),
+    twilioMessagingServiceSid: environment.TWILIO_MESSAGING_SERVICE_SID!.trim(),
+    smsHelpText: environment.IRIS_SMS_HELP_TEXT!.trim(),
     publicBaseUrl,
     openaiApiKey: environment.OPENAI_API_KEY!.trim(),
     safetyIdentifier:

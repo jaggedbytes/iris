@@ -412,6 +412,8 @@ test("validates the optional farewell-close timeout for phone calls", () => {
     TWILIO_ACCOUNT_SID: "ACtest",
     TWILIO_AUTH_TOKEN: "test-auth-token",
     TWILIO_PHONE_NUMBER: "+15550001111",
+    TWILIO_MESSAGING_SERVICE_SID: "MGtest",
+    IRIS_SMS_HELP_TEXT: "Iris support: Reply STOP to opt out.",
     IRIS_PUBLIC_BASE_URL: "https://iris.example.test",
     OPENAI_API_KEY: "test-openai-key",
   };
@@ -419,6 +421,14 @@ test("validates the optional farewell-close timeout for phone calls", () => {
   assert.equal(
     loadTelephonyConfig(requiredTelephonyEnvironment).farewellCloseTimeoutMs,
     DEFAULT_FAREWELL_CLOSE_TIMEOUT_MS,
+  );
+  assert.throws(
+    () => loadTelephonyConfig({ ...requiredTelephonyEnvironment, TWILIO_MESSAGING_SERVICE_SID: "" }),
+    /TWILIO_MESSAGING_SERVICE_SID must be configured/,
+  );
+  assert.throws(
+    () => loadTelephonyConfig({ ...requiredTelephonyEnvironment, IRIS_SMS_HELP_TEXT: "" }),
+    /IRIS_SMS_HELP_TEXT must be configured/,
   );
   assert.equal(
     loadTelephonyConfig({
