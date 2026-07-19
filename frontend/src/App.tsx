@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 
 import {
   dashboardJson,
+  dashboardRequest,
   DashboardError,
   publicJson,
 } from "./dashboard";
@@ -120,6 +121,8 @@ function DashboardApp() {
   const [isLoading, setIsLoading] = useState(Boolean(token));
   const [magicLink, setMagicLink] = useState<string | null>(null);
   const [optInLink, setOptInLink] = useState<string | null>(null);
+  const [optInInvitation, setOptInInvitation] = useState<{ createdAt: string; expiresAt: string } | null>(null);
+  const [copiedLink, setCopiedLink] = useState<"dashboard" | "sms" | null>(null);
   const [adminPeople, setAdminPeople] = useState<DashboardPersonList>([]);
   const [selectedPersonId, setSelectedPersonId] = useState<string | null>(null);
   const [newPersonName, setNewPersonName] = useState("");
@@ -155,6 +158,7 @@ function DashboardApp() {
   const selectedTrustedContact = overview?.contacts.find(
     (contact) => contact.id === selectedTrustedContactId,
   ) ?? overview?.contacts[0] ?? null;
+  const displayedOptInInvitation = optInInvitation ?? selectedTrustedContact?.smsOptInInvitation ?? null;
   const consentDirty = Boolean(
     careConsents
     && (draftPrivateMemory !== careConsents.summaryRetention
@@ -213,6 +217,16 @@ function DashboardApp() {
       setError(consentError instanceof Error ? consentError.message : "Unable to update consent.");
     } finally {
       setSavingConsents(false);
+    }
+  };
+
+  const copyLink = async (link: string, kind: "dashboard" | "sms") => {
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopiedLink(kind);
+      window.setTimeout(() => setCopiedLink((current) => current === kind ? null : current), 2_000);
+    } catch {
+      setError("Unable to copy the link. Please select and copy it manually.");
     }
   };
 
@@ -327,11 +341,30 @@ function DashboardApp() {
           }),
         },
       );
-      if (requestId === magicLinkRequestId.current) setMagicLink(result.magicLink);
+      if (requestId === magicLinkRequestId.current) {
+        setMagicLink(result.magicLink);
+        setRefreshVersion((current) => current + 1);
+      }
     } catch (linkError) {
       if (requestId === magicLinkRequestId.current) {
         setError(linkError instanceof Error ? linkError.message : "Unable to create a link.");
       }
+    }
+  };
+
+  const revokeDashboardGrant = async (grantId: string) => {
+    setError(null);
+    try {
+      await dashboardRequest(`/api/dashboard/access-grants/${grantId}`, token, { method: "DELETE" }).then(async (response) => {
+        if (!response.ok) {
+          const body = (await response.json().catch(() => null)) as { error?: string } | null;
+          throw new DashboardError(body?.error ?? "Unable to revoke the dashboard link.", response.status);
+        }
+      });
+      setMagicLink(null);
+      setRefreshVersion((current) => current + 1);
+    } catch (revokeError) {
+      setError(revokeError instanceof Error ? revokeError.message : "Unable to revoke the dashboard link.");
     }
   };
 
@@ -363,7 +396,14 @@ function DashboardApp() {
       });
       setNewPersonName("");
       setNewPersonPhone("");
+      setOverview(null);
       setSelectedPersonId(result.person.id);
+      setSelectedTrustedContactId("");
+      setAttestedContactIds({});
+      setContactAttestationErrorId(null);
+      setMagicLink(null);
+      setOptInLink(null);
+      setOptInInvitation(null);
       setRefreshVersion((current) => current + 1);
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : "Unable to create the person.");
@@ -401,9 +441,13 @@ function DashboardApp() {
   const createOptInLink = async (trustedContactId: string) => {
     if (!personId) return;
     setOptInLink(null);
+    setOptInInvitation(null);
     setError(null);
     try {
-      const result = await dashboardJson<{ optInLink: string }>(
+      const result = await dashboardJson<{
+        optInLink: string;
+        invitation: { createdAt: string; expiresAt: string };
+      }>(
         `/api/dashboard/people/${personId}/trusted-contacts/${trustedContactId}/opt-in-invitations`,
         token,
         {
@@ -413,6 +457,7 @@ function DashboardApp() {
         },
       );
       setOptInLink(result.optInLink);
+      setOptInInvitation(result.invitation);
     } catch (inviteError) {
       setError(inviteError instanceof Error ? inviteError.message : "Unable to create an opt-in link.");
     }
@@ -524,6 +569,7 @@ function DashboardApp() {
                   onChange={(event) => {
                     setSelectedPersonId(event.target.value);
                     setOptInLink(null);
+                    setOptInInvitation(null);
                     setMagicLink(null);
                   }}
                 >
@@ -570,7 +616,7 @@ function DashboardApp() {
                   <span className="consent-option">
                     <span className="consent-option-heading">
                       <strong>Private memory</strong>
-                      <span className="consent-status" aria-label={careConsents.summaryRetention ? "Currently on" : "Currently off"}>{careConsents.summaryRetention ? "On" : "Off"}</span>
+                      <span className={`consent-status${careConsents.summaryRetention ? "" : " is-off"}`} aria-label={careConsents.summaryRetention ? "Currently on" : "Currently off"}>{careConsents.summaryRetention ? "On" : "Off"}</span>
                     </span>
                     <span>Helps Iris remember helpful details between calls. Only Iris uses this.</span>
                   </span>
@@ -589,7 +635,7 @@ function DashboardApp() {
                   <span className="consent-option">
                     <span className="consent-option-heading">
                       <strong>Shared care recaps</strong>
-                      <span className="consent-status" aria-label={careConsents.careSummarySharing ? "Currently on" : "Currently off"}>{careConsents.careSummarySharing ? "On" : "Off"}</span>
+                      <span className={`consent-status${careConsents.careSummarySharing ? "" : " is-off"}`} aria-label={careConsents.careSummarySharing ? "Currently on" : "Currently off"}>{careConsents.careSummarySharing ? "On" : "Off"}</span>
                     </span>
                     <span>Lets you and trusted contacts see gentle updates from Iris. Requires private memory.</span>
                   </span>
@@ -701,6 +747,7 @@ function DashboardApp() {
                       setSelectedTrustedContactId(event.target.value);
                       setMagicLink(null);
                       setOptInLink(null);
+                      setOptInInvitation(null);
                       setContactAttestationErrorId(null);
                     }}
                   >
@@ -714,9 +761,30 @@ function DashboardApp() {
                       <strong>{selectedTrustedContact.displayName}</strong>
                       <span className="contact-relationship">{selectedTrustedContact.relationship}</span>
                       <ul className="contact-status-list">
-                        <li><span>SMS</span><span className="contact-status-pill">{selectedTrustedContact.smsOptInStatus === "opted_in" ? "Opted in" : selectedTrustedContact.smsOptInStatus === "opted_out" ? "Opted out" : "Not opted in"}</span></li>
-                        <li><span>Dashboard link</span><span className="contact-status-pill">{selectedTrustedContact.optInLinkState === "none" ? "Not created" : selectedTrustedContact.optInLinkState.replaceAll("_", " ")}</span></li>
-                        <li><span>SMS confirmation</span><span className="contact-status-pill">{selectedTrustedContact.confirmationState === "not_requested" ? "Not requested" : selectedTrustedContact.confirmationState.replaceAll("_", " ")}</span></li>
+                        <li>
+                          <span>SMS</span>
+                          <span className={`contact-status-pill${selectedTrustedContact.smsOptInStatus === "opted_in" ? "" : " is-off"}`}>
+                            {selectedTrustedContact.smsOptInStatus === "opted_in" ? "Opted in" : selectedTrustedContact.smsOptInStatus === "opted_out" ? "Opted out" : "Not opted in"}
+                          </span>
+                        </li>
+                        <li>
+                          <span>Dashboard link</span>
+                          <span className={`contact-status-pill${selectedTrustedContact.dashboardGrant ? "" : " is-off"}`}>
+                            {selectedTrustedContact.dashboardGrant ? "Active" : "Not created"}
+                          </span>
+                        </li>
+                        <li>
+                          <span>SMS opt-in link</span>
+                          <span className={`contact-status-pill${selectedTrustedContact.optInLinkState === "none" ? " is-off" : ""}`}>
+                            {selectedTrustedContact.optInLinkState === "none" ? "Not created" : selectedTrustedContact.optInLinkState.replaceAll("_", " ")}
+                          </span>
+                        </li>
+                        <li>
+                          <span>SMS confirmation</span>
+                          <span className={`contact-status-pill${selectedTrustedContact.confirmationState === "not_requested" ? " is-off" : ""}`}>
+                            {selectedTrustedContact.confirmationState === "not_requested" ? "Not requested" : selectedTrustedContact.confirmationState.replaceAll("_", " ")}
+                          </span>
+                        </li>
                       </ul>
                     </div>
                     {principal?.role === "admin" && (
@@ -738,7 +806,13 @@ function DashboardApp() {
                             Confirm that you have permission to invite {selectedTrustedContact.displayName} before creating an SMS opt-in link.
                           </p>
                         )}
-                        <button className="secondary-button full-width-action" type="button" onClick={() => void createMagicLink(selectedTrustedContact.id)}>Create dashboard link</button>
+                        <button
+                          className="secondary-button full-width-action"
+                          type="button"
+                          onClick={() => void createMagicLink(selectedTrustedContact.id)}
+                        >
+                          {selectedTrustedContact.dashboardGrant ? "Create new dashboard link" : "Create dashboard link"}
+                        </button>
                         <button
                           className="secondary-button full-width-action"
                           type="button"
@@ -762,22 +836,63 @@ function DashboardApp() {
             ) : (
               <p className="empty-state">Contact access is not available through this link.</p>
             )}
-            {magicLink && (
+            {(selectedTrustedContact?.dashboardGrant || magicLink) && (
               <div className="compact-form magic-link" aria-live="polite">
-                <label className="form-field">
-                  Dashboard link
-                  <input readOnly value={magicLink} aria-label="New trusted contact link" />
-                </label>
-                <p className="privacy-note">Share this once; it expires in seven days and can be revoked.</p>
+                <strong>Dashboard link</strong>
+                {magicLink ? (
+                  <>
+                    <p className="privacy-note">This link is only viewable once. Please copy and send it to the trusted contact before leaving this page.</p>
+                    <div className="link-field">
+                      <input readOnly value={magicLink} aria-label="New trusted contact link" />
+                      <button className="secondary-button" type="button" onClick={() => void copyLink(magicLink, "dashboard")}>
+                        {copiedLink === "dashboard" ? "Copied" : "Copy"}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <p className="privacy-note">An active link is still valid, but the URL can’t be shown again. Create a new link if you need another copy.</p>
+                )}
+                {selectedTrustedContact?.dashboardGrant ? (
+                  <div className="magic-link-meta">
+                    <span>Created {formatDate(selectedTrustedContact.dashboardGrant.createdAt)}.</span>
+                    <span>Expires {formatDate(selectedTrustedContact.dashboardGrant.expiresAt)}.</span>
+                  </div>
+                ) : (
+                  <p className="magic-link-meta">Expires in seven days.</p>
+                )}
+                {principal?.role === "admin" && selectedTrustedContact?.dashboardGrant && (
+                  <button
+                    className="secondary-button full-width-action"
+                    type="button"
+                    onClick={() => void revokeDashboardGrant(selectedTrustedContact.dashboardGrant!.id)}
+                  >
+                    Revoke dashboard link
+                  </button>
+                )}
               </div>
             )}
-            {optInLink && (
+            {(optInLink || selectedTrustedContact?.smsOptInInvitation) && (
               <div className="compact-form magic-link" aria-live="polite">
-                <label className="form-field">
-                  SMS opt-in link
-                  <input readOnly value={optInLink} aria-label="Trusted contact SMS opt-in link" />
-                </label>
-                <p className="privacy-note">Share within 24 hours. The contact must separately agree before Iris can send SMS.</p>
+                <label className="form-field" htmlFor="sms-opt-in-link">SMS opt-in link</label>
+                {optInLink ? (
+                  <>
+                    <p className="privacy-note">Share within 24 hours. The contact must separately agree before Iris can send SMS. This link is only viewable once. Please copy and send it to the trusted contact before leaving this page.</p>
+                    <div className="link-field">
+                      <input id="sms-opt-in-link" readOnly value={optInLink} aria-label="Trusted contact SMS opt-in link" />
+                      <button className="secondary-button" type="button" onClick={() => void copyLink(optInLink, "sms")}>
+                        {copiedLink === "sms" ? "Copied" : "Copy"}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <p className="privacy-note">An active link is still valid, but the URL can’t be shown again. Create a new link if you need another copy.</p>
+                )}
+                {displayedOptInInvitation && (
+                  <div className="magic-link-meta">
+                    <span>Created {formatDate(displayedOptInInvitation.createdAt)}.</span>
+                    <span>Expires {formatDate(displayedOptInInvitation.expiresAt)}.</span>
+                  </div>
+                )}
               </div>
             )}
             {principal?.role === "admin" && (

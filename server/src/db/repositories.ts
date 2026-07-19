@@ -407,6 +407,16 @@ export function createRepositories(database: IrisDatabase) {
       return { optInLinkState: linkState, confirmationState };
     },
 
+    findLatestActiveSmsOptInInvitation(trustedContactId: string, at = now()) {
+      const row = database.prepare(
+        `SELECT * FROM sms_opt_in_invitations
+         WHERE trusted_contact_id = ? AND consumed_at IS NULL AND expires_at > ?
+         ORDER BY created_at DESC, rowid DESC
+         LIMIT 1`,
+      ).get(trustedContactId, at) as SmsOptInInvitationRow | undefined;
+      return row ? toSmsOptInInvitation(row) : null;
+    },
+
     createSmsOptInInvitation(input: {
       id: string;
       personId: string;
@@ -583,10 +593,42 @@ export function createRepositories(database: IrisDatabase) {
       return row ? toGrant(row) : null;
     },
 
-    revokeGrant(id: string) {
+    getGrant(id: string) {
+      const row = database
+        .prepare("SELECT * FROM access_grants WHERE id = ?")
+        .get(id) as GrantRow | undefined;
+      return row ? toGrant(row) : null;
+    },
+
+    findLatestActiveGrantForTrustedContact(trustedContactId: string, at = now()) {
+      const row = database
+        .prepare(
+          `SELECT * FROM access_grants
+           WHERE trusted_contact_id = ? AND revoked_at IS NULL AND expires_at > ?
+           ORDER BY created_at DESC, rowid DESC
+           LIMIT 1`,
+        )
+        .get(trustedContactId, at) as GrantRow | undefined;
+      return row ? toGrant(row) : null;
+    },
+
+    revokeActiveGrantsForTrustedContact(trustedContactId: string, at = now()) {
       database
-        .prepare("UPDATE access_grants SET revoked_at = ? WHERE id = ?")
+        .prepare(
+          `UPDATE access_grants
+           SET revoked_at = ?
+           WHERE trusted_contact_id = ? AND revoked_at IS NULL AND expires_at > ?`,
+        )
+        .run(now(), trustedContactId, at);
+    },
+
+    revokeGrant(id: string) {
+      const result = database
+        .prepare(
+          "UPDATE access_grants SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+        )
         .run(now(), id);
+      return result.changes === 1;
     },
 
     recordConsent(input: {

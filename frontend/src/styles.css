@@ -275,6 +275,10 @@
     @apply shrink-0 rounded-full bg-lilac px-[0.42rem] py-[0.12rem] text-[0.7rem] leading-tight font-extrabold text-primary-dark;
   }
 
+  .consent-choices .consent-status.is-off {
+    @apply bg-subtle font-bold text-muted;
+  }
+
   .consent-attestation {
     @apply mt-[0.15rem] grid gap-[0.4rem] border-t border-border pt-3;
   }
@@ -371,6 +375,10 @@
     @apply shrink-0 rounded-full bg-lilac px-[0.42rem] py-[0.12rem] text-[0.7rem] font-extrabold text-primary-dark capitalize;
   }
 
+  .contact-status-list .contact-status-pill.is-off {
+    @apply bg-subtle font-bold text-muted;
+  }
+
   .contact-actions {
     @apply grid w-full gap-[0.55rem];
   }
@@ -389,6 +397,18 @@
 
   .magic-link {
     @apply mt-4 grid gap-2 border-t border-border pt-4;
+  }
+
+  .link-field {
+    @apply flex items-center gap-2;
+  }
+
+  .link-field input {
+    @apply min-w-0 flex-1;
+  }
+
+  .magic-link-meta {
+    @apply grid gap-[0.15rem] text-[0.78rem] leading-snug text-muted;
   }
 
   /* Actions */

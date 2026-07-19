@@ -322,6 +322,8 @@ export function createDashboardRouter(context: DashboardContext) {
               const status = context.repositories.getTrustedContactSmsOptInStatus(contact.id);
               const eligible = context.repositories.isTrustedContactSmsEligible(contact.id);
               const enrollment = context.repositories.getTrustedContactSmsEnrollmentState(contact.id);
+              const activeOptInInvitation = context.repositories.findLatestActiveSmsOptInInvitation(contact.id);
+              const grant = context.repositories.findLatestActiveGrantForTrustedContact(contact.id);
               return {
                 ...contact,
                 smsOptInStatus: status === "granted" && eligible
@@ -330,6 +332,12 @@ export function createDashboardRouter(context: DashboardContext) {
                     ? "opted_out"
                     : "not_opted_in",
                 ...enrollment,
+                smsOptInInvitation: activeOptInInvitation
+                  ? { createdAt: activeOptInInvitation.createdAt, expiresAt: activeOptInInvitation.expiresAt }
+                  : null,
+                dashboardGrant: grant
+                  ? { id: grant.id, createdAt: grant.createdAt, expiresAt: grant.expiresAt }
+                  : null,
               };
             })
           : [],
@@ -447,6 +455,8 @@ export function createDashboardRouter(context: DashboardContext) {
 
     const token = randomBytes(32).toString("base64url");
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    // One active dashboard link per contact: newer links replace prior grants.
+    context.repositories.revokeActiveGrantsForTrustedContact(trustedContactId);
     const grant = context.repositories.grantAccess({
       id: randomUUID(),
       personId,
@@ -459,7 +469,7 @@ export function createDashboardRouter(context: DashboardContext) {
     const magicLink = new URL(context.frontendOrigin);
     magicLink.hash = new URLSearchParams({ access: token }).toString();
     response.status(201).json({
-      grant: { id: grant.id, expiresAt: grant.expiresAt, scopes: grant.scopes },
+      grant: { id: grant.id, createdAt: grant.createdAt, expiresAt: grant.expiresAt, scopes: grant.scopes },
       magicLink: magicLink.toString(),
     });
   });
@@ -526,7 +536,7 @@ export function createDashboardRouter(context: DashboardContext) {
     const optInUrl = new URL("/opt-in", context.frontendOrigin);
     optInUrl.searchParams.set("token", token);
     response.status(201).json({
-      invitation: { id: invitation.id, expiresAt: invitation.expiresAt },
+      invitation: { id: invitation.id, createdAt: invitation.createdAt, expiresAt: invitation.expiresAt },
       optInLink: optInUrl.toString(),
     });
   });
@@ -601,7 +611,12 @@ export function createDashboardRouter(context: DashboardContext) {
       return;
     }
 
-    context.repositories.revokeGrant(request.params.grantId);
+    const grant = context.repositories.getGrant(request.params.grantId);
+    if (!grant || grant.revokedAt) {
+      response.status(404).json({ error: "Access grant not found." });
+      return;
+    }
+    context.repositories.revokeGrant(grant.id);
     response.status(204).end();
   });
 

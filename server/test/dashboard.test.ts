@@ -130,7 +130,12 @@ test("allows an admin to view a person overview", async () => {
     assert.equal(response.status, 200);
     const body = (await response.json()) as {
       person: { id: string; phoneE164: string | null; phoneNumberStatus: string };
-      contacts: Array<{ smsOptInStatus: string; optInLinkState: string; confirmationState: string }>;
+      contacts: Array<{
+        smsOptInStatus: string;
+        optInLinkState: string;
+        confirmationState: string;
+        dashboardGrant: { id: string; createdAt: string; expiresAt: string } | null;
+      }>;
     };
     assert.equal(body.person.id, "person-a");
     assert.equal(body.person.phoneE164, "+15550009999");
@@ -139,6 +144,7 @@ test("allows an admin to view a person overview", async () => {
     assert.equal(body.contacts[0]?.smsOptInStatus, "not_opted_in");
     assert.equal(body.contacts[0]?.optInLinkState, "none");
     assert.equal(body.contacts[0]?.confirmationState, "not_requested");
+    assert.equal(body.contacts[0]?.dashboardGrant, null);
   } finally {
     fixture.close();
   }
@@ -553,13 +559,25 @@ test("creates a hashed magic link and revocation removes access", async () => {
     );
     assert.equal(created.status, 201);
     const body = (await created.json()) as {
-      grant: { id: string };
+      grant: { id: string; createdAt: string; expiresAt: string };
       magicLink: string;
     };
     const accessToken = new URLSearchParams(
       new URL(body.magicLink).hash.replace(/^#/, ""),
     ).get("access");
     assert.ok(accessToken);
+    assert.ok(body.grant.createdAt);
+    assert.ok(new Date(body.grant.expiresAt).getTime() > Date.now());
+
+    const overview = await fetch(`${fixture.url}/api/dashboard/people/person-a/overview`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    assert.equal(overview.status, 200);
+    const overviewBody = (await overview.json()) as {
+      contacts: Array<{ dashboardGrant: { id: string; expiresAt: string } | null }>;
+    };
+    assert.equal(overviewBody.contacts[0]?.dashboardGrant?.id, body.grant.id);
+    assert.equal(overviewBody.contacts[0]?.dashboardGrant?.expiresAt, body.grant.expiresAt);
 
     const principal = await fetch(`${fixture.url}/api/dashboard/me`, {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -576,6 +594,20 @@ test("creates a hashed magic link and revocation removes access", async () => {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     assert.equal(afterRevocation.status, 401);
+
+    const overviewAfter = await fetch(`${fixture.url}/api/dashboard/people/person-a/overview`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    const overviewAfterBody = (await overviewAfter.json()) as {
+      contacts: Array<{ dashboardGrant: { id: string } | null }>;
+    };
+    assert.equal(overviewAfterBody.contacts[0]?.dashboardGrant, null);
+
+    const missing = await fetch(
+      `${fixture.url}/api/dashboard/access-grants/${body.grant.id}`,
+      { method: "DELETE", headers: { Authorization: `Bearer ${adminToken}` } },
+    );
+    assert.equal(missing.status, 404);
   } finally {
     fixture.close();
   }
