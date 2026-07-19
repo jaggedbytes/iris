@@ -150,6 +150,28 @@ test("allows an admin to view a person overview", async () => {
   }
 });
 
+test("allows an admin to remove a selected person while preserving one enrollment", async () => {
+  const fixture = await createDashboardServer();
+  try {
+    const removed = await fetch(`${fixture.url}/api/dashboard/people/person-b`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    assert.equal(removed.status, 204);
+    assert.equal(fixture.repositories.getPerson("person-b"), null);
+
+    const cannotRemoveLast = await fetch(`${fixture.url}/api/dashboard/people/person-a`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    assert.equal(cannotRemoveLast.status, 409);
+    const body = (await cannotRemoveLast.json()) as { error: string };
+    assert.match(body.error, /add another person/i);
+  } finally {
+    fixture.close();
+  }
+});
+
 test("limits consent attestation to admins and requires retention before care sharing", async () => {
   const fixture = await createDashboardServer();
   try {

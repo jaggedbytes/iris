@@ -209,6 +209,10 @@
     @apply p-2;
   }
 
+  .remove-person-button {
+    @apply justify-self-end text-[0.78rem] font-bold text-attention underline underline-offset-2 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
   .compact-form {
     @apply mt-[0.6rem] grid gap-2 border-t border-border pt-[0.8rem];
   }

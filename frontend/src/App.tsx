@@ -132,6 +132,7 @@ function DashboardApp() {
   const [contactPhone, setContactPhone] = useState("");
   const [isCreatingPerson, setIsCreatingPerson] = useState(false);
   const [isCreatingContact, setIsCreatingContact] = useState(false);
+  const [isRemovingPerson, setIsRemovingPerson] = useState(false);
   const [selectedTrustedContactId, setSelectedTrustedContactId] = useState("");
   const [attestedContactIds, setAttestedContactIds] = useState<Record<string, boolean>>({});
   const [contactAttestationErrorId, setContactAttestationErrorId] = useState<string | null>(null);
@@ -438,6 +439,43 @@ function DashboardApp() {
     }
   };
 
+  const removeSelectedPerson = async () => {
+    if (!personId || !overview) return;
+    const nextPerson = adminPeople.find((person) => person.id !== personId);
+    if (!nextPerson) {
+      setError("Add another person before removing this one.");
+      return;
+    }
+    if (!window.confirm(`Remove ${overview.person.displayName}? This removes their trusted contacts, calls, and saved information.`)) {
+      return;
+    }
+
+    setIsRemovingPerson(true);
+    setError(null);
+    try {
+      await dashboardRequest(`/api/dashboard/people/${personId}`, token, { method: "DELETE" }).then(async (response) => {
+        if (!response.ok) {
+          const body = (await response.json().catch(() => null)) as { error?: string } | null;
+          throw new DashboardError(body?.error ?? "Unable to remove this person.", response.status);
+        }
+      });
+      setOverview(null);
+      setAdminPeople((people) => people.filter((person) => person.id !== personId));
+      setSelectedPersonId(nextPerson.id);
+      setSelectedTrustedContactId("");
+      setAttestedContactIds({});
+      setContactAttestationErrorId(null);
+      setMagicLink(null);
+      setOptInLink(null);
+      setOptInInvitation(null);
+      setRefreshVersion((current) => current + 1);
+    } catch (removeError) {
+      setError(removeError instanceof Error ? removeError.message : "Unable to remove this person.");
+    } finally {
+      setIsRemovingPerson(false);
+    }
+  };
+
   const createOptInLink = async (trustedContactId: string) => {
     if (!personId) return;
     setOptInLink(null);
@@ -575,6 +613,14 @@ function DashboardApp() {
                 >
                   {adminPeople.map((person) => <option key={person.id} value={person.id}>{person.displayName}</option>)}
                 </select>
+                <button
+                  className="remove-person-button"
+                  type="button"
+                  disabled={adminPeople.length <= 1 || isRemovingPerson}
+                  onClick={() => void removeSelectedPerson()}
+                >
+                  {isRemovingPerson ? "Removing…" : "Remove person"}
+                </button>
               </div>
               <form className="compact-form" onSubmit={createPerson}>
                 <strong>Add a person</strong>
@@ -585,6 +631,7 @@ function DashboardApp() {
                 <label className="form-field">
                   Phone number <span>(optional)</span>
                   <input placeholder="E.164, e.g. +15551234567" value={newPersonPhone} onChange={(event) => setNewPersonPhone(event.target.value)} />
+                  <span>Optional for a dashboard-only profile. Add a number before Iris can call this person.</span>
                 </label>
                 <button className="secondary-button create-person-button" type="submit" disabled={isCreatingPerson}>
                   {isCreatingPerson ? "Adding…" : "Add person"}

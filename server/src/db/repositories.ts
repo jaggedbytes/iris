@@ -223,6 +223,10 @@ export function createRepositories(database: IrisDatabase) {
       return rows.map(toPerson);
     },
 
+    deletePerson(id: string) {
+      return database.prepare("DELETE FROM people WHERE id = ?").run(id).changes === 1;
+    },
+
     createTrustedContact(input: {
       id: string;
       personId: string;

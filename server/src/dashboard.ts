@@ -246,6 +246,32 @@ export function createDashboardRouter(context: DashboardContext) {
     }
   });
 
+  router.delete("/people/:personId", (request, response) => {
+    const principal = requirePrincipal(request, response, context);
+    if (!principal) return;
+    if (principal.role !== "admin") {
+      response.status(403).json({ error: "Admin access is required." });
+      return;
+    }
+
+    const person = context.repositories.getPerson(request.params.personId);
+    if (!person) {
+      response.status(404).json({ error: "Person not found." });
+      return;
+    }
+    if (context.repositories.listPeople().length <= 1) {
+      response.status(409).json({ error: "Add another person before removing this one." });
+      return;
+    }
+    if (context.repositories.findActiveCall(person.id)) {
+      response.status(409).json({ error: "This person has an active call and cannot be removed yet." });
+      return;
+    }
+
+    context.repositories.deletePerson(person.id);
+    response.status(204).end();
+  });
+
   router.get("/me", (request, response) => {
     const principal = requirePrincipal(request, response, context);
     if (!principal) return;
