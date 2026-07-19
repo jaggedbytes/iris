@@ -6,7 +6,7 @@ import type { TelephonyConfig } from "./config.js";
 type SmsConfig = Pick<
   TelephonyConfig,
   "twilioAccountSid" | "twilioAuthToken" | "twilioPhoneNumber" | "publicBaseUrl"
-> & Partial<Pick<TelephonyConfig, "twilioMessagingServiceSid" | "smsHelpText">>;
+> & Partial<Pick<TelephonyConfig, "twilioMessagingServiceSid">>;
 import type { IrisRepositories } from "./db/repositories.js";
 
 type MessagingClient = { messages: { create(input: { to: string; messagingServiceSid: string; body: string; statusCallback: string }): Promise<{ sid: string; status: string }> } };

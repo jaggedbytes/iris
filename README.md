@@ -80,7 +80,7 @@ Set the Twilio and `IRIS_PUBLIC_BASE_URL` values in `server/.env`. The public UR
 
 - `IRIS_DEMO_PHONE_E164` is the authorized destination phone that receives Iris’s call.
 - `TWILIO_PHONE_NUMBER` is Iris’s Twilio sender/from-number. It is not the demo destination.
-- `TWILIO_MESSAGING_SERVICE_SID` is required for every Iris SMS. Configure Twilio Advanced Opt-Out on that Messaging Service, including the same HELP response as `IRIS_SMS_HELP_TEXT`. CP5 adds Iris’s local inbound STOP revocation record.
+- `TWILIO_MESSAGING_SERVICE_SID` is required for every Iris SMS. Configure Twilio Advanced Opt-Out on that Messaging Service with the same HELP response as `IRIS_SMS_HELP_TEXT` (shown on the public opt-in form).
 - `IRIS_FAREWELL_CLOSE_TIMEOUT_MS` is optional and defaults to `8000`. It bounds only a missing completion event after a tool-driven goodbye; it is not an idle-call timeout.
 
 Set the destination before running `npm run db:seed`. Start the server and frontend, sign in as the operator, press **Call now**, answer the phone, and speak with Iris.

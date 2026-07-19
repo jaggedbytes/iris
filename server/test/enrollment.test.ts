@@ -12,6 +12,7 @@ const enrollmentConfig = {
   privacyUrl: "https://legal.example.test/privacy",
   termsUrl: "https://legal.example.test/terms",
   disclosureVersion: "2026-07-18",
+  helpText: "Iris support: Reply STOP to opt out of Iris care texts.",
 };
 
 function fixture() {
@@ -49,6 +50,7 @@ test("web opt-in atomically consumes the invitation, records consent, and dispat
     assert.deepEqual(service.validateInvitation(token), {
       personDisplayName: "Avery", contactDisplayName: "Robin",
       privacyUrl: enrollmentConfig.privacyUrl, termsUrl: enrollmentConfig.termsUrl,
+      helpText: enrollmentConfig.helpText,
     });
     assert.deepEqual(service.acceptInvitation({ token, phoneE164: "+15550002222" }), { personDisplayName: "Avery" });
     await new Promise((resolve) => setImmediate(resolve));

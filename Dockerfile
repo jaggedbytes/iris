@@ -10,6 +10,7 @@ COPY server ./server
 COPY frontend ./frontend
 RUN cd frontend && npm run build
 RUN cd server && npm run build
+RUN cd server && npm prune --omit=dev
 
 FROM node:24-bookworm-slim
 WORKDIR /app/server

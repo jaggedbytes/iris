@@ -236,10 +236,11 @@ export class OutboundCallManager {
       socket.off("message", awaitStart);
       clearHandshakeTimer();
       const bridgeContext = this.bridge?.context(active.personId);
-      const shield = this.shield ? {
+      const alertText = createShieldAlertText(this.repositories.getPerson(active.personId)?.displayName ?? "the person");
+      const shield = this.shield && alertText ? {
         contacts: this.repositories.listSmsEligibleTrustedContacts(active.personId)
           .map((contact) => ({ id: contact.id, name: contact.displayName })),
-        alertText: createShieldAlertText(this.repositories.getPerson(active.personId)?.displayName ?? "the person"),
+        alertText,
         assess: (situation: string) => this.shield!.assess({ callId, personId: active.personId, situation }),
         sendAlert: (trustedContactId: string, approvalId: string) => this.shield!.sendApprovedAlert({ callId, personId: active.personId, trustedContactId, approvalId }),
       } : undefined;

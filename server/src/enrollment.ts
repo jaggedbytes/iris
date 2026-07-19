@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
@@ -6,20 +6,14 @@ import rateLimit from "express-rate-limit";
 import type { ActionDispatcher } from "./actions.js";
 import type { EnrollmentConfig } from "./config.js";
 import type { IrisRepositories } from "./db/repositories.js";
-import { formatIrisSms } from "./sms.js";
-
-const E164_PATTERN = /^\+[1-9]\d{7,14}$/;
-
-function hashToken(token: string) {
-  return createHash("sha256").update(token).digest("hex");
-}
-
-function isE164(value: unknown): value is string {
-  return typeof value === "string" && E164_PATTERN.test(value);
-}
+import { isE164 } from "./phone.js";
+import { formatIrisSms, truncateSmsContent } from "./sms.js";
+import { hashToken } from "./tokens.js";
 
 export function createSmsOptInConfirmation(personDisplayName: string) {
-  return formatIrisSms(`You’re subscribed to care check-in and Shield alert texts for ${personDisplayName}. Msg frequency varies. Msg & data rates may apply.`)!;
+  return formatIrisSms(truncateSmsContent(
+    `You’re subscribed to care check-in and Shield alert texts for ${personDisplayName}. Msg frequency varies. Msg & data rates may apply.`,
+  ));
 }
 
 export class EnrollmentService {
@@ -37,18 +31,21 @@ export class EnrollmentService {
       contactDisplayName: invitation.contactDisplayName,
       privacyUrl: this.config.privacyUrl,
       termsUrl: this.config.termsUrl,
+      helpText: this.config.helpText,
     };
   }
 
   acceptInvitation(input: { token: string; phoneE164: string }) {
     const context = this.repositories.getActiveSmsOptInInvitationContext(hashToken(input.token));
     if (!context || context.contactPhoneE164 !== input.phoneE164) return null;
+    const confirmationBody = createSmsOptInConfirmation(context.personDisplayName);
+    if (!confirmationBody) return null;
     const enrollment = this.repositories.finalizeSmsOptInEnrollment({
       tokenHash: hashToken(input.token),
       phoneE164: input.phoneE164,
       consentId: randomUUID(),
       actionId: randomUUID(),
-      confirmationBody: createSmsOptInConfirmation(context.personDisplayName),
+      confirmationBody,
       disclosureVersion: this.config.disclosureVersion,
     });
     if (!enrollment) return null;

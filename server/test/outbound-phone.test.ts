@@ -35,7 +35,6 @@ const telephonyConfig = {
   twilioAuthToken: "test-auth-token",
   twilioPhoneNumber: "+15550001111",
   twilioMessagingServiceSid: "MGtest",
-  smsHelpText: "Iris support: Reply STOP to opt out.",
   publicBaseUrl: "https://iris.test",
   openaiApiKey: "test-openai-key",
   safetyIdentifier: "iris-test",

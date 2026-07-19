@@ -2,11 +2,15 @@ export const SMS_PREFIX = "Iris:";
 export const SMS_FOOTER = "Reply HELP for help. Reply STOP to opt out.";
 export const MAX_SMS_LENGTH = 480;
 
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const PREFIX_PATTERN = new RegExp(`^${escapeRegExp(SMS_PREFIX)}\\s*`, "i");
+const FOOTER_PATTERN = new RegExp(`\\s*${escapeRegExp(SMS_FOOTER)}\\s*$`, "i");
+
 function normalizedContent(value: string) {
   return value
     .trim()
-    .replace(/^Iris:\s*/i, "")
-    .replace(/\s*Reply HELP for help\. Reply STOP to opt out\.\s*$/i, "")
+    .replace(PREFIX_PATTERN, "")
+    .replace(FOOTER_PATTERN, "")
     .trim();
 }
 

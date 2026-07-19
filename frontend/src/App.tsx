@@ -617,6 +617,7 @@ type OptInInvitation = {
   contactDisplayName: string;
   privacyUrl: string;
   termsUrl: string;
+  helpText: string;
 };
 
 function OptInPage() {
@@ -694,6 +695,9 @@ function OptInPage() {
                     <input type="checkbox" checked={accepted} onChange={(event) => setAccepted(event.target.checked)} />
                     I agree to receive Iris care check-in and Shield alert texts for {invitation.personDisplayName}. Message frequency varies. Msg & data rates may apply. Reply HELP for help. Reply STOP to opt out.
                   </label>
+                  <p className="legal-note">
+                    Replying HELP returns: {invitation.helpText}
+                  </p>
                   <p className="legal-note">
                     By submitting, you agree to the <a href={invitation.termsUrl} target="_blank" rel="noreferrer">Terms</a> and acknowledge the <a href={invitation.privacyUrl} target="_blank" rel="noreferrer">Privacy Policy</a>.
                   </p>

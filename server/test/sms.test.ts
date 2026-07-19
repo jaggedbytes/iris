@@ -4,7 +4,7 @@ import test from "node:test";
 import { ActionDispatcher } from "../src/actions.js";
 import { BridgeService } from "../src/bridge.js";
 import { closeDatabase, createDatabase, createRepositories } from "../src/db/index.js";
-import { formatIrisSms, MAX_SMS_CONTENT_LENGTH, MAX_SMS_LENGTH, SMS_FOOTER, truncateSmsContent } from "../src/sms.js";
+import { formatIrisSms, MAX_SMS_CONTENT_LENGTH, MAX_SMS_LENGTH, SMS_FOOTER, SMS_PREFIX, truncateSmsContent } from "../src/sms.js";
 
 test("the SMS formatter owns one prefix and one HELP/STOP footer within the 480-character limit", () => {
   const standard = formatIrisSms("Please call me back.");
@@ -16,6 +16,7 @@ test("the SMS formatter owns one prefix and one HELP/STOP footer within the 480-
   const bounded = formatIrisSms(truncated);
   assert.equal(bounded?.length, MAX_SMS_LENGTH);
   assert.ok(bounded?.endsWith(SMS_FOOTER));
+  assert.equal(formatIrisSms(`${SMS_PREFIX} Already wrapped. ${SMS_FOOTER}`), "Iris: Already wrapped. Reply HELP for help. Reply STOP to opt out.");
 });
 
 test("Bridge exposes and sends only contacts with a matching active SMS opt-in", async () => {

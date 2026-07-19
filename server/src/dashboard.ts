@@ -1,11 +1,13 @@
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 
 import { Router, type Request, type Response } from "express";
 
 import type { IrisRepositories } from "./db/repositories.js";
 import type { AccessScope, CallRecord, TimelineEvent } from "./db/types.js";
 import type { ActionDispatcher } from "./actions.js";
+import { e164Field } from "./phone.js";
 import { ActiveCallConflictError, type TrustedCheckInRequester } from "./telephony/outbound.js";
+import { hashToken } from "./tokens.js";
 
 const ALL_SCOPES: AccessScope[] = [
   "view_summaries",
@@ -30,10 +32,6 @@ export type DashboardContext = {
   startOutboundCall?: (input: { personId: string; checkInRequester?: TrustedCheckInRequester }) => Promise<{ callId: string }>;
   actions?: ActionDispatcher;
 };
-
-function hashToken(token: string) {
-  return createHash("sha256").update(token).digest("hex");
-}
 
 function safelyMatches(candidate: string, expected: string) {
   const candidateBuffer = Buffer.from(candidate);
@@ -112,13 +110,6 @@ function stringField(value: unknown, maxLength = 160) {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 && trimmed.length <= maxLength ? trimmed : undefined;
-}
-
-function e164Field(value: unknown) {
-  const phoneE164 = stringField(value, 16);
-  return phoneE164 && /^\+[1-9]\d{7,14}$/.test(phoneE164)
-    ? phoneE164
-    : undefined;
 }
 
 function objectPayload(value: unknown) {

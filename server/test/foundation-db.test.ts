@@ -5,6 +5,7 @@ import Database from "better-sqlite3";
 import {
   DEFAULT_FAREWELL_CLOSE_TIMEOUT_MS,
   loadDashboardConfig,
+  loadEnrollmentConfig,
   loadFoundationConfig,
   loadTelephonyConfig,
 } from "../src/config.js";
@@ -413,7 +414,6 @@ test("validates the optional farewell-close timeout for phone calls", () => {
     TWILIO_AUTH_TOKEN: "test-auth-token",
     TWILIO_PHONE_NUMBER: "+15550001111",
     TWILIO_MESSAGING_SERVICE_SID: "MGtest",
-    IRIS_SMS_HELP_TEXT: "Iris support: Reply STOP to opt out.",
     IRIS_PUBLIC_BASE_URL: "https://iris.example.test",
     OPENAI_API_KEY: "test-openai-key",
   };
@@ -425,10 +425,6 @@ test("validates the optional farewell-close timeout for phone calls", () => {
   assert.throws(
     () => loadTelephonyConfig({ ...requiredTelephonyEnvironment, TWILIO_MESSAGING_SERVICE_SID: "" }),
     /TWILIO_MESSAGING_SERVICE_SID must be configured/,
-  );
-  assert.throws(
-    () => loadTelephonyConfig({ ...requiredTelephonyEnvironment, IRIS_SMS_HELP_TEXT: "" }),
-    /IRIS_SMS_HELP_TEXT must be configured/,
   );
   assert.equal(
     loadTelephonyConfig({
@@ -444,4 +440,23 @@ test("validates the optional farewell-close timeout for phone calls", () => {
       /IRIS_FAREWELL_CLOSE_TIMEOUT_MS must be an integer between 1000 and 30000 milliseconds/,
     );
   }
+});
+
+test("loads enrollment legal URLs and HELP text for the public opt-in form", () => {
+  assert.equal(
+    loadEnrollmentConfig({}).helpText,
+    "Iris support: Reply STOP to opt out of Iris care texts.",
+  );
+  assert.equal(
+    loadEnrollmentConfig({ IRIS_SMS_HELP_TEXT: "Custom HELP reply." }).helpText,
+    "Custom HELP reply.",
+  );
+  assert.throws(
+    () => loadEnrollmentConfig({ IRIS_SMS_HELP_TEXT: "x".repeat(321) }),
+    /IRIS_SMS_HELP_TEXT must be 320 characters or fewer/,
+  );
+  assert.throws(
+    () => loadEnrollmentConfig({ IRIS_PRIVACY_URL: "http://insecure.example/privacy" }),
+    /IRIS_PRIVACY_URL must use the https protocol/,
+  );
 });
