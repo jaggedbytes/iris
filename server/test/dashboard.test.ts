@@ -130,13 +130,15 @@ test("allows an admin to view a person overview", async () => {
     assert.equal(response.status, 200);
     const body = (await response.json()) as {
       person: { id: string; phoneE164: string | null; phoneNumberStatus: string };
-      contacts: Array<{ smsOptInStatus: string }>;
+      contacts: Array<{ smsOptInStatus: string; optInLinkState: string; confirmationState: string }>;
     };
     assert.equal(body.person.id, "person-a");
     assert.equal(body.person.phoneE164, "+15550009999");
     assert.equal(body.person.phoneNumberStatus, "configured");
     assert.equal(body.contacts.length, 1);
     assert.equal(body.contacts[0]?.smsOptInStatus, "not_opted_in");
+    assert.equal(body.contacts[0]?.optInLinkState, "none");
+    assert.equal(body.contacts[0]?.confirmationState, "not_requested");
   } finally {
     fixture.close();
   }

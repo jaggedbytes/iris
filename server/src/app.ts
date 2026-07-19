@@ -13,6 +13,8 @@ import { createTelephonyRouter } from "./telephony/router.js";
 import type { OutboundCallManager } from "./telephony/outbound.js";
 import type { ActionDispatcher } from "./actions.js";
 import { createEnrollmentRouter, type EnrollmentService } from "./enrollment.js";
+import { createInboundMessagingRouter } from "./inbound-messaging.js";
+import type { IrisRepositories } from "./db/repositories.js";
 
 const compiledStaticDir = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -29,6 +31,7 @@ export function createApp({
   telephony,
   actions,
   enrollment,
+  repositories,
   staticDir = compiledStaticDir,
 }: {
   request?: typeof fetch;
@@ -36,6 +39,7 @@ export function createApp({
   telephony?: OutboundCallManager;
   actions?: ActionDispatcher;
   enrollment?: EnrollmentService;
+  repositories?: IrisRepositories;
   staticDir?: string;
 } = {}) {
   const app = express();
@@ -55,6 +59,11 @@ export function createApp({
   }
   if (telephony) app.use("/api/telephony", createTelephonyRouter(telephony));
   if (enrollment) app.use("/api/opt-in", createEnrollmentRouter(enrollment));
+  const sharedRepositories = repositories ?? dashboard?.repositories;
+  if (actions && sharedRepositories) app.use(
+    "/api/messages",
+    createInboundMessagingRouter({ repositories: sharedRepositories, actions }),
+  );
   if (actions) app.post("/api/actions/:actionId/messages/status", (request, response) => {
     if (!actions.validateWebhook(request.header("x-twilio-signature"), request.originalUrl, request.body)) return response.status(403).end();
     if (typeof request.body?.MessageSid === "string" && typeof request.body?.MessageStatus === "string") actions.recordDelivery(request.params.actionId, request.body.MessageSid, request.body.MessageStatus);

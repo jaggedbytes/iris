@@ -296,6 +296,7 @@ export function createDashboardRouter(context: DashboardContext) {
           ? context.repositories.listTrustedContacts(personId).map((contact) => {
               const status = context.repositories.getTrustedContactSmsOptInStatus(contact.id);
               const eligible = context.repositories.isTrustedContactSmsEligible(contact.id);
+              const enrollment = context.repositories.getTrustedContactSmsEnrollmentState(contact.id);
               return {
                 ...contact,
                 smsOptInStatus: status === "granted" && eligible
@@ -303,6 +304,7 @@ export function createDashboardRouter(context: DashboardContext) {
                   : status === "revoked"
                     ? "opted_out"
                     : "not_opted_in",
+                ...enrollment,
               };
             })
           : [],

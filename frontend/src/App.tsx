@@ -92,6 +92,7 @@ function timelineCopy(event: DashboardOverview["events"][number], personName: st
 function actionLabel(action: DashboardOverview["actions"][number]) {
   if (action.feature === "shield" && action.actionType === "sms") return "Shield check-in alert";
   if (action.feature === "bridge" && action.actionType === "sms") return "Bridge message";
+  if (action.feature === "enrollment" && action.actionType === "sms_confirmation") return "SMS opt-in confirmation";
   return `${action.feature} · ${action.actionType}`;
 }
 
@@ -525,7 +526,11 @@ function DashboardApp() {
                   <li key={contact.id}>
                     <div>
                       <strong>{contact.displayName}</strong>
-                      <span>{contact.relationship} · SMS: {contact.smsOptInStatus === "opted_in" ? "opted in" : contact.smsOptInStatus === "opted_out" ? "opted out" : "not opted in"}</span>
+                      <span>
+                        {contact.relationship} · SMS: {contact.smsOptInStatus === "opted_in" ? "opted in" : contact.smsOptInStatus === "opted_out" ? "opted out" : "not opted in"}
+                        {" · "}link: {contact.optInLinkState.replaceAll("_", " ")}
+                        {" · "}confirmation: {contact.confirmationState.replaceAll("_", " ")}
+                      </span>
                     </div>
                     {principal?.role === "admin" && (
                       <div className="contact-actions">

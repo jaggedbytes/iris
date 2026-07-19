@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import type { IrisDatabase } from "./database.js";
 import type {
   AccessGrant,
@@ -346,6 +348,63 @@ export function createRepositories(database: IrisDatabase) {
     listSmsEligibleTrustedContacts(personId: string) {
       return this.listTrustedContacts(personId)
         .filter((contact) => this.isTrustedContactSmsEligible(contact.id));
+    },
+
+    revokeTrustedContactSmsOptInsByPhone(phoneE164: string) {
+      return database.transaction(() => {
+        const contacts = database.prepare(
+          "SELECT id FROM trusted_contacts WHERE phone_e164 = ?",
+        ).all(phoneE164) as Array<{ id: string }>;
+        for (const contact of contacts) {
+          this.recordTrustedContactSmsConsent({
+            id: randomUUID(),
+            trustedContactId: contact.id,
+            phoneE164,
+            status: "revoked",
+            source: "inbound_stop",
+          });
+        }
+        return contacts.length;
+      })();
+    },
+
+    getTrustedContactSmsEnrollmentState(trustedContactId: string, at = now()) {
+      const invitations = database.prepare(
+        `SELECT * FROM sms_opt_in_invitations
+         WHERE trusted_contact_id = ?
+         ORDER BY created_at DESC, rowid DESC`,
+      ).all(trustedContactId) as SmsOptInInvitationRow[];
+      const active = invitations.some((invitation) => !invitation.consumed_at && invitation.expires_at > at);
+      const latest = invitations[0];
+      const linkState = active
+        ? "active"
+        : !latest
+          ? "none"
+          : latest.consumed_at
+            ? "used"
+            : "expired";
+      // A new unconsumed invite must not hide the delivery/recovery outcome of
+      // an earlier successful enrollment. Link state and confirmation state are
+      // intentionally derived from different invitation rows.
+      const latestConsumed = invitations.find((invitation) => invitation.consumed_at);
+      if (!latestConsumed) {
+        return { optInLinkState: linkState, confirmationState: "not_requested" as const };
+      }
+      const action = database.prepare(
+        "SELECT * FROM action_requests WHERE idempotency_key = ?",
+      ).get(`sms_opt_in_confirmation:${latestConsumed.id}`) as ActionRequestRow | undefined;
+      if (!action) return { optInLinkState: linkState, confirmationState: "not_requested" as const };
+      const dispatch = this.getActionDispatch(action.id);
+      const confirmationState = action.status === "dispatched"
+        ? "sent"
+        : dispatch?.state === "needs_review"
+          ? "needs_review"
+          : action.status === "failed" || dispatch?.state === "failed"
+            ? "failed"
+            : dispatch?.state === "retryable"
+              ? "retryable"
+              : "queued";
+      return { optInLinkState: linkState, confirmationState };
     },
 
     createSmsOptInInvitation(input: {

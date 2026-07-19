@@ -99,6 +99,23 @@ test("web opt-in commits a pending durable outbox entry before its background se
     assert.equal(action?.status, "approved");
     assert.equal(action?.approvalSource, "web_form");
     assert.equal(repositories.getActionDispatch(action!.id)?.state, "pending");
+    assert.deepEqual(repositories.getTrustedContactSmsEnrollmentState("contact-a"), {
+      optInLinkState: "used",
+      confirmationState: "queued",
+    });
+    repositories.createSmsOptInInvitation({
+      id: "invite-newer-active", personId: "person-a", trustedContactId: "contact-a",
+      tokenHash: "newer-active-token-hash", expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    assert.deepEqual(repositories.getTrustedContactSmsEnrollmentState("contact-a"), {
+      optInLinkState: "active",
+      confirmationState: "queued",
+    });
+    database.prepare("UPDATE action_dispatch_outbox SET state = 'needs_review' WHERE action_request_id = ?").run(action!.id);
+    assert.deepEqual(repositories.getTrustedContactSmsEnrollmentState("contact-a"), {
+      optInLinkState: "active",
+      confirmationState: "needs_review",
+    });
   } finally {
     closeDatabase(database);
   }

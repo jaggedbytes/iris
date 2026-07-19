@@ -34,6 +34,8 @@ export type DashboardOverview = {
     relationship: string;
     phoneE164: string | null;
     smsOptInStatus: "opted_in" | "not_opted_in" | "opted_out";
+    optInLinkState: "active" | "used" | "expired" | "none";
+    confirmationState: "not_requested" | "queued" | "sent" | "failed" | "retryable" | "needs_review";
   }>;
   actions: Array<{
     id: string;

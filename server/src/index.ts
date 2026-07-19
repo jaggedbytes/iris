@@ -37,6 +37,7 @@ const app = createApp({
   telephony,
   actions,
   enrollment,
+  repositories,
 });
 
 const server = createServer(app);
