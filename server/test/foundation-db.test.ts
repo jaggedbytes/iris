@@ -5,6 +5,7 @@ import Database from "better-sqlite3";
 import {
   DEFAULT_FAREWELL_CLOSE_TIMEOUT_MS,
   loadDashboardConfig,
+  loadEnrollmentConfig,
   loadFoundationConfig,
   loadTelephonyConfig,
 } from "../src/config.js";
@@ -255,6 +256,118 @@ test("007 memory category migration preserves legacy rows and constrains new cat
   }
 });
 
+test("008 enrollment migration preserves action dispatch records and adds append-only SMS enrollment data", () => {
+  const database = new Database(":memory:");
+  database.pragma("foreign_keys = ON");
+  try {
+    database.exec("CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL)");
+    const record = database.prepare("INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)");
+    for (const migration of migrations) {
+      if (migration.id === "008_trusted_contact_sms_opt_in") break;
+      database.exec(migration.sql);
+      record.run(migration.id, "2026-07-18T00:00:00.000Z");
+    }
+    database.prepare("INSERT INTO people (id, display_name, created_at) VALUES (?, ?, ?)").run("person-a", "Avery", "2026-07-18T00:00:00.000Z");
+    database.prepare("INSERT INTO trusted_contacts (id, person_id, display_name, relationship, phone_e164, created_at) VALUES (?, ?, ?, ?, ?, ?)").run("contact-a", "person-a", "Robin", "daughter", "+15550002222", "2026-07-18T00:00:00.000Z");
+    database.prepare(
+      `INSERT INTO action_requests
+       (id, person_id, feature, action_type, payload_json, status, idempotency_key, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run("action-a", "person-a", "bridge", "sms", "{}", "approved", "action-key", "2026-07-18T00:00:00.000Z", "2026-07-18T00:00:00.000Z");
+    database.prepare(
+      "INSERT INTO messages (id, person_id, action_request_id, direction, provider_message_id, delivery_status, created_at) VALUES (?, ?, ?, 'outbound', ?, ?, ?)",
+    ).run("message-a", "person-a", "action-a", "SMpreserved", "queued", "2026-07-18T00:00:00.000Z");
+    database.prepare(
+      "INSERT INTO action_dispatch_outbox (action_request_id, state, provider_message_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("action-a", "needs_review", "SMpreserved", "2026-07-18T00:00:00.000Z", "2026-07-18T00:00:00.000Z");
+
+    migrate(database);
+
+    assert.deepEqual(
+      database.prepare("SELECT feature, status, idempotency_key FROM action_requests WHERE id = ?").get("action-a"),
+      { feature: "bridge", status: "approved", idempotency_key: "action-key" },
+    );
+    assert.deepEqual(
+      database.prepare("SELECT action_request_id, provider_message_id FROM messages WHERE id = ?").get("message-a"),
+      { action_request_id: "action-a", provider_message_id: "SMpreserved" },
+    );
+    assert.deepEqual(
+      database.prepare("SELECT action_request_id, state FROM action_dispatch_outbox WHERE action_request_id = ?").get("action-a"),
+      { action_request_id: "action-a", state: "needs_review" },
+    );
+    database.prepare(
+      `INSERT INTO action_requests
+       (id, person_id, feature, action_type, payload_json, status, idempotency_key, created_at, updated_at)
+       VALUES (?, ?, 'enrollment', 'sms_confirmation', '{}', 'approved', ?, ?, ?)`,
+    ).run("action-enrollment", "person-a", "enrollment-key", "2026-07-18T00:00:00.000Z", "2026-07-18T00:00:00.000Z");
+    assert.throws(
+      () => database.prepare(
+        `INSERT INTO action_requests
+         (id, person_id, feature, action_type, payload_json, status, idempotency_key, created_at, updated_at)
+         VALUES (?, ?, 'unknown', 'x', '{}', 'approved', ?, ?, ?)`,
+      ).run("action-unknown", "person-a", "unknown-key", "2026-07-18T00:00:00.000Z", "2026-07-18T00:00:00.000Z"),
+      /CHECK constraint failed/,
+    );
+    const consentColumns = database.prepare("PRAGMA table_info(trusted_contact_sms_consents)").all() as Array<{ name: string }>;
+    assert.equal(consentColumns.some((column) => column.name === "phone_e164"), true);
+    assert.throws(
+      () => database.prepare(
+        `INSERT INTO trusted_contact_sms_consents
+         (id, trusted_contact_id, phone_e164, status, source, occurred_at)
+         VALUES (?, ?, ?, 'granted', 'unknown', ?)`,
+      ).run("consent-invalid-source", "contact-a", "+15550002222", "2026-07-18T00:00:00.000Z"),
+      /CHECK constraint failed/,
+    );
+  } finally {
+    database.close();
+  }
+});
+
+test("tracks trusted-contact SMS consent and one-time invitations without crossing people", () => {
+  const { database, repositories } = createTestRepositories();
+  try {
+    repositories.createPerson({ id: "person-a", displayName: "Avery" });
+    repositories.createPerson({ id: "person-b", displayName: "Blair" });
+    repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Robin", relationship: "daughter", phoneE164: "+15550002222" });
+    repositories.createTrustedContact({ id: "contact-b", personId: "person-b", displayName: "Sam", relationship: "friend", phoneE164: "+15550003333" });
+    repositories.recordTrustedContactSmsConsent({
+      id: "sms-granted", trustedContactId: "contact-a", phoneE164: "+15550002222",
+      status: "granted", source: "web_form", disclosureVersion: "2026-07-18",
+    });
+    assert.equal(repositories.getTrustedContactSmsOptInStatus("contact-a"), "granted");
+    assert.equal(repositories.getTrustedContactSmsOptInStatus("contact-b"), null);
+    repositories.recordTrustedContactSmsConsent({
+      id: "sms-revoked", trustedContactId: "contact-a", phoneE164: "+15550002222",
+      status: "revoked", source: "inbound_stop",
+    });
+    assert.equal(repositories.getTrustedContactSmsOptInStatus("contact-a"), "revoked");
+    assert.equal(repositories.listTrustedContactSmsConsents("contact-b").length, 0);
+
+    const invitation = repositories.createSmsOptInInvitation({
+      id: "invite-a", personId: "person-a", trustedContactId: "contact-a",
+      tokenHash: "hash-a", expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    assert.equal(repositories.findActiveSmsOptInInvitation("hash-a")?.id, invitation.id);
+    assert.equal(repositories.consumeSmsOptInInvitation(invitation.id), true);
+    assert.equal(repositories.consumeSmsOptInInvitation(invitation.id), false);
+    assert.equal(repositories.findActiveSmsOptInInvitation("hash-a"), null);
+    repositories.createSmsOptInInvitation({
+      id: "invite-expired", personId: "person-b", trustedContactId: "contact-b",
+      tokenHash: "hash-expired", expiresAt: new Date(Date.now() - 1_000).toISOString(),
+    });
+    assert.equal(repositories.findActiveSmsOptInInvitation("hash-expired"), null);
+    assert.throws(
+      () => repositories.createSmsOptInInvitation({
+        id: "invite-cross-person", personId: "person-a", trustedContactId: "contact-b",
+        tokenHash: "hash-cross-person", expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      }),
+      /does not belong/,
+    );
+  } finally {
+    closeDatabase(database);
+  }
+});
+
 test("validates the durable foundation environment", () => {
   assert.deepEqual(
     loadFoundationConfig({
@@ -282,6 +395,10 @@ test("validates the durable foundation environment", () => {
   );
   assert.throws(() => loadDashboardConfig({}), /IRIS_ADMIN_TOKEN must be configured/);
   assert.throws(
+    () => loadDashboardConfig({ IRIS_ADMIN_TOKEN: "t", NODE_ENV: "production" }),
+    /FRONTEND_ORIGIN must be configured in production/,
+  );
+  assert.throws(
     () => loadDashboardConfig({ IRIS_ADMIN_TOKEN: "t", FRONTEND_ORIGIN: "not a url" }),
     /FRONTEND_ORIGIN must be a valid http\(s\) URL/,
   );
@@ -296,6 +413,7 @@ test("validates the optional farewell-close timeout for phone calls", () => {
     TWILIO_ACCOUNT_SID: "ACtest",
     TWILIO_AUTH_TOKEN: "test-auth-token",
     TWILIO_PHONE_NUMBER: "+15550001111",
+    TWILIO_MESSAGING_SERVICE_SID: "MGtest",
     IRIS_PUBLIC_BASE_URL: "https://iris.example.test",
     OPENAI_API_KEY: "test-openai-key",
   };
@@ -303,6 +421,10 @@ test("validates the optional farewell-close timeout for phone calls", () => {
   assert.equal(
     loadTelephonyConfig(requiredTelephonyEnvironment).farewellCloseTimeoutMs,
     DEFAULT_FAREWELL_CLOSE_TIMEOUT_MS,
+  );
+  assert.throws(
+    () => loadTelephonyConfig({ ...requiredTelephonyEnvironment, TWILIO_MESSAGING_SERVICE_SID: "" }),
+    /TWILIO_MESSAGING_SERVICE_SID must be configured/,
   );
   assert.equal(
     loadTelephonyConfig({
@@ -318,4 +440,23 @@ test("validates the optional farewell-close timeout for phone calls", () => {
       /IRIS_FAREWELL_CLOSE_TIMEOUT_MS must be an integer between 1000 and 30000 milliseconds/,
     );
   }
+});
+
+test("loads enrollment legal URLs and HELP text for the public opt-in form", () => {
+  assert.equal(
+    loadEnrollmentConfig({}).helpText,
+    "Iris support: Reply STOP to opt out of Iris care texts.",
+  );
+  assert.equal(
+    loadEnrollmentConfig({ IRIS_SMS_HELP_TEXT: "Custom HELP reply." }).helpText,
+    "Custom HELP reply.",
+  );
+  assert.throws(
+    () => loadEnrollmentConfig({ IRIS_SMS_HELP_TEXT: "x".repeat(321) }),
+    /IRIS_SMS_HELP_TEXT must be 320 characters or fewer/,
+  );
+  assert.throws(
+    () => loadEnrollmentConfig({ IRIS_PRIVACY_URL: "http://insecure.example/privacy" }),
+    /IRIS_PRIVACY_URL must use the https protocol/,
+  );
 });

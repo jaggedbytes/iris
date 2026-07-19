@@ -130,12 +130,89 @@ test("allows an admin to view a person overview", async () => {
     assert.equal(response.status, 200);
     const body = (await response.json()) as {
       person: { id: string; phoneE164: string | null; phoneNumberStatus: string };
-      contacts: unknown[];
+      contacts: Array<{ smsOptInStatus: string; optInLinkState: string; confirmationState: string }>;
     };
     assert.equal(body.person.id, "person-a");
     assert.equal(body.person.phoneE164, "+15550009999");
     assert.equal(body.person.phoneNumberStatus, "configured");
     assert.equal(body.contacts.length, 1);
+    assert.equal(body.contacts[0]?.smsOptInStatus, "not_opted_in");
+    assert.equal(body.contacts[0]?.optInLinkState, "none");
+    assert.equal(body.contacts[0]?.confirmationState, "not_requested");
+  } finally {
+    fixture.close();
+  }
+});
+
+test("limits enrollment drafting and opt-in invitations to operators", async () => {
+  const fixture = await createDashboardServer();
+  try {
+    fixture.repositories.grantAccess({
+      id: "grant-events", personId: "person-a", trustedContactId: "contact-a",
+      scopes: ["view_events"], tokenHash: hash("trusted-token"), expiresAt: futureExpiry(),
+    });
+    const trustedList = await fetch(`${fixture.url}/api/dashboard/people`, {
+      headers: { Authorization: "Bearer trusted-token" },
+    });
+    assert.equal(trustedList.status, 403);
+
+    const createdPerson = await fetch(`${fixture.url}/api/dashboard/people`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ displayName: "Morgan", phoneE164: "+15550004444" }),
+    });
+    assert.equal(createdPerson.status, 201);
+    const person = (await createdPerson.json()) as { person: { id: string; displayName: string } };
+    assert.equal(person.person.displayName, "Morgan");
+
+    const duplicatePhone = await fetch(`${fixture.url}/api/dashboard/people`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ displayName: "Casey", phoneE164: "+15550004444" }),
+    });
+    assert.equal(duplicatePhone.status, 409);
+    const duplicateBody = (await duplicatePhone.json()) as { error: string };
+    assert.match(duplicateBody.error, /already assigned/i);
+
+    const badContact = await fetch(`${fixture.url}/api/dashboard/people/${person.person.id}/trusted-contacts`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ displayName: "Lee", relationship: "friend", phoneE164: "5550005555" }),
+    });
+    assert.equal(badContact.status, 400);
+
+    const createdContact = await fetch(`${fixture.url}/api/dashboard/people/${person.person.id}/trusted-contacts`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ displayName: "Lee", relationship: "friend", phoneE164: "+15550005555" }),
+    });
+    assert.equal(createdContact.status, 201);
+    const contact = (await createdContact.json()) as { contact: { id: string }; smsOptInStatus: string };
+    assert.equal(contact.smsOptInStatus, "not_opted_in");
+
+    const missingAttestation = await fetch(`${fixture.url}/api/dashboard/people/${person.person.id}/trusted-contacts/${contact.contact.id}/opt-in-invitations`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ operatorAttested: false }),
+    });
+    assert.equal(missingAttestation.status, 400);
+
+    const invitation = await fetch(`${fixture.url}/api/dashboard/people/${person.person.id}/trusted-contacts/${contact.contact.id}/opt-in-invitations`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ operatorAttested: true }),
+    });
+    assert.equal(invitation.status, 201);
+    const invitationBody = (await invitation.json()) as { optInLink: string; invitation: { expiresAt: string } };
+    const link = new URL(invitationBody.optInLink);
+    assert.equal(link.pathname, "/opt-in");
+    assert.equal(link.searchParams.get("token")?.length, 43);
+    assert.ok(new Date(invitationBody.invitation.expiresAt).getTime() > Date.now());
+    const stored = fixture.database.prepare("SELECT token_hash, consumed_at FROM sms_opt_in_invitations").get() as { token_hash: string; consumed_at: string | null };
+    assert.notEqual(stored.token_hash, link.searchParams.get("token"));
+    assert.equal(stored.consumed_at, null);
+    const audit = fixture.database.prepare("SELECT actor_type, action, metadata_json FROM audit_events WHERE target_id = ?").get(contact.contact.id) as { actor_type: string; action: string; metadata_json: string };
+    assert.deepEqual(audit, { actor_type: "operator", action: "trusted_contact.sms_invite_authorized", metadata_json: "{}" });
   } finally {
     fixture.close();
   }

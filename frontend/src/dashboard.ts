@@ -33,6 +33,9 @@ export type DashboardOverview = {
     displayName: string;
     relationship: string;
     phoneE164: string | null;
+    smsOptInStatus: "opted_in" | "not_opted_in" | "opted_out";
+    optInLinkState: "active" | "used" | "expired" | "none";
+    confirmationState: "not_requested" | "queued" | "sent" | "failed" | "retryable" | "needs_review";
   }>;
   actions: Array<{
     id: string;
@@ -41,10 +44,16 @@ export type DashboardOverview = {
     status: string;
     createdAt: string;
     updatedAt: string;
-    dispatchState: "dispatching" | "dispatched" | "failed" | "retryable" | "needs_review" | null;
+    dispatchState: "pending" | "dispatching" | "dispatched" | "failed" | "retryable" | "needs_review" | null;
   }>;
   permissions: string[];
 };
+
+export type DashboardPersonList = Array<{
+  id: string;
+  displayName: string;
+  phoneNumberStatus: "configured" | "not_configured";
+}>;
 
 export class DashboardError extends Error {
   readonly status: number;
@@ -61,6 +70,19 @@ export class DashboardError extends Error {
 }
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
+
+export async function publicJson<T>(path: string, body: unknown) {
+  const response = await fetch(`${apiBaseUrl}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new DashboardError(payload?.error ?? "Unable to continue.", response.status);
+  }
+  return (await response.json()) as T;
+}
 
 export function dashboardRequest(path: string, token: string, options?: RequestInit) {
   return fetch(`${apiBaseUrl}${path}`, {

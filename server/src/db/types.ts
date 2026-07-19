@@ -5,6 +5,8 @@ export type AccessScope =
 
 export type ConsentKind = "summary_retention";
 export type ConsentStatus = "granted" | "revoked";
+export type TrustedContactSmsOptInStatus = "granted" | "revoked" | null;
+export type TrustedContactSmsConsentSource = "web_form" | "demo_seed" | "inbound_stop";
 export type CallStatus = "attempted" | "answered" | "completed" | "failed";
 export type CallSummaryState = "not_requested" | "processing" | "ready" | "unavailable";
 export type MemoryCategory =
@@ -32,6 +34,26 @@ export type TrustedContact = {
   displayName: string;
   phoneE164: string | null;
   relationship: string;
+  createdAt: string;
+};
+
+export type TrustedContactSmsConsent = {
+  id: string;
+  trustedContactId: string;
+  phoneE164: string;
+  status: Exclude<TrustedContactSmsOptInStatus, null>;
+  source: TrustedContactSmsConsentSource;
+  disclosureVersion: string | null;
+  occurredAt: string;
+};
+
+export type SmsOptInInvitation = {
+  id: string;
+  personId: string;
+  trustedContactId: string;
+  tokenHash: string;
+  expiresAt: string;
+  consumedAt: string | null;
   createdAt: string;
 };
 
@@ -70,7 +92,7 @@ export type TimelineEvent = {
 export type ActionRequestRecord = {
   id: string;
   personId: string;
-  feature: "bridge" | "shield" | "translator";
+  feature: "bridge" | "shield" | "translator" | "enrollment";
   actionType: string;
   payload: unknown;
   status: ActionStatus;
@@ -82,7 +104,7 @@ export type ActionRequestRecord = {
 export type CreateActionRequest = {
   id: string;
   personId: string;
-  feature: "bridge" | "shield" | "translator";
+  feature: "bridge" | "shield" | "translator" | "enrollment";
   actionType: string;
   payload: unknown;
   idempotencyKey: string;

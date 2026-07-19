@@ -2,12 +2,13 @@ import { randomUUID } from "node:crypto";
 
 import type { ActionDispatcher } from "./actions.js";
 import type { IrisRepositories } from "./db/repositories.js";
+import { formatIrisSms, truncateSmsContent } from "./sms.js";
 
 export class BridgeService {
   constructor(private readonly repositories: IrisRepositories, private readonly actions: ActionDispatcher) {}
 
   context(personId: string) {
-    const contacts = this.repositories.listTrustedContacts(personId).map((contact) => ({ id: contact.id, name: contact.displayName, relationship: contact.relationship }));
+    const contacts = this.repositories.listSmsEligibleTrustedContacts(personId).map((contact) => ({ id: contact.id, name: contact.displayName, relationship: contact.relationship }));
     if (!this.repositories.hasActiveConsent(personId, "summary_retention")) {
       return { memories: [], recallAnchor: null, contacts };
     }
@@ -21,8 +22,9 @@ export class BridgeService {
   }
 
   async sendApprovedSms(input: { personId: string; trustedContactId: string; message: string; approvalId: string }) {
-    const contact = this.repositories.getTrustedContact(input.trustedContactId);
-    if (!contact || contact.personId !== input.personId || !contact.phoneE164 || !input.message.trim()) return { ok: false };
+    const contact = this.repositories.getSmsEligibleTrustedContact({ id: input.trustedContactId, personId: input.personId });
+    const body = formatIrisSms(truncateSmsContent(input.message));
+    if (!contact || !body) return { ok: false };
     const idempotencyKey = `bridge:${input.approvalId}`;
     const existing = this.repositories.findActionRequestByIdempotencyKey(idempotencyKey);
     // Only a dispatched record is terminally complete. A cancelled or failed
@@ -36,7 +38,7 @@ export class BridgeService {
     if (!existing) {
       this.repositories.createActionRequest({
         id: actionId, personId: input.personId, feature: "bridge", actionType: "sms",
-        approvalSource: "spoken_call", idempotencyKey, payload: { to: contact.phoneE164, body: input.message.trim() },
+        approvalSource: "spoken_call", idempotencyKey, payload: { to: contact.phoneE164, body },
       });
     }
     this.actions.approve(actionId, "spoken_call");

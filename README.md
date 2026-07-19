@@ -30,6 +30,28 @@ Browser ─────────────── WebRTC audio + events ─�
 
 The browser WebRTC voice loop and token endpoint are still implemented as the earlier persona experiment. It is not part of the phone-first Bridge demo. The user’s microphone audio and Iris’s returned audio are live-only.
 
+## Hosted judge demo (Railway)
+
+The judge-facing demo should be a private, hosted instance operated by you; do
+not ask judges to configure Twilio or run a local server. The seeded local
+workflow remains the reproducible fallback.
+
+This repository includes a single-service Docker deployment. In Railway:
+
+1. Deploy from this repository and generate one public HTTPS domain.
+2. Attach a persistent volume at `/app/data`. The image pins `IRIS_DATABASE_PATH=/app/data/iris.sqlite`; keep the service at one replica. SQLite and active phone sessions are intentionally single-process in this prototype.
+3. Set `IRIS_PUBLIC_BASE_URL=https://your-public-domain` and `FRONTEND_ORIGIN=https://your-public-domain` to the same Railway domain, plus the existing OpenAI, Twilio, dashboard-token, and demo-person variables. Production startup fails if `FRONTEND_ORIGIN` is omitted, preventing copied opt-in links from pointing to localhost.
+4. Configure Twilio’s Voice webhooks and the Messaging Service inbound-message webhook at `https://your-public-domain/api/messages/inbound`. From the Railway shell, run `npm run db:seed:prod` only when you want the demo fixture reset; the production image intentionally contains compiled `dist/` files rather than TypeScript source.
+
+SMS enrollment and confirmation messages depend on a live Twilio Messaging Service
+and registered A2P 10DLC campaign. Before that is live, a confirmation may fail or
+require operator recovery; that is external carrier configuration, not an
+enrollment-data failure.
+
+The container serves the production dashboard and public SPA routes such as `/opt-in` from Express. `/api/*`, Twilio webhooks, and the Media Stream endpoint remain server routes rather than SPA fallbacks.
+
+The hosted opt-in form uses `IRIS_PRIVACY_URL` and `IRIS_TERMS_URL`, which default to Iris’s public legal pages. Keep those URLs public and HTTPS; they are rendered directly to invited contacts.
+
 ## Local development
 
 Prerequisites: Node.js 22+ and an OpenAI API key.
@@ -58,6 +80,7 @@ Set the Twilio and `IRIS_PUBLIC_BASE_URL` values in `server/.env`. The public UR
 
 - `IRIS_DEMO_PHONE_E164` is the authorized destination phone that receives Iris’s call.
 - `TWILIO_PHONE_NUMBER` is Iris’s Twilio sender/from-number. It is not the demo destination.
+- `TWILIO_MESSAGING_SERVICE_SID` is required for every Iris SMS. Configure Twilio Advanced Opt-Out on that Messaging Service with the same HELP response as `IRIS_SMS_HELP_TEXT` (shown on the public opt-in form).
 - `IRIS_FAREWELL_CLOSE_TIMEOUT_MS` is optional and defaults to `8000`. It bounds only a missing completion event after a tool-driven goodbye; it is not an idle-call timeout.
 
 Set the destination before running `npm run db:seed`. Start the server and frontend, sign in as the operator, press **Call now**, answer the phone, and speak with Iris.
@@ -72,8 +95,9 @@ The seed grants summary-retention consent for the demo person. To run the full d
 6. In a separate short call, hang up the handset normally without saying goodbye. The existing Twilio disconnect path still finalizes the call; `end_call` is additive, not required for every demo.
 7. Create a trusted-contact link with `request_check_in` and `view_events`, open it in a separate session, and select **Ask Iris to check in**. The timeline should attribute the request by the contact’s display name and may show the two generic Shield cards.
 8. Check that no recap card or timeline payload exposes a recall anchor, raw transcript, SMS body, phone number, provider identifier, Shield scenario, or red-flag label.
+9. For the enrollment/compliance check, create an opt-in link from the operator contact card, submit the exact drafted mobile number and checkbox at `/opt-in`, and confirm the operator sees the contact as **SMS: opted in** with confirmation status. In Twilio’s Messaging Service test setup, reply **STOP** from that number; the inbound webhook should change every matching Iris contact to **SMS: opted out**. Reply **HELP** to verify Twilio’s configured help response. Replying **START** does not restore Iris eligibility; use a new web opt-in link.
 
-Twilio accepting an SMS is not proof of delivery. US long-code delivery may require A2P 10DLC brand/campaign registration, which is external to Iris. ASR can also misrecognize names or short utterances, so use an ordinary durable fact for the recall demonstration. If delivery is confirmed, do not retry. If delivery remains uncertain, an operator may use the recovery card after accepting that **Retry SMS** can create a duplicate message by design.
+Twilio accepting an SMS is not proof of delivery. US long-code delivery may require A2P 10DLC brand/campaign registration, which is external to Iris. Every production body begins with one `Iris:` prefix and ends with `Reply HELP for help. Reply STOP to opt out.`; the Messaging Service must be configured with matching Advanced Opt-Out behavior. ASR can also misrecognize names or short utterances, so use an ordinary durable fact for the recall demonstration. If delivery is confirmed, do not retry. If delivery remains uncertain, an operator may use the recovery card after accepting that **Retry SMS** can create a duplicate message by design.
 
 ## Repository layout
 

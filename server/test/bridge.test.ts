@@ -4,6 +4,13 @@ import { ActionDispatcher } from "../src/actions.js";
 import { BridgeService } from "../src/bridge.js";
 import { closeDatabase, createDatabase, createRepositories } from "../src/db/index.js";
 
+function grantSmsOptIn(repositories: ReturnType<typeof createRepositories>, trustedContactId: string, phoneE164 = "+15550002222") {
+  repositories.recordTrustedContactSmsConsent({
+    id: `sms-consent-${trustedContactId}`, trustedContactId, phoneE164,
+    status: "granted", source: "web_form", disclosureVersion: "test",
+  });
+}
+
 test("Bridge recalls scoped memory and sends only to the selected trusted contact", async () => {
   const database = createDatabase(":memory:");
   const repositories = createRepositories(database);
@@ -11,6 +18,7 @@ test("Bridge recalls scoped memory and sends only to the selected trusted contac
   repositories.createCall({ id: "call-a", personId: "person-a", status: "completed" });
   repositories.recordConsent({ id: "consent-a", personId: "person-a", kind: "summary_retention", status: "granted", source: "test" });
   repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Robin", relationship: "daughter", phoneE164: "+15550002222" });
+  grantSmsOptIn(repositories, "contact-a");
   repositories.createMemory({ id: "memory-a", personId: "person-a", sourceCallId: "call-a", category: "durable_fact", payload: { fact: "Avery enjoys gardening." } });
   let sent = 0;
   const dispatcher = new ActionDispatcher(repositories, { twilioAccountSid: "AC", twilioAuthToken: "token", twilioPhoneNumber: "+15550001111", publicBaseUrl: "https://iris.test", openaiApiKey: "key", safetyIdentifier: "safe" }, { messages: { create: async () => { sent += 1; return { sid: "SM123", status: "queued" }; } } });
@@ -35,6 +43,7 @@ test("Bridge exposes only the latest valid recall anchor while consent is active
   repositories.createPerson({ id: "person-a", displayName: "Avery" });
   repositories.createCall({ id: "call-a", personId: "person-a", status: "completed" });
   repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Robin", relationship: "daughter", phoneE164: "+15550002222" });
+  grantSmsOptIn(repositories, "contact-a");
   repositories.recordConsent({ id: "consent-a", personId: "person-a", kind: "summary_retention", status: "granted", source: "test" });
   repositories.createMemory({ id: "memory-fact", personId: "person-a", sourceCallId: "call-a", category: "durable_fact", payload: { fact: "Avery enjoys gardening." } });
   repositories.createMemory({ id: "memory-anchor-old", personId: "person-a", sourceCallId: "call-a", category: "recall_anchor", payload: { anchor: "your roses" } });
@@ -60,6 +69,7 @@ test("Bridge memory context keeps durable facts when many recall anchors exist",
   repositories.createPerson({ id: "person-a", displayName: "Avery" });
   repositories.createCall({ id: "call-a", personId: "person-a", status: "completed" });
   repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Robin", relationship: "daughter", phoneE164: "+15550002222" });
+  grantSmsOptIn(repositories, "contact-a");
   repositories.recordConsent({ id: "consent-a", personId: "person-a", kind: "summary_retention", status: "granted", source: "test" });
   repositories.createMemory({ id: "memory-fact", personId: "person-a", sourceCallId: "call-a", category: "durable_fact", payload: { fact: "Avery enjoys gardening." } });
   for (let index = 0; index < 25; index += 1) {
@@ -88,6 +98,7 @@ test("Bridge resumes an interrupted approved action on retry instead of aborting
   const repositories = createRepositories(database);
   repositories.createPerson({ id: "person-a", displayName: "Avery" });
   repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Robin", relationship: "daughter", phoneE164: "+15550002222" });
+  grantSmsOptIn(repositories, "contact-a");
   let attempts = 0;
   const dispatcher = new ActionDispatcher(repositories, { twilioAccountSid: "AC", twilioAuthToken: "token", twilioPhoneNumber: "+15550001111", publicBaseUrl: "https://iris.test", openaiApiKey: "key", safetyIdentifier: "safe" }, { messages: { create: async () => {
     attempts += 1;
@@ -112,6 +123,7 @@ test("Bridge propagates provider rejection and creates no bridge-sent event", as
   const repositories = createRepositories(database);
   repositories.createPerson({ id: "person-a", displayName: "Avery" });
   repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Robin", relationship: "daughter", phoneE164: "+15550002222" });
+  grantSmsOptIn(repositories, "contact-a");
   const dispatcher = new ActionDispatcher(repositories, { twilioAccountSid: "AC", twilioAuthToken: "token", twilioPhoneNumber: "+15550001111", publicBaseUrl: "https://iris.test", openaiApiKey: "key", safetyIdentifier: "safe" }, { messages: { create: async () => { throw new Error("rejected"); } } });
   try {
     await assert.rejects(new BridgeService(repositories, dispatcher).sendApprovedSms({ personId: "person-a", trustedContactId: "contact-a", message: "Please call me.", approvalId: "tool-call-fail" }), /Unable to dispatch message/);

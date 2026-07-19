@@ -6,10 +6,10 @@ import type { TelephonyConfig } from "./config.js";
 type SmsConfig = Pick<
   TelephonyConfig,
   "twilioAccountSid" | "twilioAuthToken" | "twilioPhoneNumber" | "publicBaseUrl"
->;
+> & Partial<Pick<TelephonyConfig, "twilioMessagingServiceSid">>;
 import type { IrisRepositories } from "./db/repositories.js";
 
-type MessagingClient = { messages: { create(input: { to: string; from: string; body: string; statusCallback: string }): Promise<{ sid: string; status: string }> } };
+type MessagingClient = { messages: { create(input: { to: string; messagingServiceSid: string; body: string; statusCallback: string }): Promise<{ sid: string; status: string }> } };
 type TwilioRequestError = Error & { status?: unknown; code?: unknown };
 
 // How long an outbox claim may sit in `dispatching` before a sweep parks it for
@@ -48,7 +48,11 @@ export class ActionDispatcher {
     if (!this.repositories.claimActionDispatch(actionId)) return null;
     try {
       const message = await this.client.messages.create({
-        to: payload.to, from: this.config.twilioPhoneNumber, body: payload.body,
+        to: payload.to,
+        // loadTelephonyConfig requires this in production. The fallback keeps
+        // isolated pre-existing dispatcher tests transport-free.
+        messagingServiceSid: this.config.twilioMessagingServiceSid ?? "MG_TEST_UNCONFIGURED",
+        body: payload.body,
         statusCallback: `${this.config.publicBaseUrl}/api/actions/${actionId}/messages/status`,
       });
       const finalized = this.repositories.finalizeActionDispatch({ id: randomUUID(), personId: action.personId, actionRequestId: action.id, providerMessageId: message.sid, deliveryStatus: message.status });

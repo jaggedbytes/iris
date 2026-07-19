@@ -204,4 +204,87 @@ export const migrations = [
       CREATE INDEX idx_memories_person_category_created ON memories(person_id, category, created_at DESC);
     `,
   },
+  {
+    id: "008_trusted_contact_sms_opt_in",
+    sql: `
+      -- action_requests is rebuilt to extend its feature CHECK. Rename the
+      -- parent first, then rebuild its dependent child tables so foreign keys
+      -- continue to point at the replacement table rather than legacy rows.
+      PRAGMA defer_foreign_keys = ON;
+      ALTER TABLE action_requests RENAME TO action_requests_legacy;
+      CREATE TABLE action_requests (
+        id TEXT PRIMARY KEY,
+        person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+        feature TEXT NOT NULL CHECK(feature IN ('bridge', 'shield', 'translator', 'enrollment')),
+        action_type TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('pending_approval', 'approved', 'cancelled', 'dispatched', 'failed')),
+        approval_source TEXT,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO action_requests
+        (id, person_id, feature, action_type, payload_json, status, approval_source, idempotency_key, created_at, updated_at)
+        SELECT id, person_id, feature, action_type, payload_json, status, approval_source, idempotency_key, created_at, updated_at
+        FROM action_requests_legacy;
+
+      CREATE TABLE messages_next (
+        id TEXT PRIMARY KEY,
+        person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+        action_request_id TEXT REFERENCES action_requests(id) ON DELETE SET NULL,
+        direction TEXT NOT NULL CHECK(direction IN ('inbound', 'outbound')),
+        provider_message_id TEXT UNIQUE,
+        delivery_status TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      INSERT INTO messages_next
+        (id, person_id, action_request_id, direction, provider_message_id, delivery_status, created_at)
+        SELECT id, person_id, action_request_id, direction, provider_message_id, delivery_status, created_at
+        FROM messages;
+
+      CREATE TABLE action_dispatch_outbox_next (
+        action_request_id TEXT PRIMARY KEY REFERENCES action_requests(id) ON DELETE CASCADE,
+        state TEXT NOT NULL CHECK(state IN ('pending', 'dispatching', 'dispatched', 'failed', 'retryable', 'needs_review')),
+        provider_message_id TEXT UNIQUE,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO action_dispatch_outbox_next
+        (action_request_id, state, provider_message_id, created_at, updated_at)
+        SELECT action_request_id, state, provider_message_id, created_at, updated_at
+        FROM action_dispatch_outbox;
+
+      DROP TABLE messages;
+      DROP TABLE action_dispatch_outbox;
+      ALTER TABLE messages_next RENAME TO messages;
+      ALTER TABLE action_dispatch_outbox_next RENAME TO action_dispatch_outbox;
+      DROP TABLE action_requests_legacy;
+
+      CREATE TABLE trusted_contact_sms_consents (
+        id TEXT PRIMARY KEY,
+        trusted_contact_id TEXT NOT NULL REFERENCES trusted_contacts(id) ON DELETE CASCADE,
+        phone_e164 TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('granted', 'revoked')),
+        source TEXT NOT NULL CHECK(source IN ('web_form', 'demo_seed', 'inbound_stop')),
+        disclosure_version TEXT,
+        occurred_at TEXT NOT NULL
+      );
+
+      CREATE TABLE sms_opt_in_invitations (
+        id TEXT PRIMARY KEY,
+        person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+        trusted_contact_id TEXT NOT NULL REFERENCES trusted_contacts(id) ON DELETE CASCADE,
+        token_hash TEXT NOT NULL UNIQUE,
+        expires_at TEXT NOT NULL,
+        consumed_at TEXT,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX idx_trusted_contact_sms_consents_contact_occurred
+        ON trusted_contact_sms_consents(trusted_contact_id, occurred_at DESC);
+      CREATE INDEX idx_sms_opt_in_invitations_token ON sms_opt_in_invitations(token_hash);
+      CREATE INDEX idx_sms_opt_in_invitations_contact ON sms_opt_in_invitations(trusted_contact_id, created_at DESC);
+    `,
+  },
 ] as const;

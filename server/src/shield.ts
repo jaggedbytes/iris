@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import type { ActionDispatcher } from "./actions.js";
 import type { IrisRepositories } from "./db/repositories.js";
+import { formatIrisSms, truncateSmsContent } from "./sms.js";
 
 const SHIELD_ASSESSMENT_TIMEOUT_MS = 12_000;
 const MAX_SITUATION_LENGTH = 2_000;
@@ -27,9 +28,13 @@ export type ShieldAssessment =
 
 export type ShieldRequest = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
-/** The only alert body Shield may send once checkpoint 3 enables delivery. */
-export function createShieldAlertText(personDisplayName: string) {
+export function createShieldAlertContent(personDisplayName: string) {
   return `Iris is speaking with ${personDisplayName} about something that feels urgent or suspicious. Please check in with them when you can.`;
+}
+
+/** The exact fully formatted alert Iris must quote before spoken approval. */
+export function createShieldAlertText(personDisplayName: string) {
+  return formatIrisSms(truncateSmsContent(createShieldAlertContent(personDisplayName)));
 }
 
 const schema = {
@@ -138,8 +143,9 @@ export class ShieldService {
   async sendApprovedAlert(input: { callId: string; personId: string; trustedContactId: string; approvalId: string }) {
     if (!this.actions) return { ok: false };
     const person = this.repositories.getPerson(input.personId);
-    const contact = this.repositories.getTrustedContact(input.trustedContactId);
-    if (!person || !contact || contact.personId !== input.personId || !contact.phoneE164) return { ok: false };
+    const contact = this.repositories.getSmsEligibleTrustedContact({ id: input.trustedContactId, personId: input.personId });
+    const body = person ? createShieldAlertText(person.displayName) : null;
+    if (!person || !contact || !body) return { ok: false };
 
     const idempotencyKey = `shield:${input.approvalId}`;
     const existing = this.repositories.findActionRequestByIdempotencyKey(idempotencyKey);
@@ -161,7 +167,7 @@ export class ShieldService {
         actionType: "sms",
         approvalSource: "spoken_call",
         idempotencyKey,
-        payload: { to: contact.phoneE164, body: createShieldAlertText(person.displayName) },
+        payload: { to: contact.phoneE164, body },
       });
     }
     this.actions.approve(actionId, "spoken_call");
