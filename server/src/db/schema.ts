@@ -340,4 +340,50 @@ export const migrations = [
       DROP TRIGGER prevent_trusted_contact_phone_from_matching_person_on_update;
     `,
   },
+  {
+    id: "012_person_own_trusted_contact_phone_distinct",
+    sql: `
+      CREATE TRIGGER prevent_trusted_contact_phone_matching_own_person_on_insert
+      BEFORE INSERT ON trusted_contacts
+      WHEN NEW.phone_e164 IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM people
+          WHERE id = NEW.person_id AND phone_e164 = NEW.phone_e164
+        )
+      BEGIN
+        SELECT RAISE(ABORT, 'trusted contact phone matches enrolled person');
+      END;
+
+      CREATE TRIGGER prevent_trusted_contact_phone_matching_own_person_on_update
+      BEFORE UPDATE OF phone_e164 ON trusted_contacts
+      WHEN NEW.phone_e164 IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM people
+          WHERE id = NEW.person_id AND phone_e164 = NEW.phone_e164
+        )
+      BEGIN
+        SELECT RAISE(ABORT, 'trusted contact phone matches enrolled person');
+      END;
+
+      CREATE TRIGGER prevent_person_phone_matching_own_trusted_contact_on_update
+      BEFORE UPDATE OF phone_e164 ON people
+      WHEN NEW.phone_e164 IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM trusted_contacts
+          WHERE person_id = NEW.id AND phone_e164 = NEW.phone_e164
+        )
+      BEGIN
+        SELECT RAISE(ABORT, 'person phone matches trusted contact');
+      END;
+    `,
+  },
+  {
+    id: "013_trusted_contact_phone_unique_per_person",
+    sql: `
+      DROP INDEX IF EXISTS idx_trusted_contacts_phone_e164_unique;
+      CREATE UNIQUE INDEX idx_trusted_contacts_person_phone_unique
+        ON trusted_contacts(person_id, phone_e164)
+        WHERE phone_e164 IS NOT NULL;
+    `,
+  },
 ] as const;

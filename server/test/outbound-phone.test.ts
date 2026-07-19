@@ -163,7 +163,7 @@ test("rejects a second trusted contact instead of reusing another contact's acti
   const database = createDatabase(":memory:");
   const repositories = createRepositories(database);
   repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
-  repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Robin", relationship: "daughter", phoneE164: "+15550002222" });
+  repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Robin", relationship: "daughter", phoneE164: "+15550004444" });
   repositories.createTrustedContact({ id: "contact-b", personId: "person-a", displayName: "Sam", relationship: "son", phoneE164: "+15550003333" });
   let providerCalls = 0;
   let resolveProviderCall: ((value: { sid: string }) => void) | undefined;
@@ -199,7 +199,7 @@ test("family-requested calls retain the display name and use a friendly spoken t
   const database = createDatabase(":memory:");
   const repositories = createRepositories(database);
   repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
-  repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Mary Jane", relationship: "daughter", phoneE164: "+15550002222" });
+  repositories.createTrustedContact({ id: "contact-a", personId: "person-a", displayName: "Mary Jane", relationship: "daughter", phoneE164: "+15550003333" });
   repositories.recordConsent({ id: "consent-a", personId: "person-a", kind: "summary_retention", status: "granted", source: "test" });
   repositories.createCall({ id: "call-memory", personId: "person-a", status: "completed" });
   repositories.createMemory({ id: "memory-anchor", personId: "person-a", sourceCallId: "call-memory", category: "recall_anchor", payload: { anchor: "your garden plans" } });

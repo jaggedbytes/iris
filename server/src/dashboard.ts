@@ -56,7 +56,17 @@ function isTrustedContactPhoneUniqueViolation(error: unknown) {
     error instanceof Error &&
     "code" in error &&
     error.code === "SQLITE_CONSTRAINT_UNIQUE" &&
-    error.message.includes("trusted_contacts.phone_e164")
+    (error.message.includes("trusted_contacts.phone_e164")
+      || error.message.includes("idx_trusted_contacts_person_phone_unique")
+      || error.message.includes("idx_trusted_contacts_phone_e164_unique"))
+  );
+}
+
+function isOwnCirclePhoneConflict(error: unknown) {
+  return (
+    error instanceof Error &&
+    (error.message.includes("trusted contact phone matches enrolled person")
+      || error.message.includes("person phone matches trusted contact"))
   );
 }
 
@@ -294,16 +304,29 @@ export function createDashboardRouter(context: DashboardContext) {
       response.status(400).json({ error: "An E.164 phone number is required." });
       return;
     }
+    const person = context.repositories.getPerson(request.params.personId);
+    if (!person) {
+      response.status(404).json({ error: "Person not found." });
+      return;
+    }
+    if (context.repositories.listTrustedContacts(person.id).some((contact) => contact.phoneE164 === phoneE164)) {
+      response.status(409).json({ error: "This phone number is already used by a trusted contact for this person." });
+      return;
+    }
     try {
-      const person = context.repositories.updatePersonPhone(request.params.personId, phoneE164);
-      if (!person) {
+      const updated = context.repositories.updatePersonPhone(person.id, phoneE164);
+      if (!updated) {
         response.status(404).json({ error: "Person not found." });
         return;
       }
-      response.json({ person });
+      response.json({ person: updated });
     } catch (error) {
       if (isPeoplePhoneUniqueViolation(error)) {
         response.status(409).json({ error: "This phone number is already used by an enrolled person." });
+        return;
+      }
+      if (isOwnCirclePhoneConflict(error)) {
+        response.status(409).json({ error: "This phone number is already used by a trusted contact for this person." });
         return;
       }
       throw error;
@@ -565,6 +588,10 @@ export function createDashboardRouter(context: DashboardContext) {
       response.status(400).json({ error: "Use a E.164 format phone number (e.g. +15551234567)." });
       return;
     }
+    if (person.phoneE164 && person.phoneE164 === phoneE164) {
+      response.status(409).json({ error: "A trusted contact cannot use the enrolled person's phone number." });
+      return;
+    }
     try {
       const contact = context.repositories.createTrustedContact({
         id: randomUUID(),
@@ -577,6 +604,10 @@ export function createDashboardRouter(context: DashboardContext) {
     } catch (error) {
       if (isTrustedContactPhoneUniqueViolation(error)) {
         response.status(409).json({ error: "This phone number is already used by a trusted contact." });
+        return;
+      }
+      if (isOwnCirclePhoneConflict(error)) {
+        response.status(409).json({ error: "A trusted contact cannot use the enrolled person's phone number." });
         return;
       }
       throw error;
@@ -601,6 +632,10 @@ export function createDashboardRouter(context: DashboardContext) {
       response.status(400).json({ error: "Use a E.164 format phone number (e.g. +15551234567)." });
       return;
     }
+    if (person.phoneE164 && person.phoneE164 === phoneE164) {
+      response.status(409).json({ error: "A trusted contact cannot use the enrolled person's phone number." });
+      return;
+    }
     try {
       const updated = context.repositories.updateTrustedContactPhone(contact.id, phoneE164);
       if (!updated) {
@@ -611,6 +646,10 @@ export function createDashboardRouter(context: DashboardContext) {
     } catch (error) {
       if (isTrustedContactPhoneUniqueViolation(error)) {
         response.status(409).json({ error: "This phone number is already used by a trusted contact." });
+        return;
+      }
+      if (isOwnCirclePhoneConflict(error)) {
+        response.status(409).json({ error: "A trusted contact cannot use the enrolled person's phone number." });
         return;
       }
       throw error;

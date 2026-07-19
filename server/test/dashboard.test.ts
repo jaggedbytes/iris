@@ -227,15 +227,28 @@ test("keeps trusted-contact phone numbers unique and reports conflicts", async (
       headers,
       body: JSON.stringify({ displayName: "Drew", relationship: "friend", phoneE164: "+15550009999" }),
     });
-    assert.equal(sameAsEnrolledPerson.status, 201);
+    assert.equal(sameAsEnrolledPerson.status, 409);
+    assert.match(
+      ((await sameAsEnrolledPerson.json()) as { error: string }).error,
+      /cannot use the enrolled person's phone number/i,
+    );
 
-    const duplicate = await fetch(`${fixture.url}/api/dashboard/people/person-a/trusted-contacts`, {
+    // Same phone may be reused by a trusted contact for a different enrolled person.
+    const sharedAcrossPeople = await fetch(`${fixture.url}/api/dashboard/people/person-a/trusted-contacts`, {
       method: "POST",
       headers,
       body: JSON.stringify({ displayName: "Morgan", relationship: "neighbor", phoneE164: "+15550008888" }),
     });
-    assert.equal(duplicate.status, 409);
-    assert.match(((await duplicate.json()) as { error: string }).error, /already used by a trusted contact/i);
+    assert.equal(sharedAcrossPeople.status, 201);
+
+    // Within one person, contact phones stay unique.
+    const duplicateWithinPerson = await fetch(`${fixture.url}/api/dashboard/people/person-a/trusted-contacts`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ displayName: "Lee", relationship: "friend", phoneE164: "+15550008888" }),
+    });
+    assert.equal(duplicateWithinPerson.status, 409);
+    assert.match(((await duplicateWithinPerson.json()) as { error: string }).error, /already used by a trusted contact/i);
 
     const duplicateEdit = await fetch(`${fixture.url}/api/dashboard/people/person-a/trusted-contacts/contact-a/phone`, {
       method: "PATCH",
@@ -244,6 +257,7 @@ test("keeps trusted-contact phone numbers unique and reports conflicts", async (
     });
     assert.equal(duplicateEdit.status, 409);
 
+    // A different enrolled person may still share another family's trusted-contact number.
     const personSharingTrustedContactPhone = await fetch(`${fixture.url}/api/dashboard/people`, {
       method: "POST",
       headers,
@@ -251,12 +265,28 @@ test("keeps trusted-contact phone numbers unique and reports conflicts", async (
     });
     assert.equal(personSharingTrustedContactPhone.status, 201);
 
-    const duplicatePersonEdit = await fetch(`${fixture.url}/api/dashboard/people/person-b/phone`, {
+    // An enrolled person cannot take a phone already used by their own trusted contact.
+    const ownContactPhone = await fetch(`${fixture.url}/api/dashboard/people/person-b/phone`, {
       method: "PATCH",
       headers,
       body: JSON.stringify({ phoneE164: "+15550008888" }),
     });
+    assert.equal(ownContactPhone.status, 409);
+    assert.match(
+      ((await ownContactPhone.json()) as { error: string }).error,
+      /already used by a trusted contact for this person/i,
+    );
+
+    const duplicatePersonEdit = await fetch(`${fixture.url}/api/dashboard/people/person-b/phone`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ phoneE164: "+15550009999" }),
+    });
     assert.equal(duplicatePersonEdit.status, 409);
+    assert.match(
+      ((await duplicatePersonEdit.json()) as { error: string }).error,
+      /already used by an enrolled person/i,
+    );
   } finally {
     fixture.close();
   }
