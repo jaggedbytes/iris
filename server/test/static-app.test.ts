@@ -11,7 +11,8 @@ test("serves built SPA routes without shadowing API or health endpoints", async 
   await writeFile(join(staticDir, "index.html"), "<html><body>Iris hosted app</body></html>");
   await writeFile(join(staticDir, "asset.txt"), "static asset");
   const app = createApp({ staticDir });
-  const server = app.listen();
+  const server = app.listen(0);
+  await new Promise((resolve) => server.once("listening", resolve));
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   const baseUrl = `http://127.0.0.1:${address.port}`;
