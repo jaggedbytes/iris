@@ -77,7 +77,7 @@
 @layer components {
   .access-shell,
   .dashboard-shell {
-    @apply min-h-screen p-[clamp(1.25rem,4vw,3.5rem)];
+    @apply min-h-screen p-[clamp(1.25rem,4vw,3.5rem)] max-[560px]:p-5;
     background: radial-gradient(circle at top left, var(--color-surface), var(--color-page) 75%);
   }
 
@@ -197,205 +197,237 @@
     @apply mt-[0.15rem] w-full justify-self-stretch px-[0.85rem] py-[0.55rem] text-[0.84rem];
   }
 
-  .dashboard-shell.max-\[560px\] {
-    /* responsive padding handled on shell below */
+  /* Enrollment */
+  .enrollment-card {
+    @apply order-1 grid gap-2;
+  }
+
+  .person-picker {
+    @apply grid gap-[0.15rem];
+  }
+
+  .person-picker strong,
+  .trusted-contact-picker strong {
+    @apply text-[0.85rem] text-primary-dark;
+  }
+
+  .person-picker span,
+  .trusted-contact-picker span {
+    @apply text-[0.78rem] leading-snug text-muted;
+  }
+
+  .enrollment-card select,
+  .trusted-contact-picker select,
+  .compact-form input {
+    @apply w-full rounded-[0.55rem] border border-border bg-surface p-[0.65rem];
+  }
+
+  .person-picker select {
+    @apply p-2;
+  }
+
+  .compact-form {
+    @apply mt-[0.6rem] grid gap-2 border-t border-border pt-[0.8rem];
+  }
+
+  .compact-form strong {
+    @apply text-[0.85rem];
+  }
+
+  .form-field {
+    @apply grid gap-1 text-[0.8rem] font-bold text-ink;
+  }
+
+  .form-field span {
+    @apply font-medium text-muted;
+  }
+
+  .card-header .privacy-note,
+  .enrollment-header .privacy-note {
+    @apply mt-2;
+  }
+
+  /* Person */
+  .profile-card {
+    @apply order-2 grid content-start gap-[0.55rem];
+  }
+
+  .person-phone {
+    @apply mt-[0.45rem] text-[0.9rem] leading-snug text-muted;
+  }
+
+  .consent-choices {
+    @apply grid justify-items-stretch gap-[0.85rem];
+  }
+
+  .profile-card .consent-choices {
+    @apply mt-[0.35rem] gap-[0.85rem] pt-3;
+  }
+
+  .consent-check {
+    @apply flex items-start gap-[0.55rem] text-[0.84rem] leading-snug text-ink;
+  }
+
+  .consent-check input:not(.consent-toggle) {
+    @apply mt-[0.2rem];
+  }
+
+  .consent-choices .consent-check {
+    @apply items-start gap-[0.7rem] text-muted;
+  }
+
+  .consent-choices .consent-option {
+    @apply grid min-w-0 gap-[0.2rem];
+  }
+
+  .consent-choices .consent-option-heading {
+    @apply flex items-center justify-between gap-2 text-ink;
+  }
+
+  .consent-choices .consent-option-heading strong {
+    @apply text-[0.85rem];
+  }
+
+  .consent-choices .consent-status {
+    @apply shrink-0 rounded-full bg-lilac px-[0.42rem] py-[0.12rem] text-[0.7rem] leading-tight font-extrabold text-primary-dark;
+  }
+
+  .consent-attestation {
+    @apply mt-[0.15rem] grid gap-[0.4rem] border-t border-border pt-3;
+  }
+
+  .consent-form-error {
+    @apply ml-[2.9rem] text-[0.75rem] leading-snug font-bold text-attention;
+  }
+
+  .consent-choices .secondary-button {
+    @apply justify-self-start;
+  }
+
+  /* Trusted contacts */
+  .trusted-contacts-card {
+    @apply order-3;
+  }
+
+  .trusted-contact-picker {
+    @apply mt-2 grid gap-[0.3rem];
+  }
+
+  .contact-list {
+    @apply mt-[1.2rem] grid list-none gap-[0.7rem] p-0;
+  }
+
+  .contact-list > li {
+    @apply grid gap-[0.85rem] border-b border-border py-3 last:border-b-0;
+  }
+
+  .contact-list strong {
+    @apply text-[0.9rem];
+  }
+
+  .contact-list span,
+  .magic-link span {
+    @apply text-[0.78rem] text-muted;
+  }
+
+  .contact-details {
+    @apply grid gap-[0.15rem];
+  }
+
+  .contact-relationship {
+    @apply text-[0.78rem] text-muted;
+  }
+
+  .contact-status-list {
+    @apply mt-2 grid list-none gap-[0.35rem] p-0;
+  }
+
+  .contact-status-list li {
+    @apply flex items-center justify-between gap-3 text-[0.76rem] text-muted;
+  }
+
+  .contact-status-list .contact-status-pill {
+    @apply shrink-0 rounded-full bg-lilac px-[0.42rem] py-[0.12rem] text-[0.7rem] font-extrabold text-primary-dark capitalize;
+  }
+
+  .contact-actions {
+    @apply grid w-full gap-[0.55rem];
+  }
+
+  .contact-actions .secondary-button {
+    @apply w-full;
+  }
+
+  .contact-attestation {
+    @apply flex items-start gap-[0.55rem] text-left text-[0.78rem] leading-snug text-muted;
+  }
+
+  .magic-link {
+    @apply mt-4 grid gap-2 border-t border-border pt-4;
+  }
+
+  /* Actions */
+  .actions-card {
+    @apply order-4;
+  }
+
+  /* Recent calls + timeline lists */
+  .recent-calls-card {
+    @apply order-5;
+  }
+
+  .timeline-card {
+    @apply order-6;
+  }
+
+  .item-list {
+    @apply mt-[1.2rem] grid list-none gap-[0.7rem] p-0;
+  }
+
+  .item-list li {
+    @apply grid gap-[0.2rem] rounded-[0.7rem] bg-subtle p-[0.8rem];
+  }
+
+  .item-list strong {
+    @apply text-[0.9rem];
+  }
+
+  .item-list span {
+    @apply text-[0.78rem] text-muted;
+  }
+
+  .item-list .warning-note {
+    @apply font-bold text-attention;
+  }
+
+  .care-summary {
+    @apply mt-[0.55rem] grid gap-[0.55rem] text-ink;
+  }
+
+  .care-summary strong {
+    @apply block text-[0.82rem];
+  }
+
+  .care-summary ul {
+    @apply mt-[0.22rem] list-disc pl-[1.1rem];
+  }
+
+  /* Opt-in / legal */
+  .legal-note {
+    @apply text-[0.8rem] leading-snug text-muted;
+  }
+
+  .legal-note a {
+    @apply text-primary;
+  }
+
+  .sr-only {
+    @apply absolute m-[-1px] h-px w-px overflow-hidden border-0 p-0 whitespace-nowrap;
+    clip: rect(0, 0, 0, 0);
   }
 }
 
-/* Card-specific layout kept for Checkpoint 3 card-by-card migration. */
-.profile-card {
-  display: grid;
-  gap: 0.55rem;
-  align-content: start;
-  order: 2;
-}
-.card-header .privacy-note,
-.enrollment-header .privacy-note {
-  margin: 0.5rem 0 0;
-}
-.person-phone {
-  margin: 0.45rem 0 0;
-  color: var(--color-muted);
-  font-size: 0.9rem;
-  line-height: 1.45;
-}
-.enrollment-card { order: 1; }
-.trusted-contacts-card { order: 3; }
-.actions-card { order: 4; }
-.recent-calls-card { order: 5; }
-.timeline-card { order: 6; }
-.item-list,
-.contact-list {
-  display: grid;
-  gap: 0.7rem;
-  margin: 1.2rem 0 0;
-  padding: 0;
-  list-style: none;
-}
-.item-list li {
-  display: grid;
-  gap: 0.2rem;
-  padding: 0.8rem;
-  border-radius: 0.7rem;
-  background: var(--color-subtle);
-}
-.item-list strong,
-.contact-list strong {
-  font-size: 0.9rem;
-}
-.item-list span,
-.contact-list span,
-.magic-link span {
-  color: var(--color-muted);
-  font-size: 0.78rem;
-}
-.item-list .warning-note {
-  color: var(--color-attention);
-  font-weight: 700;
-}
-.contact-list > li {
-  display: grid;
-  gap: 0.85rem;
-  padding: 0.75rem 0;
-  border-bottom: 1px solid var(--color-border);
-}
-.contact-list > li:last-child {
-  border-bottom: 0;
-}
-.contact-details {
-  display: grid;
-  gap: 0.15rem;
-}
-.contact-relationship {
-  color: var(--color-muted);
-  font-size: 0.78rem;
-}
-.contact-status-list {
-  display: grid;
-  gap: 0.35rem;
-  margin: 0.5rem 0 0;
-  padding: 0;
-  list-style: none;
-}
-.contact-status-list li {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.75rem;
-  align-items: center;
-  color: var(--color-muted);
-  font-size: 0.76rem;
-}
-.contact-status-list .contact-status-pill {
-  flex: 0 0 auto;
-  padding: 0.12rem 0.42rem;
-  border-radius: 999px;
-  color: var(--color-primary-dark);
-  background: var(--color-lilac);
-  font-size: 0.7rem;
-  font-weight: 800;
-  text-transform: capitalize;
-}
-.magic-link {
-  display: grid;
-  gap: 0.5rem;
-  margin-top: 1rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--color-border);
-}
-.enrollment-card {
-  display: grid;
-  gap: 0.5rem;
-}
-.person-picker {
-  display: grid;
-  gap: 0.15rem;
-}
-.trusted-contact-picker {
-  display: grid;
-  gap: 0.3rem;
-  margin-top: 0.5rem;
-}
-.person-picker strong,
-.trusted-contact-picker strong {
-  color: var(--color-primary-dark);
-  font-size: 0.85rem;
-}
-.person-picker span,
-.trusted-contact-picker span {
-  color: var(--color-muted);
-  font-size: 0.78rem;
-  line-height: 1.4;
-}
-.enrollment-card select,
-.trusted-contact-picker select,
-.compact-form input {
-  width: 100%;
-  padding: 0.65rem;
-  border: 1px solid var(--color-border);
-  border-radius: 0.55rem;
-  background: var(--color-surface);
-}
-.person-picker select {
-  padding: 0.5rem;
-}
-.compact-form {
-  display: grid;
-  gap: 0.5rem;
-  margin-top: 0.6rem;
-  padding-top: 0.8rem;
-  border-top: 1px solid var(--color-border);
-}
-.compact-form strong {
-  font-size: 0.85rem;
-}
-.form-field {
-  display: grid;
-  gap: 0.25rem;
-  color: var(--color-ink);
-  font-size: 0.8rem;
-  font-weight: 700;
-}
-.form-field span {
-  color: var(--color-muted);
-  font-weight: 500;
-}
-.contact-actions {
-  display: grid;
-  gap: 0.55rem;
-  width: 100%;
-}
-.contact-actions .secondary-button {
-  width: 100%;
-}
-.contact-attestation {
-  display: flex;
-  gap: 0.55rem;
-  align-items: flex-start;
-  color: var(--color-muted);
-  font-size: 0.78rem;
-  line-height: 1.35;
-  text-align: left;
-}
-.consent-check {
-  display: flex;
-  gap: 0.55rem;
-  align-items: flex-start;
-  color: var(--color-ink);
-  font-size: 0.84rem;
-  line-height: 1.45;
-}
-.consent-check input:not(.consent-toggle) {
-  margin-top: 0.2rem;
-}
-.consent-choices {
-  justify-items: stretch;
-  gap: 0.85rem;
-}
-.consent-choices .consent-check {
-  align-items: flex-start;
-  gap: 0.7rem;
-  color: var(--color-muted);
-}
+/* Consent toggle: pseudo-element knob stays custom (not expressible cleanly via utilities). */
 input.consent-toggle {
   appearance: none;
   position: relative;
@@ -410,6 +442,7 @@ input.consent-toggle {
   cursor: pointer;
   transition: background 160ms ease, border-color 160ms ease;
 }
+
 .consent-toggle::after {
   position: absolute;
   top: 50%;
@@ -424,98 +457,14 @@ input.consent-toggle {
   transform: translateY(-50%);
   transition: left 160ms ease, right 160ms ease, transform 160ms ease;
 }
+
 .consent-toggle:checked {
   border-color: var(--color-primary);
   background: var(--color-primary);
 }
+
 .consent-toggle:checked::after {
   left: auto;
   right: 0.15rem;
   transform: translateY(-50%);
-}
-.consent-choices .consent-option {
-  display: grid;
-  gap: 0.2rem;
-  min-width: 0;
-}
-.consent-choices .consent-option-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  color: var(--color-ink);
-}
-.consent-choices .consent-option-heading strong {
-  font-size: 0.85rem;
-}
-.consent-choices .consent-status {
-  flex: 0 0 auto;
-  padding: 0.12rem 0.42rem;
-  border-radius: 999px;
-  color: var(--color-primary-dark);
-  background: var(--color-lilac);
-  font-size: 0.7rem;
-  font-weight: 800;
-  line-height: 1.2;
-}
-.profile-card .consent-choices {
-  margin-top: 0.35rem;
-  padding-top: 0.75rem;
-  gap: 0.85rem;
-}
-.consent-attestation {
-  display: grid;
-  gap: 0.4rem;
-  margin-top: 0.15rem;
-  padding-top: 0.75rem;
-  border-top: 1px solid var(--color-border);
-}
-.consent-form-error {
-  margin: 0 0 0 2.9rem;
-  color: var(--color-attention);
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1.35;
-}
-.consent-choices .secondary-button {
-  justify-self: start;
-}
-.legal-note {
-  color: var(--color-muted);
-  font-size: 0.8rem;
-  line-height: 1.45;
-}
-.legal-note a {
-  color: var(--color-primary);
-}
-.care-summary {
-  display: grid;
-  gap: 0.55rem;
-  margin-top: 0.55rem;
-  color: var(--color-ink);
-}
-.care-summary strong {
-  display: block;
-  font-size: 0.82rem;
-}
-.care-summary ul {
-  margin: 0.22rem 0 0;
-  padding-left: 1.1rem;
-}
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-@media (max-width: 560px) {
-  .dashboard-shell {
-    padding: 1.25rem;
-  }
 }
