@@ -100,6 +100,12 @@ type SmsOptInInvitationRow = {
   created_at: string;
 };
 
+type SmsOptInInvitationContextRow = SmsOptInInvitationRow & {
+  person_display_name: string;
+  contact_display_name: string;
+  contact_phone_e164: string | null;
+};
+
 const now = () => new Date().toISOString();
 
 const toPerson = (row: PersonRow): Person => ({
@@ -350,9 +356,84 @@ export function createRepositories(database: IrisDatabase) {
     },
 
     consumeSmsOptInInvitation(id: string) {
+      const timestamp = now();
       return database.prepare(
         "UPDATE sms_opt_in_invitations SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL AND expires_at > ?",
-      ).run(now(), id, now()).changes === 1;
+      ).run(timestamp, id, timestamp).changes === 1;
+    },
+
+    getActiveSmsOptInInvitationContext(tokenHash: string, at = now()) {
+      const row = database.prepare(
+        `SELECT i.*, p.display_name AS person_display_name,
+                c.display_name AS contact_display_name, c.phone_e164 AS contact_phone_e164
+           FROM sms_opt_in_invitations i
+           JOIN people p ON p.id = i.person_id
+           JOIN trusted_contacts c ON c.id = i.trusted_contact_id AND c.person_id = i.person_id
+          WHERE i.token_hash = ? AND i.consumed_at IS NULL AND i.expires_at > ?`,
+      ).get(tokenHash, at) as SmsOptInInvitationContextRow | undefined;
+      return row
+        ? {
+            invitation: toSmsOptInInvitation(row),
+            personDisplayName: row.person_display_name,
+            contactDisplayName: row.contact_display_name,
+            contactPhoneE164: row.contact_phone_e164,
+          }
+        : null;
+    },
+
+    finalizeSmsOptInEnrollment(input: {
+      tokenHash: string;
+      phoneE164: string;
+      consentId: string;
+      actionId: string;
+      confirmationBody: string;
+      disclosureVersion: string;
+    }) {
+      return database.transaction(() => {
+        const context = this.getActiveSmsOptInInvitationContext(input.tokenHash);
+        if (!context || context.contactPhoneE164 !== input.phoneE164) return null;
+        const timestamp = now();
+        const consumed = database.prepare(
+          `UPDATE sms_opt_in_invitations
+              SET consumed_at = ?
+            WHERE id = ? AND consumed_at IS NULL AND expires_at > ?`,
+        ).run(timestamp, context.invitation.id, timestamp);
+        if (consumed.changes !== 1) return null;
+
+        database.prepare(
+          `INSERT INTO trusted_contact_sms_consents
+             (id, trusted_contact_id, phone_e164, status, source, disclosure_version, occurred_at)
+           VALUES (?, ?, ?, 'granted', 'web_form', ?, ?)`,
+        ).run(
+          input.consentId,
+          context.invitation.trustedContactId,
+          input.phoneE164,
+          input.disclosureVersion,
+          timestamp,
+        );
+        database.prepare(
+          `INSERT INTO action_requests
+             (id, person_id, feature, action_type, payload_json, status, approval_source, idempotency_key, created_at, updated_at)
+           VALUES (?, ?, 'enrollment', 'sms_confirmation', ?, 'approved', 'web_form', ?, ?, ?)`,
+        ).run(
+          input.actionId,
+          context.invitation.personId,
+          JSON.stringify({ to: input.phoneE164, body: input.confirmationBody }),
+          `sms_opt_in_confirmation:${context.invitation.id}`,
+          timestamp,
+          timestamp,
+        );
+        database.prepare(
+          `INSERT INTO action_dispatch_outbox
+             (action_request_id, state, created_at, updated_at)
+           VALUES (?, 'pending', ?, ?)`,
+        ).run(input.actionId, timestamp, timestamp);
+        return {
+          actionId: input.actionId,
+          personDisplayName: context.personDisplayName,
+          contactDisplayName: context.contactDisplayName,
+        };
+      })();
     },
 
     recordOperatorSmsInviteAttestation(input: {
@@ -750,7 +831,7 @@ export function createRepositories(database: IrisDatabase) {
         ).run(actionId, timestamp, timestamp);
         if (inserted.changes === 1) return true;
         return database.prepare(
-          "UPDATE action_dispatch_outbox SET state = 'dispatching', updated_at = ? WHERE action_request_id = ? AND state = 'retryable'",
+          "UPDATE action_dispatch_outbox SET state = 'dispatching', updated_at = ? WHERE action_request_id = ? AND state IN ('pending', 'retryable')",
         ).run(timestamp, actionId).changes === 1;
       })();
     },
@@ -799,7 +880,7 @@ export function createRepositories(database: IrisDatabase) {
     },
 
     getActionDispatch(actionId: string) {
-      return database.prepare("SELECT state, provider_message_id FROM action_dispatch_outbox WHERE action_request_id = ?").get(actionId) as { state: "dispatching" | "dispatched" | "failed" | "retryable" | "needs_review"; provider_message_id: string | null } | undefined;
+      return database.prepare("SELECT state, provider_message_id FROM action_dispatch_outbox WHERE action_request_id = ?").get(actionId) as { state: "pending" | "dispatching" | "dispatched" | "failed" | "retryable" | "needs_review"; provider_message_id: string | null } | undefined;
     },
 
     finalizeActionDispatch(input: { id: string; personId: string; actionRequestId: string; providerMessageId: string; deliveryStatus: string }) {

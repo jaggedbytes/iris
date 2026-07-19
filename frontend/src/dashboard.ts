@@ -42,7 +42,7 @@ export type DashboardOverview = {
     status: string;
     createdAt: string;
     updatedAt: string;
-    dispatchState: "dispatching" | "dispatched" | "failed" | "retryable" | "needs_review" | null;
+    dispatchState: "pending" | "dispatching" | "dispatched" | "failed" | "retryable" | "needs_review" | null;
   }>;
   permissions: string[];
 };
@@ -68,6 +68,19 @@ export class DashboardError extends Error {
 }
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
+
+export async function publicJson<T>(path: string, body: unknown) {
+  const response = await fetch(`${apiBaseUrl}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new DashboardError(payload?.error ?? "Unable to continue.", response.status);
+  }
+  return (await response.json()) as T;
+}
 
 export function dashboardRequest(path: string, token: string, options?: RequestInit) {
   return fetch(`${apiBaseUrl}${path}`, {

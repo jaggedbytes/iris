@@ -10,6 +10,12 @@ export type DashboardConfig = {
   frontendOrigin: string;
 };
 
+export type EnrollmentConfig = {
+  privacyUrl: string;
+  termsUrl: string;
+  disclosureVersion: string;
+};
+
 export type TelephonyConfig = {
   twilioAccountSid: string;
   twilioAuthToken: string;
@@ -80,6 +86,39 @@ function normalizeFrontendOrigin(value: string) {
     throw new Error("FRONTEND_ORIGIN must use the http or https protocol.");
   }
   return parsed.origin;
+}
+
+function normalizePublicUrl(value: string, name: string) {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`${name} must be a valid https URL.`);
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error(`${name} must use the https protocol.`);
+  }
+  return parsed.toString();
+}
+
+export function loadEnrollmentConfig(
+  environment: NodeJS.ProcessEnv = process.env,
+): EnrollmentConfig {
+  const disclosureVersion = environment.IRIS_SMS_DISCLOSURE_VERSION?.trim() || "2026-07-18";
+  if (disclosureVersion.length > 80) {
+    throw new Error("IRIS_SMS_DISCLOSURE_VERSION must be 80 characters or fewer.");
+  }
+  return {
+    privacyUrl: normalizePublicUrl(
+      environment.IRIS_PRIVACY_URL?.trim() || "https://jaggedbytes.github.io/iris-legal/privacy/",
+      "IRIS_PRIVACY_URL",
+    ),
+    termsUrl: normalizePublicUrl(
+      environment.IRIS_TERMS_URL?.trim() || "https://jaggedbytes.github.io/iris-legal/terms/",
+      "IRIS_TERMS_URL",
+    ),
+    disclosureVersion,
+  };
 }
 
 /** Configuration only needed when the outbound phone transport is enabled. */

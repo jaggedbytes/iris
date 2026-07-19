@@ -4,11 +4,13 @@ import type { FormEvent } from "react";
 import {
   dashboardJson,
   DashboardError,
+  publicJson,
 } from "./dashboard";
 import type { DashboardOverview, DashboardPersonList, DashboardPrincipal } from "./dashboard";
 
 const SESSION_TOKEN_KEY = "iris-dashboard-access-token";
 const DASHBOARD_POLL_INTERVAL_MS = 2_500;
+let capturedOptInToken: string | null | undefined;
 
 function readMagicLinkToken() {
   const fragment = window.location.hash.replace(/^#/, "");
@@ -22,6 +24,17 @@ function readMagicLinkToken() {
   location.hash = remaining ? `#${remaining}` : "";
   window.history.replaceState({}, "", location);
   return token;
+}
+
+function takeOptInToken() {
+  if (capturedOptInToken !== undefined) return capturedOptInToken;
+  const location = new URL(window.location.href);
+  capturedOptInToken = location.searchParams.get("token");
+  if (capturedOptInToken) {
+    location.searchParams.delete("token");
+    window.history.replaceState({}, "", location);
+  }
+  return capturedOptInToken;
 }
 
 function formatDate(value: string) {
@@ -87,13 +100,14 @@ function actionCopy(action: DashboardOverview["actions"][number]) {
     return "Delivery is uncertain. Confirm with the recipient or Twilio before retrying.";
   }
   if (action.dispatchState === "retryable") return "This send can be retried manually.";
+  if (action.dispatchState === "pending") return "Queued for sending.";
   if (action.dispatchState === "dispatching") return "Waiting for delivery confirmation.";
   if (action.dispatchState === "failed" || action.status === "failed") return "This message was not sent.";
   if (action.dispatchState === "dispatched") return "Message sent.";
   return action.status === "pending_approval" ? "Waiting for approval." : action.status;
 }
 
-export function App() {
+function DashboardApp() {
   const [token, setToken] = useState(() => {
     const magicLinkToken = readMagicLinkToken();
     if (magicLinkToken) {
@@ -591,4 +605,105 @@ export function App() {
       )}
     </main>
   );
+}
+
+type OptInInvitation = {
+  personDisplayName: string;
+  contactDisplayName: string;
+  privacyUrl: string;
+  termsUrl: string;
+};
+
+function OptInPage() {
+  const [token] = useState(takeOptInToken);
+  const [invitation, setInvitation] = useState<OptInInvitation | null>(null);
+  const [phoneE164, setPhoneE164] = useState("");
+  const [accepted, setAccepted] = useState(false);
+  const [status, setStatus] = useState<"loading" | "ready" | "submitting" | "complete" | "unavailable">("loading");
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!token) {
+      setStatus("unavailable");
+      return;
+    }
+    let cancelled = false;
+    void publicJson<OptInInvitation>("/api/opt-in/validate", { token })
+      .then((result) => {
+        if (cancelled) return;
+        setInvitation(result);
+        setStatus("ready");
+      })
+      .catch((validationError) => {
+        if (cancelled) return;
+        setStatus("unavailable");
+        setError(validationError instanceof Error ? validationError.message : "This opt-in link is unavailable.");
+      });
+    return () => { cancelled = true; };
+  }, [token]);
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!token) return;
+    setStatus("submitting");
+    setError(null);
+    void publicJson<{ status: "subscribed" }>("/api/opt-in/accept", {
+      token,
+      phoneE164,
+      accepted,
+    }).then(() => {
+      setStatus("complete");
+    }).catch((acceptError) => {
+      setStatus("ready");
+      setError(acceptError instanceof Error ? acceptError.message : "We could not save your opt-in.");
+    });
+  };
+
+  return (
+    <main className="access-shell">
+      <section className="access-card opt-in-card" aria-labelledby="opt-in-title">
+        <p className="eyebrow">Iris companion</p>
+        <h1 id="opt-in-title">Care text opt-in</h1>
+        {status === "loading" && <p>Checking your invitation…</p>}
+        {status === "unavailable" && <p className="form-error" role="alert">{error ?? "This opt-in link is unavailable."}</p>}
+        {invitation && status !== "unavailable" && (
+          <>
+            {status === "complete" ? (
+              <p role="status">You’re subscribed to Iris care check-in and Shield alert texts for {invitation.personDisplayName}. A confirmation text is on its way.</p>
+            ) : (
+              <>
+                <p>
+                  {invitation.contactDisplayName}, {invitation.personDisplayName}’s operator invited you to receive care check-in and Shield alert texts from Iris.
+                </p>
+                <form onSubmit={submit}>
+                  <label htmlFor="opt-in-phone">Your invited mobile number</label>
+                  <input
+                    id="opt-in-phone"
+                    required
+                    inputMode="tel"
+                    placeholder="+15551234567"
+                    value={phoneE164}
+                    onChange={(event) => setPhoneE164(event.target.value)}
+                  />
+                  <label className="consent-check">
+                    <input type="checkbox" checked={accepted} onChange={(event) => setAccepted(event.target.checked)} />
+                    I agree to receive Iris care check-in and Shield alert texts for {invitation.personDisplayName}. Message frequency varies. Msg & data rates may apply. Reply HELP for help. Reply STOP to opt out.
+                  </label>
+                  <p className="legal-note">
+                    By submitting, you agree to the <a href={invitation.termsUrl} target="_blank" rel="noreferrer">Terms</a> and acknowledge the <a href={invitation.privacyUrl} target="_blank" rel="noreferrer">Privacy Policy</a>.
+                  </p>
+                  <button type="submit" disabled={!accepted || status === "submitting"}>{status === "submitting" ? "Saving…" : "Subscribe"}</button>
+                </form>
+              </>
+            )}
+          </>
+        )}
+        {error && status !== "unavailable" && <p className="form-error" role="alert">{error}</p>}
+      </section>
+    </main>
+  );
+}
+
+export function App() {
+  return window.location.pathname === "/opt-in" ? <OptInPage /> : <DashboardApp />;
 }

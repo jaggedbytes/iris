@@ -245,7 +245,7 @@ export const migrations = [
 
       CREATE TABLE action_dispatch_outbox_next (
         action_request_id TEXT PRIMARY KEY REFERENCES action_requests(id) ON DELETE CASCADE,
-        state TEXT NOT NULL CHECK(state IN ('dispatching', 'dispatched', 'failed', 'retryable', 'needs_review')),
+        state TEXT NOT NULL CHECK(state IN ('pending', 'dispatching', 'dispatched', 'failed', 'retryable', 'needs_review')),
         provider_message_id TEXT UNIQUE,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL

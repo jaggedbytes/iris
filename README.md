@@ -50,6 +50,8 @@ enrollment-data failure.
 
 The container serves the production dashboard and public SPA routes such as `/opt-in` from Express. `/api/*`, Twilio webhooks, and the Media Stream endpoint remain server routes rather than SPA fallbacks.
 
+The hosted opt-in form uses `IRIS_PRIVACY_URL` and `IRIS_TERMS_URL`, which default to Iris’s public legal pages. Keep those URLs public and HTTPS; they are rendered directly to invited contacts.
+
 ## Local development
 
 Prerequisites: Node.js 22+ and an OpenAI API key.

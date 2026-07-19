@@ -12,6 +12,7 @@ import { createRealtimeClientSecret } from "./realtime.js";
 import { createTelephonyRouter } from "./telephony/router.js";
 import type { OutboundCallManager } from "./telephony/outbound.js";
 import type { ActionDispatcher } from "./actions.js";
+import { createEnrollmentRouter, type EnrollmentService } from "./enrollment.js";
 
 const compiledStaticDir = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -27,12 +28,14 @@ export function createApp({
   dashboard,
   telephony,
   actions,
+  enrollment,
   staticDir = compiledStaticDir,
 }: {
   request?: typeof fetch;
   dashboard?: DashboardContext;
   telephony?: OutboundCallManager;
   actions?: ActionDispatcher;
+  enrollment?: EnrollmentService;
   staticDir?: string;
 } = {}) {
   const app = express();
@@ -51,6 +54,7 @@ export function createApp({
     app.use("/api/dashboard", createDashboardRouter(dashboard));
   }
   if (telephony) app.use("/api/telephony", createTelephonyRouter(telephony));
+  if (enrollment) app.use("/api/opt-in", createEnrollmentRouter(enrollment));
   if (actions) app.post("/api/actions/:actionId/messages/status", (request, response) => {
     if (!actions.validateWebhook(request.header("x-twilio-signature"), request.originalUrl, request.body)) return response.status(403).end();
     if (typeof request.body?.MessageSid === "string" && typeof request.body?.MessageStatus === "string") actions.recordDelivery(request.params.actionId, request.body.MessageSid, request.body.MessageStatus);
