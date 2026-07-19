@@ -134,6 +134,8 @@ function DashboardApp() {
   const [isCreatingPerson, setIsCreatingPerson] = useState(false);
   const [isCreatingContact, setIsCreatingContact] = useState(false);
   const [attestedContactIds, setAttestedContactIds] = useState<Record<string, boolean>>({});
+  const [consentAttested, setConsentAttested] = useState(false);
+  const [updatingConsent, setUpdatingConsent] = useState<"summary_retention" | "care_summary_sharing" | null>(null);
   const [isCallRequesting, setIsCallRequesting] = useState(false);
   const [dispatchingActionId, setDispatchingActionId] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
@@ -148,6 +150,26 @@ function DashboardApp() {
     if (principal) return principal.personId;
     return "";
   }, [overview, principal]);
+  const careConsents = overview?.consents;
+
+  const updateConsent = async (kind: "summary_retention" | "care_summary_sharing", status: "granted" | "revoked") => {
+    if (!personId || !consentAttested) return;
+    setUpdatingConsent(kind);
+    setError(null);
+    try {
+      await dashboardJson(`/api/dashboard/people/${personId}/consents/${kind}`, token, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status, operatorAttested: true }),
+      });
+      setConsentAttested(false);
+      setRefreshVersion((version) => version + 1);
+    } catch (consentError) {
+      setError(consentError instanceof Error ? consentError.message : "Unable to update consent.");
+    } finally {
+      setUpdatingConsent(null);
+    }
+  };
 
   useEffect(() => {
     if (!token) {
@@ -471,6 +493,42 @@ function DashboardApp() {
             <h2>{overview.person.displayName}</h2>
             <p>{phoneNumberLabel(overview.person)}</p>
             <p className="privacy-note">Only consented summaries are retained. Call audio and raw transcripts are not saved.</p>
+            {principal?.role === "admin" && careConsents && (
+              <div className="compact-form">
+                <strong>Care recap consent</strong>
+                <span>Summary retention: {careConsents.summaryRetention ? "active" : "not active"}</span>
+                <span>Care sharing: {careConsents.careSummarySharing ? "active" : "not active"}</span>
+                <label className="attestation-check">
+                  <input type="checkbox" checked={consentAttested} onChange={(event) => setConsentAttested(event.target.checked)} />
+                  I confirm {overview.person.displayName} agreed to this consent change.
+                </label>
+                <div className="contact-actions">
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={!consentAttested || updatingConsent !== null || careConsents.careSummarySharing}
+                    onClick={() => void updateConsent("summary_retention", careConsents.summaryRetention ? "revoked" : "granted")}
+                  >
+                    {updatingConsent === "summary_retention"
+                      ? "Saving…"
+                      : careConsents.careSummarySharing
+                        ? "Revoke care sharing first"
+                        : careConsents.summaryRetention
+                          ? "Revoke summary retention"
+                          : "Grant summary retention"}
+                  </button>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={!consentAttested || updatingConsent !== null || (!careConsents.summaryRetention && !careConsents.careSummarySharing)}
+                    onClick={() => void updateConsent("care_summary_sharing", careConsents.careSummarySharing ? "revoked" : "granted")}
+                  >
+                    {updatingConsent === "care_summary_sharing" ? "Saving…" : careConsents.careSummarySharing ? "Revoke care sharing" : "Grant care sharing"}
+                  </button>
+                </div>
+                <span className="privacy-note">Shared care recaps require summary retention.</span>
+              </div>
+            )}
           </section>
 
           <section className="overview-card">

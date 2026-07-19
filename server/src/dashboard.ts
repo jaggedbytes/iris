@@ -324,8 +324,71 @@ export function createDashboardRouter(context: DashboardContext) {
               dispatchState: context.repositories.getActionDispatch(action.id)?.state ?? null,
             }))
           : [],
+      consents:
+        principal.role === "admin"
+          ? {
+              summaryRetention: context.repositories.hasActiveConsent(personId, "summary_retention"),
+              careSummarySharing: context.repositories.hasActiveConsent(personId, "care_summary_sharing"),
+            }
+          : null,
       permissions:
         principal.role === "admin" ? ALL_SCOPES : principal.scopes,
+    });
+  });
+
+  router.post("/people/:personId/consents/:kind", (request, response) => {
+    const principal = requirePrincipal(request, response, context);
+    if (!principal) return;
+    if (principal.role !== "admin") {
+      response.status(403).json({ error: "Admin access is required." });
+      return;
+    }
+    const person = context.repositories.getPerson(request.params.personId);
+    if (!person) {
+      response.status(404).json({ error: "Person not found." });
+      return;
+    }
+    const kind = request.params.kind;
+    if (kind !== "summary_retention" && kind !== "care_summary_sharing") {
+      response.status(400).json({ error: "Unsupported consent kind." });
+      return;
+    }
+    const status = request.body?.status;
+    if (status !== "granted" && status !== "revoked") {
+      response.status(400).json({ error: "Consent status must be granted or revoked." });
+      return;
+    }
+    if (request.body?.operatorAttested !== true) {
+      response.status(400).json({ error: "Operator attestation is required." });
+      return;
+    }
+
+    if (
+      kind === "summary_retention"
+      && status === "revoked"
+      && context.repositories.hasActiveConsent(person.id, "care_summary_sharing")
+    ) {
+      response.status(409).json({ error: "Revoke care sharing before revoking summary retention." });
+      return;
+    }
+
+    if (kind === "care_summary_sharing") {
+      const recorded = context.repositories.recordCareSummarySharingConsent({
+        id: randomUUID(), personId: person.id, status, source: "operator_attestation", operatorAttestationAuditId: randomUUID(),
+      });
+      if (!recorded) {
+        response.status(409).json({ error: "Summary retention must be active before care sharing can be granted." });
+        return;
+      }
+    } else {
+      context.repositories.recordConsent({
+        id: randomUUID(), personId: person.id, kind, status, source: "operator_attestation", operatorAttestationAuditId: randomUUID(),
+      });
+    }
+
+    response.status(201).json({
+      summaryRetention: context.repositories.hasActiveConsent(person.id, "summary_retention"),
+      careSummarySharing: context.repositories.hasActiveConsent(person.id, "care_summary_sharing"),
     });
   });
 

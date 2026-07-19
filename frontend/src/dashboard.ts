@@ -46,6 +46,10 @@ export type DashboardOverview = {
     updatedAt: string;
     dispatchState: "pending" | "dispatching" | "dispatched" | "failed" | "retryable" | "needs_review" | null;
   }>;
+  consents: {
+    summaryRetention: boolean;
+    careSummarySharing: boolean;
+  } | null;
   permissions: string[];
 };
 

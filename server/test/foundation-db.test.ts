@@ -10,6 +10,7 @@ import {
   loadTelephonyConfig,
 } from "../src/config.js";
 import { closeDatabase, createDatabase, createRepositories, migrate } from "../src/db/index.js";
+import { seedDemoFoundation } from "../src/db/seed.js";
 import { migrations } from "../src/db/schema.js";
 
 function createTestRepositories() {
@@ -124,6 +125,66 @@ test("uses the latest summary-retention consent state", () => {
       source: "demo",
     });
     assert.equal(repositories.hasActiveConsent("person-a", "summary_retention"), false);
+  } finally {
+    closeDatabase(database);
+  }
+});
+
+test("requires summary retention for care sharing and strips only careSummary on revocation", () => {
+  const { database, repositories } = createTestRepositories();
+
+  try {
+    repositories.createPerson({ id: "person-a", displayName: "Avery" });
+    repositories.createCall({ id: "call-care", personId: "person-a", status: "completed" });
+    repositories.createCall({ id: "call-private", personId: "person-a", status: "completed" });
+    repositories.completeCall({
+      id: "call-care",
+      status: "completed",
+      summaryJson: JSON.stringify({
+        recap: "Private recap.", facts: ["Avery gardens."], people: [], unresolvedTopics: [], recallAnchor: "your garden",
+        careSummary: { recap: "A shared recap.", moodAndConcerns: ["Avery felt worried."], irisSuggestedNextSteps: ["Iris suggested taking a break."] },
+      }),
+    });
+    repositories.completeCall({
+      id: "call-private",
+      status: "completed",
+      summaryJson: JSON.stringify({ recap: "Older private recap.", facts: [], people: [], unresolvedTopics: [], recallAnchor: null }),
+    });
+
+    assert.equal(repositories.recordCareSummarySharingConsent({ id: "care-without-retention", personId: "person-a", status: "granted", source: "test" }), false);
+    assert.equal(repositories.hasActiveConsent("person-a", "care_summary_sharing"), false);
+
+    repositories.recordConsent({ id: "retention", personId: "person-a", kind: "summary_retention", status: "granted", source: "test" });
+    assert.equal(repositories.recordCareSummarySharingConsent({ id: "care-granted", personId: "person-a", status: "granted", source: "test" }), true);
+    assert.equal(repositories.hasActiveConsent("person-a", "care_summary_sharing"), true);
+
+    assert.equal(repositories.recordCareSummarySharingConsent({ id: "care-revoked", personId: "person-a", status: "revoked", source: "test" }), true);
+    assert.equal(repositories.hasActiveConsent("person-a", "care_summary_sharing"), false);
+    assert.deepEqual(
+      JSON.parse(repositories.listCalls("person-a").find((call) => call.id === "call-care")!.summaryJson!),
+      { recap: "Private recap.", facts: ["Avery gardens."], people: [], unresolvedTopics: [], recallAnchor: "your garden" },
+    );
+    assert.deepEqual(
+      JSON.parse(repositories.listCalls("person-a").find((call) => call.id === "call-private")!.summaryJson!),
+      { recap: "Older private recap.", facts: [], people: [], unresolvedTopics: [], recallAnchor: null },
+    );
+
+    assert.equal(repositories.recordCareSummarySharingConsent({ id: "care-regranted", personId: "person-a", status: "granted", source: "test" }), true);
+    assert.equal(
+      "careSummary" in JSON.parse(repositories.listCalls("person-a").find((call) => call.id === "call-care")!.summaryJson!),
+      false,
+    );
+  } finally {
+    closeDatabase(database);
+  }
+});
+
+test("seeds both consents for the hosted demo person", () => {
+  const { database, repositories } = createTestRepositories();
+  try {
+    seedDemoFoundation(repositories, "person-demo");
+    assert.equal(repositories.hasActiveConsent("person-demo", "summary_retention"), true);
+    assert.equal(repositories.hasActiveConsent("person-demo", "care_summary_sharing"), true);
   } finally {
     closeDatabase(database);
   }

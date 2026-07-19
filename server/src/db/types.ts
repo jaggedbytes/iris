@@ -3,7 +3,7 @@ export type AccessScope =
   | "view_events"
   | "view_summaries";
 
-export type ConsentKind = "summary_retention";
+export type ConsentKind = "summary_retention" | "care_summary_sharing";
 export type ConsentStatus = "granted" | "revoked";
 export type TrustedContactSmsOptInStatus = "granted" | "revoked" | null;
 export type TrustedContactSmsConsentSource = "web_form" | "demo_seed" | "inbound_stop";

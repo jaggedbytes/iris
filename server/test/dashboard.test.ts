@@ -144,6 +144,55 @@ test("allows an admin to view a person overview", async () => {
   }
 });
 
+test("limits consent attestation to admins and requires retention before care sharing", async () => {
+  const fixture = await createDashboardServer();
+  try {
+    fixture.repositories.grantAccess({
+      id: "grant-summaries", personId: "person-a", trustedContactId: "contact-a",
+      scopes: ["view_summaries"], tokenHash: hash("summaries-token"), expiresAt: futureExpiry(),
+    });
+    const headers = { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" };
+    const denied = await fetch(`${fixture.url}/api/dashboard/people/person-a/consents/summary_retention`, {
+      method: "POST", headers: { Authorization: "Bearer summaries-token", "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "granted", operatorAttested: true }),
+    });
+    assert.equal(denied.status, 403);
+
+    const missingAttestation = await fetch(`${fixture.url}/api/dashboard/people/person-a/consents/summary_retention`, {
+      method: "POST", headers, body: JSON.stringify({ status: "granted", operatorAttested: false }),
+    });
+    assert.equal(missingAttestation.status, 400);
+
+    const careWithoutRetention = await fetch(`${fixture.url}/api/dashboard/people/person-a/consents/care_summary_sharing`, {
+      method: "POST", headers, body: JSON.stringify({ status: "granted", operatorAttested: true }),
+    });
+    assert.equal(careWithoutRetention.status, 409);
+
+    const retention = await fetch(`${fixture.url}/api/dashboard/people/person-a/consents/summary_retention`, {
+      method: "POST", headers, body: JSON.stringify({ status: "granted", operatorAttested: true }),
+    });
+    assert.equal(retention.status, 201);
+    const care = await fetch(`${fixture.url}/api/dashboard/people/person-a/consents/care_summary_sharing`, {
+      method: "POST", headers, body: JSON.stringify({ status: "granted", operatorAttested: true }),
+    });
+    assert.equal(care.status, 201);
+    assert.deepEqual(
+      fixture.database.prepare("SELECT actor_type, action, target_type, metadata_json FROM audit_events WHERE person_id = ? ORDER BY occurred_at, rowid").all("person-a"),
+      [
+        { actor_type: "operator", action: "person.consent_attested", target_type: "person", metadata_json: '{"kind":"summary_retention","status":"granted"}' },
+        { actor_type: "operator", action: "person.consent_attested", target_type: "person", metadata_json: '{"kind":"care_summary_sharing","status":"granted"}' },
+      ],
+    );
+
+    const retentionWhileSharing = await fetch(`${fixture.url}/api/dashboard/people/person-a/consents/summary_retention`, {
+      method: "POST", headers, body: JSON.stringify({ status: "revoked", operatorAttested: true }),
+    });
+    assert.equal(retentionWhileSharing.status, 409);
+  } finally {
+    fixture.close();
+  }
+});
+
 test("limits enrollment drafting and opt-in invitations to operators", async () => {
   const fixture = await createDashboardServer();
   try {

@@ -38,6 +38,13 @@ export function seedDemoFoundation(
     status: "granted",
     source: "demo-seed",
   });
+  repositories.recordConsent({
+    id: "consent-care-summary-sharing",
+    personId,
+    kind: "care_summary_sharing",
+    status: "granted",
+    source: "demo-seed",
+  });
   repositories.createEvent({
     id: "event-demo-seeded",
     personId,
