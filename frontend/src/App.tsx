@@ -1043,7 +1043,9 @@ function DashboardApp() {
                 ))}
               </ol>
             ) : (
-              <p className="empty-state">Bridge, Shield, and Translator (WIP) events will appear here.</p>
+              <div className="empty-state-card">
+                <p className="empty-state">Iris activity will appear here.</p>
+              </div>
             )}
           </section>
 
