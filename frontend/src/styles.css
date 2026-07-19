@@ -87,54 +87,71 @@ h2 { margin: 0; font-size: 1.35rem; }
 .text-button { padding: 0.7rem 0.9rem; }
 .secondary-button { padding: 0.45rem 0.7rem; font-size: 0.8rem; }
 
-.dashboard-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 1rem; }
+.dashboard-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); align-items: start; gap: 1rem; }
 .overview-card { grid-column: span 4; min-height: 14rem; padding: 1.3rem; border: 1px solid var(--border); border-radius: 1rem; background: color-mix(in srgb, var(--surface) 88%, transparent); box-shadow: 0 0.75rem 2rem color-mix(in srgb, var(--primary-dark) 6%, transparent); }
 .profile-card, .actions-card { grid-column: span 4; }
-.card-heading, .contact-list li { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; }
+.profile-card {
+  display: grid;
+  gap: 0.55rem;
+  align-content: start;
+  order: 2;
+}
+.card-header .privacy-note, .enrollment-header .privacy-note { margin: 0.5rem 0 0; }
+.person-phone { margin: 0.45rem 0 0; color: var(--muted); font-size: 0.9rem; line-height: 1.45; }
+.enrollment-card { order: 1; }
+.trusted-contacts-card { order: 3; }
+.actions-card { order: 4; }
+.recent-calls-card { order: 5; }
+.timeline-card { order: 6; }
+.card-heading { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; }
 .count-pill { padding: 0.3rem 0.55rem; border-radius: 999px; color: var(--primary-dark); background: var(--soft-lilac); font-size: 0.75rem; font-weight: 800; }
-.privacy-note, .empty-state, .loading-note, .call-status { color: var(--muted); font-size: 0.9rem; line-height: 1.55; }
+.privacy-note, .empty-state, .loading-note, .call-status { margin: 0; color: var(--muted); font-size: 0.9rem; line-height: 1.55; }
 .call-status { margin: -1rem 0 1.25rem; color: var(--calm); font-weight: 700; }
 .item-list, .contact-list { display: grid; gap: 0.7rem; margin: 1.2rem 0 0; padding: 0; list-style: none; }
 .item-list li { display: grid; gap: 0.2rem; padding: 0.8rem; border-radius: 0.7rem; background: var(--subtle-surface); }
 .item-list strong, .contact-list strong { font-size: 0.9rem; }
 .item-list span, .contact-list span, .magic-link span { color: var(--muted); font-size: 0.78rem; }
 .item-list .warning-note { color: var(--attention); font-weight: 700; }
-.contact-list li { padding: 0.75rem 0; border-bottom: 1px solid var(--border); }
-.contact-list li:last-child { border-bottom: 0; }
-.contact-list li > div { display: grid; gap: 0.15rem; }
+.contact-list > li { display: grid; gap: 0.85rem; padding: 0.75rem 0; border-bottom: 1px solid var(--border); }
+.contact-list > li:last-child { border-bottom: 0; }
+.contact-details { display: grid; gap: 0.15rem; }
+.contact-relationship { color: var(--muted); font-size: 0.78rem; }
+.contact-status-list { display: grid; gap: 0.35rem; margin: 0.5rem 0 0; padding: 0; list-style: none; }
+.contact-status-list li { display: flex; justify-content: space-between; gap: 0.75rem; align-items: center; color: var(--muted); font-size: 0.76rem; }
+.contact-status-list .contact-status-pill { flex: 0 0 auto; padding: 0.12rem 0.42rem; border-radius: 999px; color: var(--primary-dark); background: var(--soft-lilac); font-size: 0.7rem; font-weight: 800; text-transform: capitalize; }
 .magic-link { display: grid; gap: 0.5rem; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
-.enrollment-card { display: grid; gap: 0.65rem; }
-.enrollment-header .privacy-note { margin: 1rem 0 0; }
-.person-picker { display: grid; gap: 0.3rem; }
-.person-picker strong { color: var(--primary-dark); font-size: 0.85rem; }
-.person-picker span { color: var(--muted); font-size: 0.78rem; line-height: 1.4; }
-.enrollment-card select, .compact-form input {
+.enrollment-card { display: grid; gap: 0.5rem; }
+.person-picker { display: grid; gap: 0.15rem; }
+.trusted-contact-picker { display: grid; gap: 0.3rem; margin-top: 0.5rem; }
+.person-picker strong, .trusted-contact-picker strong { color: var(--primary-dark); font-size: 0.85rem; }
+.person-picker span, .trusted-contact-picker span { color: var(--muted); font-size: 0.78rem; line-height: 1.4; }
+.enrollment-card select, .trusted-contact-picker select, .compact-form input {
   width: 100%;
   padding: 0.65rem;
   border: 1px solid var(--border);
   border-radius: 0.55rem;
   background: var(--surface);
 }
+.person-picker select { padding: 0.5rem; }
 .compact-form { display: grid; gap: 0.5rem; margin-top: 0.6rem; padding-top: 0.8rem; border-top: 1px solid var(--border); }
 .compact-form strong { font-size: 0.85rem; }
 .form-field { display: grid; gap: 0.25rem; color: var(--ink); font-size: 0.8rem; font-weight: 700; }
 .form-field span { color: var(--muted); font-weight: 500; }
-.create-person-button { margin-top: 0.45rem; }
-.contact-actions { display: grid; justify-items: end; gap: 0.4rem; }
-.attestation-check { max-width: 13rem; color: var(--muted); font-size: 0.72rem; line-height: 1.3; text-align: right; }
-.attestation-check input { margin-right: 0.35rem; }
+.contact-actions { display: grid; gap: 0.55rem; width: 100%; }
+.contact-actions .secondary-button { width: 100%; }
+.contact-attestation { display: flex; gap: 0.55rem; align-items: flex-start; color: var(--muted); font-size: 0.78rem; line-height: 1.35; text-align: left; }
 .form-error { color: var(--attention); font-weight: 700; }
 .consent-check { display: flex; gap: 0.55rem; align-items: flex-start; color: var(--ink); font-size: 0.84rem; line-height: 1.45; }
-.consent-check input { margin-top: 0.2rem; }
-.consent-choices { justify-items: stretch; gap: 1.1rem; }
-.consent-choices .consent-check { align-items: flex-start; gap: 0.75rem; color: var(--muted); }
-.consent-choices .consent-toggle {
+.consent-check input:not(.consent-toggle) { margin-top: 0.2rem; }
+.consent-choices { justify-items: stretch; gap: 0.85rem; }
+.consent-choices .consent-check { align-items: flex-start; gap: 0.7rem; color: var(--muted); }
+input.consent-toggle {
   appearance: none;
   position: relative;
   flex: 0 0 auto;
   width: 2.5rem;
   height: 1.4rem;
-  margin: 0.1rem 0 0;
+  margin: 0.05rem 0 0;
   padding: 0;
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -142,7 +159,7 @@ h2 { margin: 0; font-size: 1.35rem; }
   cursor: pointer;
   transition: background 160ms ease, border-color 160ms ease;
 }
-.consent-choices .consent-toggle::after {
+.consent-toggle::after {
   position: absolute;
   top: 50%;
   left: 0.15rem;
@@ -156,16 +173,29 @@ h2 { margin: 0; font-size: 1.35rem; }
   transform: translateY(-50%);
   transition: left 160ms ease, right 160ms ease, transform 160ms ease;
 }
-.consent-choices .consent-toggle:checked { border-color: var(--primary); background: var(--primary); }
-.consent-choices .consent-toggle:checked::after { left: auto; right: 0.15rem; transform: translateY(-50%); }
-.consent-choices .consent-option { display: grid; gap: 0.28rem; min-width: 0; }
+.consent-toggle:checked { border-color: var(--primary); background: var(--primary); }
+.consent-toggle:checked::after { left: auto; right: 0.15rem; transform: translateY(-50%); }
+.consent-choices .consent-option { display: grid; gap: 0.2rem; min-width: 0; }
 .consent-choices .consent-option-heading { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; color: var(--ink); }
 .consent-choices .consent-option-heading strong { font-size: 0.85rem; }
 .consent-choices .consent-status { flex: 0 0 auto; padding: 0.12rem 0.42rem; border-radius: 999px; color: var(--primary-dark); background: var(--soft-lilac); font-size: 0.7rem; font-weight: 800; line-height: 1.2; }
-.consent-attestation { display: grid; gap: 0.32rem; margin-top: 0.55rem; padding-top: 0.85rem; border-top: 1px solid var(--border); }
+.profile-card .consent-choices {
+  margin-top: 0.35rem;
+  padding-top: 0.75rem;
+  gap: 0.85rem;
+}
+.consent-attestation { display: grid; gap: 0.4rem; margin-top: 0.15rem; padding-top: 0.75rem; border-top: 1px solid var(--border); }
 .consent-form-error { margin: 0 0 0 2.9rem; color: var(--attention); font-size: 0.75rem; font-weight: 700; line-height: 1.35; }
 .consent-choices .secondary-button { justify-self: start; }
-.consent-choices .save-consent-button { width: 100%; justify-self: stretch; }
+.full-width-action,
+.consent-choices .save-consent-button,
+.create-person-button {
+  width: 100%;
+  justify-self: stretch;
+  margin-top: 0.15rem;
+  padding: 0.55rem 0.85rem;
+  font-size: 0.84rem;
+}
 .legal-note { color: var(--muted); font-size: 0.8rem; line-height: 1.45; }
 .legal-note a { color: var(--primary); }
 .care-summary { display: grid; gap: 0.55rem; margin-top: 0.55rem; color: var(--ink); }

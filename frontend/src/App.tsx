@@ -129,6 +129,7 @@ function DashboardApp() {
   const [contactPhone, setContactPhone] = useState("");
   const [isCreatingPerson, setIsCreatingPerson] = useState(false);
   const [isCreatingContact, setIsCreatingContact] = useState(false);
+  const [selectedTrustedContactId, setSelectedTrustedContactId] = useState("");
   const [attestedContactIds, setAttestedContactIds] = useState<Record<string, boolean>>({});
   const [consentAttested, setConsentAttested] = useState(false);
   const [draftPrivateMemory, setDraftPrivateMemory] = useState(false);
@@ -150,6 +151,9 @@ function DashboardApp() {
     return "";
   }, [overview, principal]);
   const careConsents = overview?.consents;
+  const selectedTrustedContact = overview?.contacts.find(
+    (contact) => contact.id === selectedTrustedContactId,
+  ) ?? overview?.contacts[0] ?? null;
   const consentDirty = Boolean(
     careConsents
     && (draftPrivateMemory !== careConsents.summaryRetention
@@ -163,6 +167,15 @@ function DashboardApp() {
     setConsentAttested(false);
     setConsentFormError(null);
   }, [personId, careConsents?.summaryRetention, careConsents?.careSummarySharing]);
+
+  const trustedContactIds = overview?.contacts.map((contact) => contact.id).join("|") ?? "";
+
+  useEffect(() => {
+    const contacts = overview?.contacts ?? [];
+    setSelectedTrustedContactId((current) => (
+      contacts.some((contact) => contact.id === current) ? current : (contacts[0]?.id ?? "")
+    ));
+  }, [personId, trustedContactIds]);
 
   const saveConsents = async () => {
     if (!personId || !careConsents || !consentDirty) return;
@@ -533,10 +546,12 @@ function DashboardApp() {
             </section>
           )}
           <section className="overview-card profile-card">
-            <p className="card-kicker">Person</p>
-            <h2>{overview.person.displayName}</h2>
-            <p>{phoneNumberLabel(overview.person)}</p>
-            <p className="privacy-note">Choose what Iris remembers and what your care circle can see. Iris never saves raw audio or full transcripts.</p>
+            <div className="card-header">
+              <p className="card-kicker">Person</p>
+              <h2>{overview.person.displayName}</h2>
+              <p className="person-phone">{phoneNumberLabel(overview.person)}</p>
+              <p className="privacy-note">Choose what Iris remembers and what your care circle can see. Iris never saves raw audio or full transcripts.</p>
+            </div>
             {principal?.role === "admin" && careConsents && (
               <div className="compact-form consent-choices">
                 <strong>Conversation preferences</strong>
@@ -605,11 +620,12 @@ function DashboardApp() {
             )}
           </section>
 
-          <section className="overview-card">
+          <section className="overview-card recent-calls-card">
             <div className="card-heading">
-              <div>
+              <div className="card-header">
                 <p className="card-kicker">Recent calls</p>
                 <h2>Conversation continuity</h2>
+                <p className="privacy-note">Review the gentle care recaps shared from recent conversations.</p>
               </div>
               <span className="count-pill">{overview.calls.length}</span>
             </div>
@@ -643,7 +659,7 @@ function DashboardApp() {
             )}
           </section>
 
-          <section className="overview-card">
+          <section className="overview-card timeline-card">
             <div className="card-heading">
               <div>
                 <p className="card-kicker">Timeline</p>
@@ -665,38 +681,61 @@ function DashboardApp() {
             )}
           </section>
 
-          <section className="overview-card">
-            <p className="card-kicker">Trusted contacts</p>
-            <h2>People in the circle</h2>
+          <section className="overview-card trusted-contacts-card">
+            <div className="card-header">
+              <p className="card-kicker">Trusted contacts</p>
+              <h2>People in the circle</h2>
+              <p className="privacy-note">Add the people who can stay connected with {overview.person.displayName}. They can receive a dashboard link, request an Iris check-in, and choose whether to receive text messages.</p>
+            </div>
             {overview.contacts.length ? (
-              <ul className="contact-list">
-                {overview.contacts.map((contact) => (
-                  <li key={contact.id}>
-                    <div>
-                      <strong>{contact.displayName}</strong>
-                      <span>
-                        {contact.relationship} · SMS: {contact.smsOptInStatus === "opted_in" ? "opted in" : contact.smsOptInStatus === "opted_out" ? "opted out" : "not opted in"}
-                        {" · "}link: {contact.optInLinkState.replaceAll("_", " ")}
-                        {" · "}confirmation: {contact.confirmationState.replaceAll("_", " ")}
-                      </span>
+              <>
+                <div className="trusted-contact-picker">
+                  <strong>Trusted contact</strong>
+                  <span>Choose who the dashboard and SMS actions below apply to.</span>
+                  <label className="sr-only" htmlFor="trusted-contact-select">Trusted contact</label>
+                  <select
+                    id="trusted-contact-select"
+                    value={selectedTrustedContact?.id ?? ""}
+                    onChange={(event) => {
+                      setSelectedTrustedContactId(event.target.value);
+                      setMagicLink(null);
+                      setOptInLink(null);
+                    }}
+                  >
+                    {overview.contacts.map((contact) => <option key={contact.id} value={contact.id}>{contact.displayName}</option>)}
+                  </select>
+                </div>
+                <ul className="contact-list">
+                {selectedTrustedContact && (
+                  <li key={selectedTrustedContact.id}>
+                    <div className="contact-details">
+                      <strong>{selectedTrustedContact.displayName}</strong>
+                      <span className="contact-relationship">{selectedTrustedContact.relationship}</span>
+                      <ul className="contact-status-list">
+                        <li><span>SMS</span><span className="contact-status-pill">{selectedTrustedContact.smsOptInStatus === "opted_in" ? "Opted in" : selectedTrustedContact.smsOptInStatus === "opted_out" ? "Opted out" : "Not opted in"}</span></li>
+                        <li><span>Dashboard link</span><span className="contact-status-pill">{selectedTrustedContact.optInLinkState === "none" ? "Not created" : selectedTrustedContact.optInLinkState.replaceAll("_", " ")}</span></li>
+                        <li><span>SMS confirmation</span><span className="contact-status-pill">{selectedTrustedContact.confirmationState === "not_requested" ? "Not requested" : selectedTrustedContact.confirmationState.replaceAll("_", " ")}</span></li>
+                      </ul>
                     </div>
                     {principal?.role === "admin" && (
                       <div className="contact-actions">
-                        <button className="secondary-button" type="button" onClick={() => void createMagicLink(contact.id)}>Create dashboard link</button>
-                        <label className="attestation-check">
+                        <button className="secondary-button full-width-action" type="button" onClick={() => void createMagicLink(selectedTrustedContact.id)}>Create dashboard link</button>
+                        <button className="secondary-button full-width-action" type="button" disabled={!attestedContactIds[selectedTrustedContact.id]} onClick={() => void createOptInLink(selectedTrustedContact.id)}>Create SMS opt-in link</button>
+                        <label className="contact-attestation">
                           <input
+                            className="consent-toggle"
                             type="checkbox"
-                            checked={attestedContactIds[contact.id] === true}
-                            onChange={(event) => setAttestedContactIds((current) => ({ ...current, [contact.id]: event.target.checked }))}
+                            checked={attestedContactIds[selectedTrustedContact.id] === true}
+                            onChange={(event) => setAttestedContactIds((current) => ({ ...current, [selectedTrustedContact.id]: event.target.checked }))}
                           />
-                          I’m authorized to invite this contact
+                          <span>I have permission to invite {selectedTrustedContact.displayName} to receive Iris text messages.</span>
                         </label>
-                        <button className="secondary-button" type="button" disabled={!attestedContactIds[contact.id]} onClick={() => void createOptInLink(contact.id)}>Create SMS opt-in link</button>
                       </div>
                     )}
                   </li>
-                ))}
-              </ul>
+                )}
+                </ul>
+              </>
             ) : (
               <p className="empty-state">Contact access is not available through this link.</p>
             )}
@@ -716,18 +755,30 @@ function DashboardApp() {
             )}
             {principal?.role === "admin" && (
               <form className="compact-form" onSubmit={createTrustedContact}>
-                <strong>Draft a trusted contact</strong>
-                <input required placeholder="Display name" value={contactName} onChange={(event) => setContactName(event.target.value)} />
-                <input required placeholder="Relationship" value={contactRelationship} onChange={(event) => setContactRelationship(event.target.value)} />
-                <input required placeholder="Mobile in E.164" value={contactPhone} onChange={(event) => setContactPhone(event.target.value)} />
-                <button className="secondary-button" type="submit" disabled={isCreatingContact}>{isCreatingContact ? "Saving…" : "Save draft"}</button>
+                <strong>Add a trusted contact</strong>
+                <label className="form-field">
+                  Name
+                  <input required placeholder="e.g. Evelyn Carter" value={contactName} onChange={(event) => setContactName(event.target.value)} />
+                </label>
+                <label className="form-field">
+                  Relationship
+                  <input required placeholder="e.g. Neighbor" value={contactRelationship} onChange={(event) => setContactRelationship(event.target.value)} />
+                </label>
+                <label className="form-field">
+                  Mobile number
+                  <input required placeholder="E.164, e.g. +15551234567" value={contactPhone} onChange={(event) => setContactPhone(event.target.value)} />
+                </label>
+                <button className="secondary-button create-person-button" type="submit" disabled={isCreatingContact}>{isCreatingContact ? "Saving…" : "Add contact"}</button>
               </form>
             )}
           </section>
 
           <section className="overview-card actions-card">
-            <p className="card-kicker">Actions</p>
-            <h2>Approval queue</h2>
+            <div className="card-header">
+              <p className="card-kicker">Actions</p>
+              <h2>Approval queue</h2>
+              <p className="privacy-note">Review text-message activity that needs your attention.</p>
+            </div>
             {overview.actions.length ? (
               <ol className="item-list">
                 {overview.actions.map((action) => (
