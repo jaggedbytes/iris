@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 
 import {
   dashboardJson,
+  dashboardRequest,
   DashboardError,
   publicJson,
 } from "./dashboard";
@@ -10,6 +11,8 @@ import type { DashboardOverview, DashboardPersonList, DashboardPrincipal } from 
 
 const SESSION_TOKEN_KEY = "iris-dashboard-access-token";
 const DASHBOARD_POLL_INTERVAL_MS = 2_500;
+const ADD_PERSON_OPTION = "__add_person__";
+const ADD_CONTACT_OPTION = "__add_contact__";
 let capturedOptInToken: string | null | undefined;
 
 function readMagicLinkToken() {
@@ -53,6 +56,10 @@ function phoneNumberLabel(person: DashboardOverview["person"]) {
   if (person.phoneNumberStatus === "private") return "Phone number is private in this view.";
   if (person.phoneNumberStatus === "not_configured") return "Phone number not configured";
   return person.phoneE164 ?? "Phone number unavailable";
+}
+
+function contactPhoneLabel(phoneE164: string | null) {
+  return phoneE164 ?? "Phone number not configured";
 }
 
 function timelineCopy(event: DashboardOverview["events"][number], personName: string) {
@@ -120,23 +127,47 @@ function DashboardApp() {
   const [isLoading, setIsLoading] = useState(Boolean(token));
   const [magicLink, setMagicLink] = useState<string | null>(null);
   const [optInLink, setOptInLink] = useState<string | null>(null);
+  const [optInInvitation, setOptInInvitation] = useState<{ createdAt: string; expiresAt: string } | null>(null);
+  const [copiedLink, setCopiedLink] = useState<"dashboard" | "sms" | null>(null);
   const [adminPeople, setAdminPeople] = useState<DashboardPersonList>([]);
   const [selectedPersonId, setSelectedPersonId] = useState<string | null>(null);
+  const [isAddingPerson, setIsAddingPerson] = useState(false);
   const [newPersonName, setNewPersonName] = useState("");
   const [newPersonPhone, setNewPersonPhone] = useState("");
   const [contactName, setContactName] = useState("");
   const [contactRelationship, setContactRelationship] = useState("");
   const [contactPhone, setContactPhone] = useState("");
   const [isCreatingPerson, setIsCreatingPerson] = useState(false);
+  const [newPersonFormError, setNewPersonFormError] = useState<string | null>(null);
+  const [newPersonErrorField, setNewPersonErrorField] = useState<"name" | "phone">("name");
   const [isCreatingContact, setIsCreatingContact] = useState(false);
+  const [isAddingContact, setIsAddingContact] = useState(false);
+  const [newContactFormError, setNewContactFormError] = useState<string | null>(null);
+  const [newContactErrorField, setNewContactErrorField] = useState<"name" | "relationship" | "phone">("name");
+  const [isRemovingPerson, setIsRemovingPerson] = useState(false);
+  const [isRemovingContact, setIsRemovingContact] = useState(false);
+  const [isEditingPhone, setIsEditingPhone] = useState(false);
+  const [phoneDraft, setPhoneDraft] = useState("");
+  const [isSavingPhone, setIsSavingPhone] = useState(false);
+  const [phoneFormError, setPhoneFormError] = useState<string | null>(null);
+  const [isEditingContactPhone, setIsEditingContactPhone] = useState(false);
+  const [contactPhoneDraft, setContactPhoneDraft] = useState("");
+  const [isSavingContactPhone, setIsSavingContactPhone] = useState(false);
+  const [contactPhoneFormError, setContactPhoneFormError] = useState<string | null>(null);
+  const [selectedTrustedContactId, setSelectedTrustedContactId] = useState("");
   const [attestedContactIds, setAttestedContactIds] = useState<Record<string, boolean>>({});
+  const [contactAttestationErrorId, setContactAttestationErrorId] = useState<string | null>(null);
   const [consentAttested, setConsentAttested] = useState(false);
-  const [updatingConsent, setUpdatingConsent] = useState<"summary_retention" | "care_summary_sharing" | null>(null);
+  const [draftPrivateMemory, setDraftPrivateMemory] = useState(false);
+  const [draftSharedCare, setDraftSharedCare] = useState(false);
+  const [savingConsents, setSavingConsents] = useState(false);
+  const [consentFormError, setConsentFormError] = useState<string | null>(null);
   const [isCallRequesting, setIsCallRequesting] = useState(false);
   const [dispatchingActionId, setDispatchingActionId] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const magicLinkRequestId = useRef(0);
   const overviewRequestId = useRef(0);
+  const pendingTrustedContactId = useRef<string | null>(null);
   // Skip interval/visibility refreshes while an overview load is still running so
   // a slow response is not cancelled every 2.5s into an endless backlog.
   const overviewLoadInFlight = useRef(false);
@@ -147,23 +178,91 @@ function DashboardApp() {
     return "";
   }, [overview, principal]);
   const careConsents = overview?.consents;
+  const selectedTrustedContact = overview?.contacts.find(
+    (contact) => contact.id === selectedTrustedContactId,
+  ) ?? overview?.contacts[0] ?? null;
+  const displayedOptInInvitation = optInInvitation ?? selectedTrustedContact?.smsOptInInvitation ?? null;
+  const consentDirty = Boolean(
+    careConsents
+    && (draftPrivateMemory !== careConsents.summaryRetention
+      || draftSharedCare !== careConsents.careSummarySharing),
+  );
 
-  const updateConsent = async (kind: "summary_retention" | "care_summary_sharing", status: "granted" | "revoked") => {
-    if (!personId || !consentAttested) return;
-    setUpdatingConsent(kind);
+  useEffect(() => {
+    if (!careConsents) return;
+    setDraftPrivateMemory(careConsents.summaryRetention);
+    setDraftSharedCare(careConsents.careSummarySharing);
+    setConsentAttested(false);
+    setConsentFormError(null);
+  }, [personId, careConsents?.summaryRetention, careConsents?.careSummarySharing]);
+
+  const trustedContactIds = overview?.contacts.map((contact) => contact.id).join("|") ?? "";
+
+  useEffect(() => {
+    const contacts = overview?.contacts ?? [];
+    if (contacts.length === 0) {
+      setSelectedTrustedContactId("");
+      setIsAddingContact(principal?.role === "admin");
+      return;
+    }
+    const pendingId = pendingTrustedContactId.current;
+    if (pendingId) {
+      if (!contacts.some((contact) => contact.id === pendingId)) return;
+      pendingTrustedContactId.current = null;
+      setSelectedTrustedContactId(pendingId);
+      setIsAddingContact(false);
+      return;
+    }
+    if (contacts.some((contact) => contact.id === selectedTrustedContactId)) return;
+    setSelectedTrustedContactId(contacts[0]!.id);
+    setIsAddingContact(false);
+  }, [personId, trustedContactIds, principal?.role, selectedTrustedContactId]);
+
+  const saveConsents = async () => {
+    if (!personId || !careConsents || !consentDirty) return;
+    if (!consentAttested) {
+      setConsentFormError(`Confirm that ${overview?.person.displayName ?? "this person"} agreed to these choices before saving.`);
+      return;
+    }
+    const wantPrivateMemory = draftPrivateMemory;
+    const wantSharedCare = draftSharedCare && draftPrivateMemory;
+    setSavingConsents(true);
+    setConsentFormError(null);
     setError(null);
     try {
-      await dashboardJson(`/api/dashboard/people/${personId}/consents/${kind}`, token, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status, operatorAttested: true }),
-      });
+      const postConsent = (kind: "summary_retention" | "care_summary_sharing", status: "granted" | "revoked") =>
+        dashboardJson(`/api/dashboard/people/${personId}/consents/${kind}`, token, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status, operatorAttested: true }),
+        });
+
+      if (careConsents.careSummarySharing && !wantSharedCare) {
+        await postConsent("care_summary_sharing", "revoked");
+      }
+      if (careConsents.summaryRetention !== wantPrivateMemory) {
+        await postConsent("summary_retention", wantPrivateMemory ? "granted" : "revoked");
+      }
+      if (!careConsents.careSummarySharing && wantSharedCare) {
+        await postConsent("care_summary_sharing", "granted");
+      }
+
       setConsentAttested(false);
       setRefreshVersion((version) => version + 1);
     } catch (consentError) {
       setError(consentError instanceof Error ? consentError.message : "Unable to update consent.");
     } finally {
-      setUpdatingConsent(null);
+      setSavingConsents(false);
+    }
+  };
+
+  const copyLink = async (link: string, kind: "dashboard" | "sms") => {
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopiedLink(kind);
+      window.setTimeout(() => setCopiedLink((current) => current === kind ? null : current), 2_000);
+    } catch {
+      setError("Unable to copy the link. Please select and copy it manually.");
     }
   };
 
@@ -185,12 +284,33 @@ function DashboardApp() {
     void (async () => {
       try {
         const nextPrincipal = await dashboardJson<DashboardPrincipal>("/api/dashboard/me", token);
-        const nextPersonId = nextPrincipal.role === "admin"
-          ? selectedPersonId ?? nextPrincipal.personId
-          : nextPrincipal.personId;
         const people = nextPrincipal.role === "admin"
           ? await dashboardJson<{ people: DashboardPersonList }>("/api/dashboard/people", token)
           : null;
+
+        if (nextPrincipal.role === "admin" && (people?.people.length ?? 0) === 0) {
+          if (cancelled || requestId !== overviewRequestId.current) return;
+          setPrincipal(nextPrincipal);
+          setAdminPeople([]);
+          setOverview(null);
+          setSelectedPersonId(null);
+          setIsAddingPerson(true);
+          setError(null);
+          return;
+        }
+
+        // Admin /me still names the configured demo id; after removal that row may be gone.
+        // Prefer an explicit selection, then any still-existing people list entry.
+        const adminFallbackId = people?.people.find((person) => person.id === selectedPersonId)?.id
+          ?? people?.people.find((person) => person.id === nextPrincipal.personId)?.id
+          ?? people?.people[0]?.id
+          ?? null;
+        const nextPersonId = nextPrincipal.role === "admin"
+          ? adminFallbackId
+          : nextPrincipal.personId;
+        if (!nextPersonId) {
+          throw new DashboardError("Add a person to start using the dashboard.", 404);
+        }
         const nextOverview = await dashboardJson<DashboardOverview>(
           `/api/dashboard/people/${nextPersonId}/overview`,
           token,
@@ -198,7 +318,12 @@ function DashboardApp() {
         if (cancelled || requestId !== overviewRequestId.current) return;
         setPrincipal(nextPrincipal);
         setOverview(nextOverview);
-        if (people) setAdminPeople(people.people);
+        if (people) {
+          setAdminPeople(people.people);
+          if (selectedPersonId !== nextPersonId) {
+            setSelectedPersonId(nextPersonId);
+          }
+        }
         setError(null);
       } catch (loadError) {
         if (cancelled || requestId !== overviewRequestId.current) return;
@@ -258,6 +383,7 @@ function DashboardApp() {
     setMagicLink(null);
     setOptInLink(null);
     setSelectedPersonId(null);
+    setIsAddingPerson(false);
     setAdminPeople([]);
   };
 
@@ -278,11 +404,30 @@ function DashboardApp() {
           }),
         },
       );
-      if (requestId === magicLinkRequestId.current) setMagicLink(result.magicLink);
+      if (requestId === magicLinkRequestId.current) {
+        setMagicLink(result.magicLink);
+        setRefreshVersion((current) => current + 1);
+      }
     } catch (linkError) {
       if (requestId === magicLinkRequestId.current) {
         setError(linkError instanceof Error ? linkError.message : "Unable to create a link.");
       }
+    }
+  };
+
+  const revokeDashboardGrant = async (grantId: string) => {
+    setError(null);
+    try {
+      await dashboardRequest(`/api/dashboard/access-grants/${grantId}`, token, { method: "DELETE" }).then(async (response) => {
+        if (!response.ok) {
+          const body = (await response.json().catch(() => null)) as { error?: string } | null;
+          throw new DashboardError(body?.error ?? "Unable to revoke the dashboard link.", response.status);
+        }
+      });
+      setMagicLink(null);
+      setRefreshVersion((current) => current + 1);
+    } catch (revokeError) {
+      setError(revokeError instanceof Error ? revokeError.message : "Unable to revoke the dashboard link.");
     }
   };
 
@@ -305,6 +450,7 @@ function DashboardApp() {
   const createPerson = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setIsCreatingPerson(true);
+    setNewPersonFormError(null);
     setError(null);
     try {
       const result = await dashboardJson<{ person: { id: string } }>("/api/dashboard/people", token, {
@@ -314,10 +460,21 @@ function DashboardApp() {
       });
       setNewPersonName("");
       setNewPersonPhone("");
+      setNewPersonFormError(null);
+      setIsAddingPerson(false);
+      setOverview(null);
       setSelectedPersonId(result.person.id);
+      setSelectedTrustedContactId("");
+      setAttestedContactIds({});
+      setContactAttestationErrorId(null);
+      setMagicLink(null);
+      setOptInLink(null);
+      setOptInInvitation(null);
       setRefreshVersion((current) => current + 1);
     } catch (createError) {
-      setError(createError instanceof Error ? createError.message : "Unable to create the person.");
+      const message = createError instanceof Error ? createError.message : "Unable to create the person.";
+      setNewPersonErrorField(/display name|enter a name/i.test(message) ? "name" : "phone");
+      setNewPersonFormError(message);
     } finally {
       setIsCreatingPerson(false);
     }
@@ -327,9 +484,18 @@ function DashboardApp() {
     event.preventDefault();
     if (!personId) return;
     setIsCreatingContact(true);
+    setNewContactFormError(null);
     setError(null);
     try {
-      await dashboardJson(`/api/dashboard/people/${personId}/trusted-contacts`, token, {
+      const result = await dashboardJson<{
+        contact: {
+          id: string;
+          displayName: string;
+          relationship: string;
+          phoneE164: string | null;
+        };
+        smsOptInStatus: "not_opted_in";
+      }>(`/api/dashboard/people/${personId}/trusted-contacts`, token, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -341,20 +507,197 @@ function DashboardApp() {
       setContactName("");
       setContactRelationship("");
       setContactPhone("");
+      setNewContactFormError(null);
+      pendingTrustedContactId.current = result.contact.id;
+      setIsAddingContact(false);
+      setSelectedTrustedContactId(result.contact.id);
+      setOverview((current) => current
+        ? {
+            ...current,
+            contacts: [
+              ...current.contacts,
+              {
+                id: result.contact.id,
+                displayName: result.contact.displayName,
+                relationship: result.contact.relationship,
+                phoneE164: result.contact.phoneE164,
+                smsOptInStatus: result.smsOptInStatus,
+                optInLinkState: "none",
+                confirmationState: "not_requested",
+                smsOptInInvitation: null,
+                dashboardGrant: null,
+              },
+            ],
+          }
+        : current);
       setRefreshVersion((current) => current + 1);
     } catch (contactError) {
-      setError(contactError instanceof Error ? contactError.message : "Unable to draft the trusted contact.");
+      const message = contactError instanceof Error ? contactError.message : "Unable to draft the trusted contact.";
+      setNewContactErrorField(
+        /relationship/i.test(message) ? "relationship" : /name/i.test(message) ? "name" : "phone",
+      );
+      setNewContactFormError(message);
     } finally {
       setIsCreatingContact(false);
+    }
+  };
+
+  const saveContactPhone = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!personId || !selectedTrustedContact) return;
+    setIsSavingContactPhone(true);
+    setContactPhoneFormError(null);
+    setError(null);
+    try {
+      const result = await dashboardJson<{ contact: { phoneE164: string } }>(
+        `/api/dashboard/people/${personId}/trusted-contacts/${selectedTrustedContact.id}/phone`,
+        token,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phoneE164: contactPhoneDraft }),
+        },
+      );
+      setOverview((current) => current
+        ? {
+            ...current,
+            contacts: current.contacts.map((contact) => contact.id === selectedTrustedContact.id
+              ? { ...contact, phoneE164: result.contact.phoneE164 }
+              : contact),
+          }
+        : current);
+      setIsEditingContactPhone(false);
+    } catch (phoneError) {
+      setContactPhoneFormError(phoneError instanceof Error ? phoneError.message : "Unable to save the phone number.");
+    } finally {
+      setIsSavingContactPhone(false);
+    }
+  };
+
+  const removeSelectedContact = async () => {
+    if (!personId || !selectedTrustedContact) return;
+    if (!window.confirm(`Remove ${selectedTrustedContact.displayName}? This removes their dashboard links and SMS invitation state.`)) {
+      return;
+    }
+
+    setIsRemovingContact(true);
+    setError(null);
+    try {
+      await dashboardRequest(
+        `/api/dashboard/people/${personId}/trusted-contacts/${selectedTrustedContact.id}`,
+        token,
+        { method: "DELETE" },
+      ).then(async (response) => {
+        if (!response.ok) {
+          const body = (await response.json().catch(() => null)) as { error?: string } | null;
+          throw new DashboardError(body?.error ?? "Unable to remove this trusted contact.", response.status);
+        }
+      });
+      const removedId = selectedTrustedContact.id;
+      pendingTrustedContactId.current = null;
+      setMagicLink(null);
+      setOptInLink(null);
+      setOptInInvitation(null);
+      setIsEditingContactPhone(false);
+      setContactPhoneFormError(null);
+      setOverview((current) => {
+        if (!current) return current;
+        const contacts = current.contacts.filter((contact) => contact.id !== removedId);
+        return { ...current, contacts };
+      });
+      setSelectedTrustedContactId("");
+      setIsAddingContact(false);
+      setRefreshVersion((current) => current + 1);
+    } catch (removeError) {
+      setError(removeError instanceof Error ? removeError.message : "Unable to remove this trusted contact.");
+    } finally {
+      setIsRemovingContact(false);
+    }
+  };
+
+  const removeSelectedPerson = async () => {
+    if (!personId || !overview) return;
+    if (!window.confirm(`Remove ${overview.person.displayName}? This removes their trusted contacts, calls, and saved information.`)) {
+      return;
+    }
+
+    const remaining = adminPeople.filter((person) => person.id !== personId);
+    setIsRemovingPerson(true);
+    setError(null);
+    try {
+      await dashboardRequest(`/api/dashboard/people/${personId}`, token, { method: "DELETE" }).then(async (response) => {
+        if (!response.ok) {
+          const body = (await response.json().catch(() => null)) as { error?: string } | null;
+          throw new DashboardError(body?.error ?? "Unable to remove this person.", response.status);
+        }
+      });
+      setOverview(null);
+      setAdminPeople(remaining);
+      setSelectedTrustedContactId("");
+      setAttestedContactIds({});
+      setContactAttestationErrorId(null);
+      setMagicLink(null);
+      setOptInLink(null);
+      setOptInInvitation(null);
+      setIsEditingPhone(false);
+      if (remaining[0]) {
+        setIsAddingPerson(false);
+        setSelectedPersonId(remaining[0].id);
+      } else {
+        setSelectedPersonId(null);
+        setIsAddingPerson(true);
+      }
+      setRefreshVersion((current) => current + 1);
+    } catch (removeError) {
+      setError(removeError instanceof Error ? removeError.message : "Unable to remove this person.");
+    } finally {
+      setIsRemovingPerson(false);
+    }
+  };
+
+  const savePersonPhone = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!personId) return;
+    setIsSavingPhone(true);
+    setPhoneFormError(null);
+    setError(null);
+    try {
+      const result = await dashboardJson<{ person: { phoneE164: string } }>(
+        `/api/dashboard/people/${personId}/phone`,
+        token,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phoneE164: phoneDraft }),
+        },
+      );
+      setOverview((current) => current
+        ? {
+            ...current,
+            person: { ...current.person, phoneE164: result.person.phoneE164, phoneNumberStatus: "configured" },
+          }
+        : current);
+      setAdminPeople((people) => people.map((person) => person.id === personId
+        ? { ...person, phoneNumberStatus: "configured" }
+        : person));
+      setIsEditingPhone(false);
+    } catch (phoneError) {
+      setPhoneFormError(phoneError instanceof Error ? phoneError.message : "Unable to save the phone number.");
+    } finally {
+      setIsSavingPhone(false);
     }
   };
 
   const createOptInLink = async (trustedContactId: string) => {
     if (!personId) return;
     setOptInLink(null);
+    setOptInInvitation(null);
     setError(null);
     try {
-      const result = await dashboardJson<{ optInLink: string }>(
+      const result = await dashboardJson<{
+        optInLink: string;
+        invitation: { createdAt: string; expiresAt: string };
+      }>(
         `/api/dashboard/people/${personId}/trusted-contacts/${trustedContactId}/opt-in-invitations`,
         token,
         {
@@ -364,6 +707,7 @@ function DashboardApp() {
         },
       );
       setOptInLink(result.optInLink);
+      setOptInInvitation(result.invitation);
     } catch (inviteError) {
       setError(inviteError instanceof Error ? inviteError.message : "Unable to create an opt-in link.");
     }
@@ -424,7 +768,7 @@ function DashboardApp() {
       <header className="dashboard-header">
         <div>
           <p className="eyebrow">Iris companion</p>
-          <h1>{overview?.person.displayName ?? "Loading Iris…"}</h1>
+          <h1>{overview?.person.displayName ?? (principal?.role === "admin" ? "Iris" : "Loading Iris…")}</h1>
           <p className="header-subtitle">
             {principal?.role === "admin"
               ? "Operator view"
@@ -456,82 +800,196 @@ function DashboardApp() {
         </p>
       )}
 
-      {overview && (
+      {(overview || (principal?.role === "admin" && (isAddingPerson || adminPeople.length === 0))) && (
         <div className="dashboard-grid">
           {principal?.role === "admin" && (
             <section className="overview-card enrollment-card">
-              <p className="card-kicker">Enrollment</p>
-              <h2>People and invitations</h2>
-              <label htmlFor="person-select">Person</label>
-              <select
-                id="person-select"
-                value={personId}
-                onChange={(event) => {
-                  setSelectedPersonId(event.target.value);
-                  setOptInLink(null);
-                  setMagicLink(null);
-                }}
-              >
-                {adminPeople.map((person) => <option key={person.id} value={person.id}>{person.displayName}</option>)}
-              </select>
-              <form className="compact-form" onSubmit={createPerson}>
-                <strong>Add a person</strong>
-                <input required placeholder="Display name" value={newPersonName} onChange={(event) => setNewPersonName(event.target.value)} />
-                <input placeholder="Phone in E.164 (optional)" value={newPersonPhone} onChange={(event) => setNewPersonPhone(event.target.value)} />
-                <button className="secondary-button" type="submit" disabled={isCreatingPerson}>
-                  {isCreatingPerson ? "Adding…" : "Add person"}
-                </button>
-              </form>
+              <div className="enrollment-header">
+                <p className="card-kicker">Enrollment</p>
+                <h2>People and invitations</h2>
+                <p className="privacy-note">Add the person Iris will call. Then invite trusted contacts and create their SMS opt-in links.</p>
+              </div>
+              <div className="person-picker">
+                <strong>Person</strong>
+                <span>{isAddingPerson ? "Fill in the form below, then save to add them to Iris." : "Select who will receive calls, invitations, and other actions."}</span>
+                <label className="sr-only" htmlFor="person-select">Person</label>
+                <select
+                  id="person-select"
+                  value={isAddingPerson || adminPeople.length === 0 ? ADD_PERSON_OPTION : personId}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    if (value === ADD_PERSON_OPTION) {
+                      setIsAddingPerson(true);
+                      setNewPersonFormError(null);
+                      return;
+                    }
+                    setIsAddingPerson(false);
+                    setNewPersonFormError(null);
+                    pendingTrustedContactId.current = null;
+                    setSelectedPersonId(value);
+                    setOptInLink(null);
+                    setOptInInvitation(null);
+                    setMagicLink(null);
+                  }}
+                >
+                  {adminPeople.map((person) => <option key={person.id} value={person.id}>{person.displayName}</option>)}
+                  <option value={ADD_PERSON_OPTION}>Add a person…</option>
+                </select>
+                {!isAddingPerson && overview && (
+                  <button
+                    className="remove-person-button"
+                    type="button"
+                    disabled={isRemovingPerson}
+                    onClick={() => void removeSelectedPerson()}
+                  >
+                    {isRemovingPerson ? "Removing…" : "Remove person"}
+                  </button>
+                )}
+              </div>
+              {isAddingPerson && (
+                <form className="compact-form" onSubmit={createPerson}>
+                  <strong>Add a person</strong>
+                  <label className="form-field">
+                    Name
+                    <input required placeholder="e.g. Avery Morgan" value={newPersonName} onChange={(event) => {
+                      setNewPersonName(event.target.value);
+                      if (newPersonErrorField === "name") setNewPersonFormError(null);
+                    }} />
+                    {newPersonFormError && newPersonErrorField === "name" && <p className="form-validation-error" role="alert">{newPersonFormError}</p>}
+                  </label>
+                  <label className="form-field">
+                    Phone number
+                    <span>Optional for a dashboard-only profile. Add a number before Iris can call this person.</span>
+                    <input placeholder="E.164, e.g. +15551234567" value={newPersonPhone} onChange={(event) => {
+                      setNewPersonPhone(event.target.value);
+                      if (newPersonErrorField === "phone") setNewPersonFormError(null);
+                    }} />
+                    {newPersonFormError && newPersonErrorField === "phone" && <p className="form-validation-error" role="alert">{newPersonFormError}</p>}
+                  </label>
+                  <button className="secondary-button create-person-button" type="submit" disabled={isCreatingPerson}>
+                    {isCreatingPerson ? "Adding…" : "Add person"}
+                  </button>
+                </form>
+              )}
             </section>
           )}
+          {overview && (
+            <>
           <section className="overview-card profile-card">
-            <p className="card-kicker">Person</p>
-            <h2>{overview.person.displayName}</h2>
-            <p>{phoneNumberLabel(overview.person)}</p>
-            <p className="privacy-note">Only consented summaries are retained. Call audio and raw transcripts are not saved.</p>
+            <div className="card-header">
+              <p className="card-kicker">Person</p>
+              <h2>{overview.person.displayName}</h2>
+              <div className="person-phone-row">
+                <p className="person-phone">{phoneNumberLabel(overview.person)}</p>
+                {principal?.role === "admin" && (
+                  <button
+                    className="person-phone-edit"
+                    type="button"
+                    onClick={() => {
+                      setPhoneDraft(overview.person.phoneE164 ?? "");
+                      setPhoneFormError(null);
+                      setIsEditingPhone(true);
+                    }}
+                  >
+                    Edit
+                  </button>
+                )}
+              </div>
+              {principal?.role === "admin" && isEditingPhone && (
+                <form className="phone-editor" onSubmit={savePersonPhone}>
+                  <label className="form-field">
+                    Phone number
+                    <input required placeholder="E.164, e.g. +15551234567" value={phoneDraft} onChange={(event) => {
+                      setPhoneDraft(event.target.value);
+                      setPhoneFormError(null);
+                    }} />
+                    {phoneFormError && <p className="form-validation-error" role="alert">{phoneFormError}</p>}
+                  </label>
+                  <div className="phone-editor-actions">
+                    <button className="secondary-button" type="submit" disabled={isSavingPhone}>{isSavingPhone ? "Saving…" : "Save"}</button>
+                    <button className="secondary-button" type="button" disabled={isSavingPhone} onClick={() => {
+                      setPhoneFormError(null);
+                      setIsEditingPhone(false);
+                    }}>Cancel</button>
+                  </div>
+                </form>
+              )}
+              <p className="privacy-note">Choose what Iris remembers and what your care circle can see. Iris never saves raw audio or full transcripts.</p>
+            </div>
             {principal?.role === "admin" && careConsents && (
-              <div className="compact-form">
-                <strong>Care recap consent</strong>
-                <span>Summary retention: {careConsents.summaryRetention ? "active" : "not active"}</span>
-                <span>Care sharing: {careConsents.careSummarySharing ? "active" : "not active"}</span>
-                <label className="attestation-check">
-                  <input type="checkbox" checked={consentAttested} onChange={(event) => setConsentAttested(event.target.checked)} />
-                  I confirm {overview.person.displayName} agreed to this consent change.
+              <div className="compact-form consent-choices">
+                <strong>Conversation preferences</strong>
+                <label className="consent-check">
+                  <input
+                    className="consent-toggle"
+                    type="checkbox"
+                    checked={draftPrivateMemory}
+                    onChange={(event) => {
+                      const enabled = event.target.checked;
+                      setDraftPrivateMemory(enabled);
+                      if (!enabled) setDraftSharedCare(false);
+                    }}
+                  />
+                  <span className="consent-option">
+                    <span className="consent-option-heading">
+                      <strong>Private memory</strong>
+                      <span className={`consent-status${careConsents.summaryRetention ? "" : " is-off"}`} aria-label={careConsents.summaryRetention ? "Currently on" : "Currently off"}>{careConsents.summaryRetention ? "On" : "Off"}</span>
+                    </span>
+                    <span>Helps Iris remember helpful details between calls. Only Iris uses this.</span>
+                  </span>
                 </label>
-                <div className="contact-actions">
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    disabled={!consentAttested || updatingConsent !== null || careConsents.careSummarySharing}
-                    onClick={() => void updateConsent("summary_retention", careConsents.summaryRetention ? "revoked" : "granted")}
-                  >
-                    {updatingConsent === "summary_retention"
-                      ? "Saving…"
-                      : careConsents.careSummarySharing
-                        ? "Revoke care sharing first"
-                        : careConsents.summaryRetention
-                          ? "Revoke summary retention"
-                          : "Grant summary retention"}
-                  </button>
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    disabled={!consentAttested || updatingConsent !== null || (!careConsents.summaryRetention && !careConsents.careSummarySharing)}
-                    onClick={() => void updateConsent("care_summary_sharing", careConsents.careSummarySharing ? "revoked" : "granted")}
-                  >
-                    {updatingConsent === "care_summary_sharing" ? "Saving…" : careConsents.careSummarySharing ? "Revoke care sharing" : "Grant care sharing"}
-                  </button>
+                <label className="consent-check">
+                  <input
+                    className="consent-toggle"
+                    type="checkbox"
+                    checked={draftSharedCare}
+                    onChange={(event) => {
+                      const enabled = event.target.checked;
+                      setDraftSharedCare(enabled);
+                      if (enabled) setDraftPrivateMemory(true);
+                    }}
+                  />
+                  <span className="consent-option">
+                    <span className="consent-option-heading">
+                      <strong>Shared care recaps</strong>
+                      <span className={`consent-status${careConsents.careSummarySharing ? "" : " is-off"}`} aria-label={careConsents.careSummarySharing ? "Currently on" : "Currently off"}>{careConsents.careSummarySharing ? "On" : "Off"}</span>
+                    </span>
+                    <span>Lets you and trusted contacts see gentle updates from Iris. Requires private memory.</span>
+                  </span>
+                </label>
+                <div className="consent-attestation">
+                  <label className="consent-check">
+                    <input
+                      className="consent-toggle"
+                      type="checkbox"
+                      checked={consentAttested}
+                      onChange={(event) => {
+                        setConsentAttested(event.target.checked);
+                        if (event.target.checked) setConsentFormError(null);
+                      }}
+                    />
+                    <span>I confirm {overview.person.displayName} agreed to these choices.</span>
+                  </label>
+                  {consentFormError && <p className="consent-form-error" role="alert">{consentFormError}</p>}
                 </div>
-                <span className="privacy-note">Shared care recaps require summary retention.</span>
+                <button
+                  className="secondary-button save-consent-button"
+                  type="button"
+                  disabled={!consentDirty || savingConsents}
+                  onClick={() => void saveConsents()}
+                >
+                  {savingConsents ? "Saving…" : "Save"}
+                </button>
               </div>
             )}
           </section>
 
-          <section className="overview-card">
+          <section className="overview-card recent-calls-card">
             <div className="card-heading">
-              <div>
+              <div className="card-header">
                 <p className="card-kicker">Recent calls</p>
-                <h2>Conversation continuity</h2>
+                <h2>Calls with Iris</h2>
+                <p className="privacy-note">Shared notes from recent calls.</p>
               </div>
               <span className="count-pill">{overview.calls.length}</span>
             </div>
@@ -561,11 +1019,13 @@ function DashboardApp() {
                 ))}
               </ol>
             ) : (
-              <p className="empty-state">Calls will appear here after the phone foundation is connected.</p>
+              <div className="empty-state-card">
+                <p className="empty-state">Shared notes from calls with Iris will appear here.</p>
+              </div>
             )}
           </section>
 
-          <section className="overview-card">
+          <section className="overview-card timeline-card">
             <div className="card-heading">
               <div>
                 <p className="card-kicker">Timeline</p>
@@ -583,73 +1043,276 @@ function DashboardApp() {
                 ))}
               </ol>
             ) : (
-              <p className="empty-state">Bridge, Shield, and Translator events will appear here.</p>
+              <p className="empty-state">Bridge, Shield, and Translator (WIP) events will appear here.</p>
             )}
           </section>
 
-          <section className="overview-card">
-            <p className="card-kicker">Trusted contacts</p>
-            <h2>People in the circle</h2>
-            {overview.contacts.length ? (
-              <ul className="contact-list">
-                {overview.contacts.map((contact) => (
-                  <li key={contact.id}>
-                    <div>
-                      <strong>{contact.displayName}</strong>
-                      <span>
-                        {contact.relationship} · SMS: {contact.smsOptInStatus === "opted_in" ? "opted in" : contact.smsOptInStatus === "opted_out" ? "opted out" : "not opted in"}
-                        {" · "}link: {contact.optInLinkState.replaceAll("_", " ")}
-                        {" · "}confirmation: {contact.confirmationState.replaceAll("_", " ")}
-                      </span>
+          <section className="overview-card trusted-contacts-card">
+            <div className="card-header">
+              <p className="card-kicker">Trusted contacts</p>
+              <h2>People in the circle</h2>
+              <p className="privacy-note">Add the people who can stay connected with {overview.person.displayName}. They can receive a dashboard link, request an Iris check-in, and choose whether to receive text messages.</p>
+            </div>
+            {principal?.role === "admin" || overview.contacts.length ? (
+              <>
+                <div className="trusted-contact-picker">
+                  <strong>Trusted contact</strong>
+                  <span>{isAddingContact ? "Fill in the form below, then save to add them to the care circle." : "Choose who the dashboard and SMS actions below apply to."}</span>
+                  <label className="sr-only" htmlFor="trusted-contact-select">Trusted contact</label>
+                  <select
+                    id="trusted-contact-select"
+                    value={isAddingContact || overview.contacts.length === 0 ? ADD_CONTACT_OPTION : (selectedTrustedContact?.id ?? "")}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      if (value === ADD_CONTACT_OPTION) {
+                        setIsAddingContact(true);
+                        setMagicLink(null);
+                        setOptInLink(null);
+                        setOptInInvitation(null);
+                        setContactAttestationErrorId(null);
+                        setIsEditingContactPhone(false);
+                        setContactPhoneFormError(null);
+                        setNewContactFormError(null);
+                        return;
+                      }
+                      setIsAddingContact(false);
+                      setSelectedTrustedContactId(value);
+                      setMagicLink(null);
+                      setOptInLink(null);
+                      setOptInInvitation(null);
+                      setContactAttestationErrorId(null);
+                      setIsEditingContactPhone(false);
+                      setContactPhoneFormError(null);
+                    }}
+                  >
+                    {overview.contacts.map((contact) => <option key={contact.id} value={contact.id}>{contact.displayName}</option>)}
+                    {principal?.role === "admin" && <option value={ADD_CONTACT_OPTION}>Add a trusted contact…</option>}
+                  </select>
+                  {!isAddingContact && selectedTrustedContact && principal?.role === "admin" && (
+                    <button
+                      className="remove-contact-button"
+                      type="button"
+                      disabled={isRemovingContact}
+                      onClick={() => void removeSelectedContact()}
+                    >
+                      {isRemovingContact ? "Removing…" : "Remove contact"}
+                    </button>
+                  )}
+                </div>
+                {!isAddingContact && selectedTrustedContact && (
+                <ul className="contact-list">
+                  <li key={selectedTrustedContact.id}>
+                    <div className="contact-details">
+                      <strong>{selectedTrustedContact.displayName}</strong>
+                      <span className="contact-relationship">{selectedTrustedContact.relationship}</span>
+                      <div className="person-phone-row">
+                        <p className="person-phone">{contactPhoneLabel(selectedTrustedContact.phoneE164)}</p>
+                        {principal?.role === "admin" && (
+                          <button
+                            className="person-phone-edit"
+                            type="button"
+                            onClick={() => {
+                              setContactPhoneDraft(selectedTrustedContact.phoneE164 ?? "");
+                              setContactPhoneFormError(null);
+                              setIsEditingContactPhone(true);
+                            }}
+                          >
+                            Edit
+                          </button>
+                        )}
+                      </div>
+                      {principal?.role === "admin" && isEditingContactPhone && (
+                        <form className="phone-editor" onSubmit={saveContactPhone}>
+                          <label className="form-field">
+                            Phone number
+                            <input required placeholder="E.164, e.g. +15551234567" value={contactPhoneDraft} onChange={(event) => {
+                              setContactPhoneDraft(event.target.value);
+                              setContactPhoneFormError(null);
+                            }} />
+                            {contactPhoneFormError && <p className="form-validation-error" role="alert">{contactPhoneFormError}</p>}
+                          </label>
+                          <div className="phone-editor-actions">
+                            <button className="secondary-button" type="submit" disabled={isSavingContactPhone}>{isSavingContactPhone ? "Saving…" : "Save"}</button>
+                            <button className="secondary-button" type="button" disabled={isSavingContactPhone} onClick={() => {
+                              setContactPhoneFormError(null);
+                              setIsEditingContactPhone(false);
+                            }}>Cancel</button>
+                          </div>
+                        </form>
+                      )}
+                      <ul className="contact-status-list">
+                        <li>
+                          <span>SMS</span>
+                          <span className={`contact-status-pill${selectedTrustedContact.smsOptInStatus === "opted_in" ? "" : " is-off"}`}>
+                            {selectedTrustedContact.smsOptInStatus === "opted_in" ? "Opted in" : selectedTrustedContact.smsOptInStatus === "opted_out" ? "Opted out" : "Not opted in"}
+                          </span>
+                        </li>
+                        <li>
+                          <span>Dashboard link</span>
+                          <span className={`contact-status-pill${selectedTrustedContact.dashboardGrant ? "" : " is-off"}`}>
+                            {selectedTrustedContact.dashboardGrant ? "Active" : "Not created"}
+                          </span>
+                        </li>
+                        <li>
+                          <span>SMS opt-in link</span>
+                          <span className={`contact-status-pill${selectedTrustedContact.optInLinkState === "none" ? " is-off" : ""}`}>
+                            {selectedTrustedContact.optInLinkState === "none" ? "Not created" : selectedTrustedContact.optInLinkState.replaceAll("_", " ")}
+                          </span>
+                        </li>
+                        <li>
+                          <span>SMS confirmation</span>
+                          <span className={`contact-status-pill${selectedTrustedContact.confirmationState === "not_requested" ? " is-off" : ""}`}>
+                            {selectedTrustedContact.confirmationState === "not_requested" ? "Not requested" : selectedTrustedContact.confirmationState.replaceAll("_", " ")}
+                          </span>
+                        </li>
+                      </ul>
                     </div>
                     {principal?.role === "admin" && (
                       <div className="contact-actions">
-                        <button className="secondary-button" type="button" onClick={() => void createMagicLink(contact.id)}>Create dashboard link</button>
-                        <label className="attestation-check">
+                        <label className="contact-attestation">
                           <input
+                            className="consent-toggle"
                             type="checkbox"
-                            checked={attestedContactIds[contact.id] === true}
-                            onChange={(event) => setAttestedContactIds((current) => ({ ...current, [contact.id]: event.target.checked }))}
+                            checked={attestedContactIds[selectedTrustedContact.id] === true}
+                            onChange={(event) => {
+                              setAttestedContactIds((current) => ({ ...current, [selectedTrustedContact.id]: event.target.checked }));
+                              if (event.target.checked) setContactAttestationErrorId(null);
+                            }}
                           />
-                          I’m authorized to invite this contact
+                          <span>I have permission to invite {selectedTrustedContact.displayName} to receive Iris text messages.</span>
                         </label>
-                        <button className="secondary-button" type="button" disabled={!attestedContactIds[contact.id]} onClick={() => void createOptInLink(contact.id)}>Create SMS opt-in link</button>
+                        {contactAttestationErrorId === selectedTrustedContact.id && (
+                          <p className="contact-attestation-error" role="alert">
+                            Confirm that you have permission to invite {selectedTrustedContact.displayName} before creating an SMS opt-in link.
+                          </p>
+                        )}
+                        <button
+                          className="secondary-button full-width-action"
+                          type="button"
+                          onClick={() => void createMagicLink(selectedTrustedContact.id)}
+                        >
+                          {selectedTrustedContact.dashboardGrant ? "Create new dashboard link" : "Create dashboard link"}
+                        </button>
+                        <button
+                          className="secondary-button full-width-action"
+                          type="button"
+                          onClick={() => {
+                            if (!attestedContactIds[selectedTrustedContact.id]) {
+                              setContactAttestationErrorId(selectedTrustedContact.id);
+                              return;
+                            }
+                            setContactAttestationErrorId(null);
+                            void createOptInLink(selectedTrustedContact.id);
+                          }}
+                        >
+                          Create SMS opt-in link
+                        </button>
                       </div>
                     )}
                   </li>
-                ))}
-              </ul>
+                </ul>
+                )}
+              </>
             ) : (
               <p className="empty-state">Contact access is not available through this link.</p>
             )}
-            {magicLink && (
-              <div className="magic-link" aria-live="polite">
-                <strong>New family link</strong>
-                <input readOnly value={magicLink} aria-label="New trusted contact link" />
-                <span>Share this once; it expires in seven days and can be revoked.</span>
+            {!isAddingContact && (selectedTrustedContact?.dashboardGrant || magicLink) && (
+              <div className="compact-form magic-link" aria-live="polite">
+                <strong>Dashboard link</strong>
+                {magicLink ? (
+                  <>
+                    <p className="privacy-note">This link is only viewable once. Please copy and send it to the trusted contact before leaving this page.</p>
+                    <div className="link-field">
+                      <input readOnly value={magicLink} aria-label="New trusted contact link" />
+                    </div>
+                    <button className="person-phone-edit link-copy-button" type="button" onClick={() => void copyLink(magicLink, "dashboard")}>
+                      {copiedLink === "dashboard" ? "Copied" : "Copy"}
+                    </button>
+                  </>
+                ) : (
+                  <p className="privacy-note">An active link is still valid, but the URL can’t be shown again. Create a new link if you need another copy.</p>
+                )}
+                {selectedTrustedContact?.dashboardGrant ? (
+                  <div className="magic-link-meta">
+                    <span>Created {formatDate(selectedTrustedContact.dashboardGrant.createdAt)}.</span>
+                    <span>Expires {formatDate(selectedTrustedContact.dashboardGrant.expiresAt)}.</span>
+                  </div>
+                ) : (
+                  <p className="magic-link-meta">Expires in seven days.</p>
+                )}
+                {principal?.role === "admin" && selectedTrustedContact?.dashboardGrant && (
+                  <button
+                    className="secondary-button full-width-action"
+                    type="button"
+                    onClick={() => void revokeDashboardGrant(selectedTrustedContact.dashboardGrant!.id)}
+                  >
+                    Revoke dashboard link
+                  </button>
+                )}
               </div>
             )}
-            {optInLink && (
-              <div className="magic-link" aria-live="polite">
-                <strong>SMS opt-in link</strong>
-                <input readOnly value={optInLink} aria-label="Trusted contact SMS opt-in link" />
-                <span>Share within 24 hours. The contact must separately agree before Iris can send SMS.</span>
+            {!isAddingContact && (optInLink || selectedTrustedContact?.smsOptInInvitation) && (
+              <div className="compact-form magic-link" aria-live="polite">
+                <label className="form-field" htmlFor="sms-opt-in-link">SMS opt-in link</label>
+                {optInLink ? (
+                  <>
+                    <p className="privacy-note">Share within 24 hours. The contact must separately agree before Iris can send SMS. This link is only viewable once. Please copy and send it to the trusted contact before leaving this page.</p>
+                    <div className="link-field">
+                      <input id="sms-opt-in-link" readOnly value={optInLink} aria-label="Trusted contact SMS opt-in link" />
+                    </div>
+                    <button className="person-phone-edit link-copy-button" type="button" onClick={() => void copyLink(optInLink, "sms")}>
+                      {copiedLink === "sms" ? "Copied" : "Copy"}
+                    </button>
+                  </>
+                ) : (
+                  <p className="privacy-note">An active link is still valid, but the URL can’t be shown again. Create a new link if you need another copy.</p>
+                )}
+                {displayedOptInInvitation && (
+                  <div className="magic-link-meta">
+                    <span>Created {formatDate(displayedOptInInvitation.createdAt)}.</span>
+                    <span>Expires {formatDate(displayedOptInInvitation.expiresAt)}.</span>
+                  </div>
+                )}
               </div>
             )}
-            {principal?.role === "admin" && (
+            {principal?.role === "admin" && isAddingContact && (
               <form className="compact-form" onSubmit={createTrustedContact}>
-                <strong>Draft a trusted contact</strong>
-                <input required placeholder="Display name" value={contactName} onChange={(event) => setContactName(event.target.value)} />
-                <input required placeholder="Relationship" value={contactRelationship} onChange={(event) => setContactRelationship(event.target.value)} />
-                <input required placeholder="Mobile in E.164" value={contactPhone} onChange={(event) => setContactPhone(event.target.value)} />
-                <button className="secondary-button" type="submit" disabled={isCreatingContact}>{isCreatingContact ? "Saving…" : "Save draft"}</button>
+                <strong>Add a trusted contact</strong>
+                <label className="form-field">
+                  Name
+                  <input required placeholder="e.g. Evelyn Carter" value={contactName} onChange={(event) => {
+                    setContactName(event.target.value);
+                    if (newContactErrorField === "name") setNewContactFormError(null);
+                  }} />
+                  {newContactFormError && newContactErrorField === "name" && <p className="form-validation-error" role="alert">{newContactFormError}</p>}
+                </label>
+                <label className="form-field">
+                  Relationship
+                  <input required placeholder="e.g. Neighbor" value={contactRelationship} onChange={(event) => {
+                    setContactRelationship(event.target.value);
+                    if (newContactErrorField === "relationship") setNewContactFormError(null);
+                  }} />
+                  {newContactFormError && newContactErrorField === "relationship" && <p className="form-validation-error" role="alert">{newContactFormError}</p>}
+                </label>
+                <label className="form-field">
+                  Phone number
+                  <input required placeholder="E.164, e.g. +15551234567" value={contactPhone} onChange={(event) => {
+                    setContactPhone(event.target.value);
+                    if (newContactErrorField === "phone") setNewContactFormError(null);
+                  }} />
+                  {newContactFormError && newContactErrorField === "phone" && <p className="form-validation-error" role="alert">{newContactFormError}</p>}
+                </label>
+                <button className="secondary-button create-person-button" type="submit" disabled={isCreatingContact}>{isCreatingContact ? "Saving…" : "Add contact"}</button>
               </form>
             )}
           </section>
 
           <section className="overview-card actions-card">
-            <p className="card-kicker">Actions</p>
-            <h2>Approval queue</h2>
+            <div className="card-header">
+              <p className="card-kicker">Actions</p>
+              <h2>Text messages</h2>
+              <p className="privacy-note">Message updates and anything that needs your attention.</p>
+            </div>
             {overview.actions.length ? (
               <ol className="item-list">
                 {overview.actions.map((action) => (
@@ -673,9 +1336,13 @@ function DashboardApp() {
                 ))}
               </ol>
             ) : (
-              <p className="empty-state">Approved actions will appear here before anything is sent.</p>
+              <div className="empty-state-card">
+                <p className="empty-state">No text-message updates yet.</p>
+              </div>
             )}
           </section>
+            </>
+          )}
         </div>
       )}
     </main>
@@ -737,7 +1404,7 @@ function OptInPage() {
 
   return (
     <main className="access-shell">
-      <section className="access-card opt-in-card" aria-labelledby="opt-in-title">
+      <section className="access-card" aria-labelledby="opt-in-title">
         <p className="eyebrow">Iris companion</p>
         <h1 id="opt-in-title">Care text opt-in</h1>
         {status === "loading" && <p>Checking your invitation…</p>}

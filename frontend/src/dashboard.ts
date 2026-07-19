@@ -40,6 +40,8 @@ export type DashboardOverview = {
     smsOptInStatus: "opted_in" | "not_opted_in" | "opted_out";
     optInLinkState: "active" | "used" | "expired" | "none";
     confirmationState: "not_requested" | "queued" | "sent" | "failed" | "retryable" | "needs_review";
+    smsOptInInvitation: { createdAt: string; expiresAt: string } | null;
+    dashboardGrant: { id: string; createdAt: string; expiresAt: string } | null;
   }>;
   actions: Array<{
     id: string;

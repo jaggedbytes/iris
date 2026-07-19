@@ -130,7 +130,12 @@ test("allows an admin to view a person overview", async () => {
     assert.equal(response.status, 200);
     const body = (await response.json()) as {
       person: { id: string; phoneE164: string | null; phoneNumberStatus: string };
-      contacts: Array<{ smsOptInStatus: string; optInLinkState: string; confirmationState: string }>;
+      contacts: Array<{
+        smsOptInStatus: string;
+        optInLinkState: string;
+        confirmationState: string;
+        dashboardGrant: { id: string; createdAt: string; expiresAt: string } | null;
+      }>;
     };
     assert.equal(body.person.id, "person-a");
     assert.equal(body.person.phoneE164, "+15550009999");
@@ -139,6 +144,149 @@ test("allows an admin to view a person overview", async () => {
     assert.equal(body.contacts[0]?.smsOptInStatus, "not_opted_in");
     assert.equal(body.contacts[0]?.optInLinkState, "none");
     assert.equal(body.contacts[0]?.confirmationState, "not_requested");
+    assert.equal(body.contacts[0]?.dashboardGrant, null);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("allows an admin to remove every person including the last enrollment", async () => {
+  const fixture = await createDashboardServer();
+  try {
+    const removed = await fetch(`${fixture.url}/api/dashboard/people/person-b`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    assert.equal(removed.status, 204);
+    assert.equal(fixture.repositories.getPerson("person-b"), null);
+
+    const removedLast = await fetch(`${fixture.url}/api/dashboard/people/person-a`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    assert.equal(removedLast.status, 204);
+    assert.equal(fixture.repositories.getPerson("person-a"), null);
+    assert.equal(fixture.repositories.listPeople().length, 0);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("allows an admin to add or correct a person's phone number", async () => {
+  const fixture = await createDashboardServer();
+  try {
+    const duplicateCreate = await fetch(`${fixture.url}/api/dashboard/people`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ displayName: "Casey", phoneE164: "+15550009999" }),
+    });
+    assert.equal(duplicateCreate.status, 409);
+    assert.match(((await duplicateCreate.json()) as { error: string }).error, /already used by an enrolled person/i);
+
+    const added = await fetch(`${fixture.url}/api/dashboard/people/person-b/phone`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ phoneE164: "+15550008888" }),
+    });
+    assert.equal(added.status, 200);
+    assert.equal(fixture.repositories.getPerson("person-b")?.phoneE164, "+15550008888");
+
+    const corrected = await fetch(`${fixture.url}/api/dashboard/people/person-b/phone`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ phoneE164: "+15550007777" }),
+    });
+    assert.equal(corrected.status, 200);
+    assert.equal(fixture.repositories.getPerson("person-b")?.phoneE164, "+15550007777");
+
+    const duplicate = await fetch(`${fixture.url}/api/dashboard/people/person-b/phone`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ phoneE164: "+15550009999" }),
+    });
+    assert.equal(duplicate.status, 409);
+    assert.match(((await duplicate.json()) as { error: string }).error, /already used by an enrolled person/i);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("keeps trusted-contact phone numbers unique and reports conflicts", async () => {
+  const fixture = await createDashboardServer();
+  try {
+    const headers = { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" };
+    const created = await fetch(`${fixture.url}/api/dashboard/people/person-b/trusted-contacts`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ displayName: "Casey", relationship: "friend", phoneE164: "+15550008888" }),
+    });
+    assert.equal(created.status, 201);
+
+    const sameAsEnrolledPerson = await fetch(`${fixture.url}/api/dashboard/people/person-a/trusted-contacts`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ displayName: "Drew", relationship: "friend", phoneE164: "+15550009999" }),
+    });
+    assert.equal(sameAsEnrolledPerson.status, 409);
+    assert.match(
+      ((await sameAsEnrolledPerson.json()) as { error: string }).error,
+      /cannot use the enrolled person's phone number/i,
+    );
+
+    // Same phone may be reused by a trusted contact for a different enrolled person.
+    const sharedAcrossPeople = await fetch(`${fixture.url}/api/dashboard/people/person-a/trusted-contacts`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ displayName: "Morgan", relationship: "neighbor", phoneE164: "+15550008888" }),
+    });
+    assert.equal(sharedAcrossPeople.status, 201);
+
+    // Within one person, contact phones stay unique.
+    const duplicateWithinPerson = await fetch(`${fixture.url}/api/dashboard/people/person-a/trusted-contacts`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ displayName: "Lee", relationship: "friend", phoneE164: "+15550008888" }),
+    });
+    assert.equal(duplicateWithinPerson.status, 409);
+    assert.match(((await duplicateWithinPerson.json()) as { error: string }).error, /already used by a trusted contact/i);
+
+    const duplicateEdit = await fetch(`${fixture.url}/api/dashboard/people/person-a/trusted-contacts/contact-a/phone`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ phoneE164: "+15550008888" }),
+    });
+    assert.equal(duplicateEdit.status, 409);
+
+    // A different enrolled person may still share another family's trusted-contact number.
+    const personSharingTrustedContactPhone = await fetch(`${fixture.url}/api/dashboard/people`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ displayName: "Jordan", phoneE164: "+15550008888" }),
+    });
+    assert.equal(personSharingTrustedContactPhone.status, 201);
+
+    // An enrolled person cannot take a phone already used by their own trusted contact.
+    const ownContactPhone = await fetch(`${fixture.url}/api/dashboard/people/person-b/phone`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ phoneE164: "+15550008888" }),
+    });
+    assert.equal(ownContactPhone.status, 409);
+    assert.match(
+      ((await ownContactPhone.json()) as { error: string }).error,
+      /already used by a trusted contact for this person/i,
+    );
+
+    const duplicatePersonEdit = await fetch(`${fixture.url}/api/dashboard/people/person-b/phone`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ phoneE164: "+15550009999" }),
+    });
+    assert.equal(duplicatePersonEdit.status, 409);
+    assert.match(
+      ((await duplicatePersonEdit.json()) as { error: string }).error,
+      /already used by an enrolled person/i,
+    );
   } finally {
     fixture.close();
   }
@@ -221,7 +369,7 @@ test("limits enrollment drafting and opt-in invitations to operators", async () 
     });
     assert.equal(duplicatePhone.status, 409);
     const duplicateBody = (await duplicatePhone.json()) as { error: string };
-    assert.match(duplicateBody.error, /already assigned/i);
+    assert.match(duplicateBody.error, /already used by an enrolled person/i);
 
     const badContact = await fetch(`${fixture.url}/api/dashboard/people/${person.person.id}/trusted-contacts`, {
       method: "POST",
@@ -229,6 +377,17 @@ test("limits enrollment drafting and opt-in invitations to operators", async () 
       body: JSON.stringify({ displayName: "Lee", relationship: "friend", phoneE164: "5550005555" }),
     });
     assert.equal(badContact.status, 400);
+    const badContactBody = (await badContact.json()) as { error: string };
+    assert.match(badContactBody.error, /E\.164/i);
+
+    const missingName = await fetch(`${fixture.url}/api/dashboard/people/${person.person.id}/trusted-contacts`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ displayName: " ", relationship: "friend", phoneE164: "+15550005555" }),
+    });
+    assert.equal(missingName.status, 400);
+    const missingNameBody = (await missingName.json()) as { error: string };
+    assert.match(missingNameBody.error, /enter a name/i);
 
     const createdContact = await fetch(`${fixture.url}/api/dashboard/people/${person.person.id}/trusted-contacts`, {
       method: "POST",
@@ -236,8 +395,31 @@ test("limits enrollment drafting and opt-in invitations to operators", async () 
       body: JSON.stringify({ displayName: "Lee", relationship: "friend", phoneE164: "+15550005555" }),
     });
     assert.equal(createdContact.status, 201);
-    const contact = (await createdContact.json()) as { contact: { id: string }; smsOptInStatus: string };
-    assert.equal(contact.smsOptInStatus, "not_opted_in");
+    const firstContact = (await createdContact.json()) as { contact: { id: string }; smsOptInStatus: string };
+    assert.equal(firstContact.smsOptInStatus, "not_opted_in");
+
+    const correctedPhone = await fetch(`${fixture.url}/api/dashboard/people/${person.person.id}/trusted-contacts/${firstContact.contact.id}/phone`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ phoneE164: "+15550006666" }),
+    });
+    assert.equal(correctedPhone.status, 200);
+    assert.equal(fixture.repositories.getTrustedContact(firstContact.contact.id)?.phoneE164, "+15550006666");
+
+    const removedContact = await fetch(`${fixture.url}/api/dashboard/people/${person.person.id}/trusted-contacts/${firstContact.contact.id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    assert.equal(removedContact.status, 204);
+    assert.equal(fixture.repositories.getTrustedContact(firstContact.contact.id), null);
+
+    const recreatedContact = await fetch(`${fixture.url}/api/dashboard/people/${person.person.id}/trusted-contacts`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ displayName: "Lee", relationship: "friend", phoneE164: "+15550005555" }),
+    });
+    assert.equal(recreatedContact.status, 201);
+    const contact = (await recreatedContact.json()) as { contact: { id: string }; smsOptInStatus: string };
 
     const missingAttestation = await fetch(`${fixture.url}/api/dashboard/people/${person.person.id}/trusted-contacts/${contact.contact.id}/opt-in-invitations`, {
       method: "POST",
@@ -553,13 +735,25 @@ test("creates a hashed magic link and revocation removes access", async () => {
     );
     assert.equal(created.status, 201);
     const body = (await created.json()) as {
-      grant: { id: string };
+      grant: { id: string; createdAt: string; expiresAt: string };
       magicLink: string;
     };
     const accessToken = new URLSearchParams(
       new URL(body.magicLink).hash.replace(/^#/, ""),
     ).get("access");
     assert.ok(accessToken);
+    assert.ok(body.grant.createdAt);
+    assert.ok(new Date(body.grant.expiresAt).getTime() > Date.now());
+
+    const overview = await fetch(`${fixture.url}/api/dashboard/people/person-a/overview`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    assert.equal(overview.status, 200);
+    const overviewBody = (await overview.json()) as {
+      contacts: Array<{ dashboardGrant: { id: string; expiresAt: string } | null }>;
+    };
+    assert.equal(overviewBody.contacts[0]?.dashboardGrant?.id, body.grant.id);
+    assert.equal(overviewBody.contacts[0]?.dashboardGrant?.expiresAt, body.grant.expiresAt);
 
     const principal = await fetch(`${fixture.url}/api/dashboard/me`, {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -576,6 +770,20 @@ test("creates a hashed magic link and revocation removes access", async () => {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     assert.equal(afterRevocation.status, 401);
+
+    const overviewAfter = await fetch(`${fixture.url}/api/dashboard/people/person-a/overview`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    const overviewAfterBody = (await overviewAfter.json()) as {
+      contacts: Array<{ dashboardGrant: { id: string } | null }>;
+    };
+    assert.equal(overviewAfterBody.contacts[0]?.dashboardGrant, null);
+
+    const missing = await fetch(
+      `${fixture.url}/api/dashboard/access-grants/${body.grant.id}`,
+      { method: "DELETE", headers: { Authorization: `Bearer ${adminToken}` } },
+    );
+    assert.equal(missing.status, 404);
   } finally {
     fixture.close();
   }

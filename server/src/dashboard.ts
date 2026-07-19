@@ -51,6 +51,23 @@ function isPeoplePhoneUniqueViolation(error: unknown) {
   );
 }
 
+function isTrustedContactPhoneUniqueViolation(error: unknown) {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    error.code === "SQLITE_CONSTRAINT_UNIQUE" &&
+    error.message.includes("trusted_contacts.phone_e164")
+  );
+}
+
+function isOwnCirclePhoneConflict(error: unknown) {
+  return (
+    error instanceof Error &&
+    (error.message.includes("trusted contact phone matches enrolled person")
+      || error.message.includes("person phone matches trusted contact"))
+  );
+}
+
 function bearerToken(request: Request) {
   const authorization = request.header("authorization");
   if (!authorization?.startsWith("Bearer ")) return null;
@@ -226,8 +243,12 @@ export function createDashboardRouter(context: DashboardContext) {
     const phoneE164 = rawPhone === undefined || rawPhone === null || rawPhone === ""
       ? null
       : e164Field(rawPhone);
-    if (!displayName || (rawPhone && !phoneE164)) {
-      response.status(400).json({ error: "A display name and, when supplied, an E.164 phone number are required." });
+    if (!displayName) {
+      response.status(400).json({ error: "Enter a name to add this person." });
+      return;
+    }
+    if (rawPhone && !phoneE164) {
+      response.status(400).json({ error: "Use a E.164 format phone number (e.g. +15551234567)." });
       return;
     }
     try {
@@ -239,7 +260,71 @@ export function createDashboardRouter(context: DashboardContext) {
       response.status(201).json({ person });
     } catch (error) {
       if (isPeoplePhoneUniqueViolation(error)) {
-        response.status(409).json({ error: "That phone number is already assigned." });
+        response.status(409).json({ error: "This phone number is already used by an enrolled person." });
+        return;
+      }
+      throw error;
+    }
+  });
+
+  router.delete("/people/:personId", (request, response) => {
+    const principal = requirePrincipal(request, response, context);
+    if (!principal) return;
+    if (principal.role !== "admin") {
+      response.status(403).json({ error: "Admin access is required." });
+      return;
+    }
+
+    const person = context.repositories.getPerson(request.params.personId);
+    if (!person) {
+      response.status(404).json({ error: "Person not found." });
+      return;
+    }
+    if (context.repositories.findActiveCall(person.id)) {
+      response.status(409).json({ error: "This person has an active call and cannot be removed yet." });
+      return;
+    }
+
+    context.repositories.deletePerson(person.id);
+    response.status(204).end();
+  });
+
+  router.patch("/people/:personId/phone", (request, response) => {
+    const principal = requirePrincipal(request, response, context);
+    if (!principal) return;
+    if (principal.role !== "admin") {
+      response.status(403).json({ error: "Admin access is required." });
+      return;
+    }
+
+    const phoneE164 = e164Field(request.body?.phoneE164);
+    if (!phoneE164) {
+      response.status(400).json({ error: "An E.164 phone number is required." });
+      return;
+    }
+    const person = context.repositories.getPerson(request.params.personId);
+    if (!person) {
+      response.status(404).json({ error: "Person not found." });
+      return;
+    }
+    if (context.repositories.listTrustedContacts(person.id).some((contact) => contact.phoneE164 === phoneE164)) {
+      response.status(409).json({ error: "This phone number is already used by a trusted contact for this person." });
+      return;
+    }
+    try {
+      const updated = context.repositories.updatePersonPhone(person.id, phoneE164);
+      if (!updated) {
+        response.status(404).json({ error: "Person not found." });
+        return;
+      }
+      response.json({ person: updated });
+    } catch (error) {
+      if (isPeoplePhoneUniqueViolation(error)) {
+        response.status(409).json({ error: "This phone number is already used by an enrolled person." });
+        return;
+      }
+      if (isOwnCirclePhoneConflict(error)) {
+        response.status(409).json({ error: "This phone number is already used by a trusted contact for this person." });
         return;
       }
       throw error;
@@ -322,6 +407,8 @@ export function createDashboardRouter(context: DashboardContext) {
               const status = context.repositories.getTrustedContactSmsOptInStatus(contact.id);
               const eligible = context.repositories.isTrustedContactSmsEligible(contact.id);
               const enrollment = context.repositories.getTrustedContactSmsEnrollmentState(contact.id);
+              const activeOptInInvitation = context.repositories.findLatestActiveSmsOptInInvitation(contact.id);
+              const grant = context.repositories.findLatestActiveGrantForTrustedContact(contact.id);
               return {
                 ...contact,
                 smsOptInStatus: status === "granted" && eligible
@@ -330,6 +417,12 @@ export function createDashboardRouter(context: DashboardContext) {
                     ? "opted_out"
                     : "not_opted_in",
                 ...enrollment,
+                smsOptInInvitation: activeOptInInvitation
+                  ? { createdAt: activeOptInInvitation.createdAt, expiresAt: activeOptInInvitation.expiresAt }
+                  : null,
+                dashboardGrant: grant
+                  ? { id: grant.id, createdAt: grant.createdAt, expiresAt: grant.expiresAt }
+                  : null,
               };
             })
           : [],
@@ -447,6 +540,8 @@ export function createDashboardRouter(context: DashboardContext) {
 
     const token = randomBytes(32).toString("base64url");
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    // One active dashboard link per contact: newer links replace prior grants.
+    context.repositories.revokeActiveGrantsForTrustedContact(trustedContactId);
     const grant = context.repositories.grantAccess({
       id: randomUUID(),
       personId,
@@ -459,7 +554,7 @@ export function createDashboardRouter(context: DashboardContext) {
     const magicLink = new URL(context.frontendOrigin);
     magicLink.hash = new URLSearchParams({ access: token }).toString();
     response.status(201).json({
-      grant: { id: grant.id, expiresAt: grant.expiresAt, scopes: grant.scopes },
+      grant: { id: grant.id, createdAt: grant.createdAt, expiresAt: grant.expiresAt, scopes: grant.scopes },
       magicLink: magicLink.toString(),
     });
   });
@@ -479,18 +574,101 @@ export function createDashboardRouter(context: DashboardContext) {
     const displayName = stringField(request.body?.displayName);
     const relationship = stringField(request.body?.relationship);
     const phoneE164 = e164Field(request.body?.phoneE164);
-    if (!displayName || !relationship || !phoneE164) {
-      response.status(400).json({ error: "Display name, relationship, and an E.164 mobile number are required." });
+    if (!displayName) {
+      response.status(400).json({ error: "Enter a name to add this person." });
       return;
     }
-    const contact = context.repositories.createTrustedContact({
-      id: randomUUID(),
-      personId: person.id,
-      displayName,
-      relationship,
-      phoneE164,
-    });
-    response.status(201).json({ contact, smsOptInStatus: "not_opted_in" });
+    if (!relationship) {
+      response.status(400).json({ error: "Enter a relationship for this trusted contact." });
+      return;
+    }
+    if (!phoneE164) {
+      response.status(400).json({ error: "Use a E.164 format phone number (e.g. +15551234567)." });
+      return;
+    }
+    if (person.phoneE164 && person.phoneE164 === phoneE164) {
+      response.status(409).json({ error: "A trusted contact cannot use the enrolled person's phone number." });
+      return;
+    }
+    try {
+      const contact = context.repositories.createTrustedContact({
+        id: randomUUID(),
+        personId: person.id,
+        displayName,
+        relationship,
+        phoneE164,
+      });
+      response.status(201).json({ contact, smsOptInStatus: "not_opted_in" });
+    } catch (error) {
+      if (isTrustedContactPhoneUniqueViolation(error)) {
+        response.status(409).json({ error: "This phone number is already used by a trusted contact." });
+        return;
+      }
+      if (isOwnCirclePhoneConflict(error)) {
+        response.status(409).json({ error: "A trusted contact cannot use the enrolled person's phone number." });
+        return;
+      }
+      throw error;
+    }
+  });
+
+  router.patch("/people/:personId/trusted-contacts/:trustedContactId/phone", (request, response) => {
+    const principal = requirePrincipal(request, response, context);
+    if (!principal) return;
+    if (principal.role !== "admin") {
+      response.status(403).json({ error: "Admin access is required." });
+      return;
+    }
+    const person = context.repositories.getPerson(request.params.personId);
+    const contact = context.repositories.getTrustedContact(request.params.trustedContactId);
+    if (!person || !contact || contact.personId !== person.id) {
+      response.status(404).json({ error: "Trusted contact not found." });
+      return;
+    }
+    const phoneE164 = e164Field(request.body?.phoneE164);
+    if (!phoneE164) {
+      response.status(400).json({ error: "Use a E.164 format phone number (e.g. +15551234567)." });
+      return;
+    }
+    if (person.phoneE164 && person.phoneE164 === phoneE164) {
+      response.status(409).json({ error: "A trusted contact cannot use the enrolled person's phone number." });
+      return;
+    }
+    try {
+      const updated = context.repositories.updateTrustedContactPhone(contact.id, phoneE164);
+      if (!updated) {
+        response.status(404).json({ error: "Trusted contact not found." });
+        return;
+      }
+      response.json({ contact: updated });
+    } catch (error) {
+      if (isTrustedContactPhoneUniqueViolation(error)) {
+        response.status(409).json({ error: "This phone number is already used by a trusted contact." });
+        return;
+      }
+      if (isOwnCirclePhoneConflict(error)) {
+        response.status(409).json({ error: "A trusted contact cannot use the enrolled person's phone number." });
+        return;
+      }
+      throw error;
+    }
+  });
+
+  router.delete("/people/:personId/trusted-contacts/:trustedContactId", (request, response) => {
+    const principal = requirePrincipal(request, response, context);
+    if (!principal) return;
+    if (principal.role !== "admin") {
+      response.status(403).json({ error: "Admin access is required." });
+      return;
+    }
+    const person = context.repositories.getPerson(request.params.personId);
+    const contact = context.repositories.getTrustedContact(request.params.trustedContactId);
+    if (!person || !contact || contact.personId !== person.id) {
+      response.status(404).json({ error: "Trusted contact not found." });
+      return;
+    }
+    context.repositories.deleteTrustedContact(contact.id);
+    response.status(204).end();
   });
 
   router.post("/people/:personId/trusted-contacts/:trustedContactId/opt-in-invitations", (request, response) => {
@@ -526,7 +704,7 @@ export function createDashboardRouter(context: DashboardContext) {
     const optInUrl = new URL("/opt-in", context.frontendOrigin);
     optInUrl.searchParams.set("token", token);
     response.status(201).json({
-      invitation: { id: invitation.id, expiresAt: invitation.expiresAt },
+      invitation: { id: invitation.id, createdAt: invitation.createdAt, expiresAt: invitation.expiresAt },
       optInLink: optInUrl.toString(),
     });
   });
@@ -601,7 +779,12 @@ export function createDashboardRouter(context: DashboardContext) {
       return;
     }
 
-    context.repositories.revokeGrant(request.params.grantId);
+    const grant = context.repositories.getGrant(request.params.grantId);
+    if (!grant || grant.revokedAt) {
+      response.status(404).json({ error: "Access grant not found." });
+      return;
+    }
+    context.repositories.revokeGrant(grant.id);
     response.status(204).end();
   });
 

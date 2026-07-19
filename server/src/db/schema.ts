@@ -287,4 +287,101 @@ export const migrations = [
       CREATE INDEX idx_sms_opt_in_invitations_contact ON sms_opt_in_invitations(trusted_contact_id, created_at DESC);
     `,
   },
+  {
+    id: "009_trusted_contact_phone_unique",
+    sql: `
+      CREATE UNIQUE INDEX idx_trusted_contacts_person_phone_unique
+        ON trusted_contacts(person_id, phone_e164)
+        WHERE phone_e164 IS NOT NULL;
+    `,
+  },
+  {
+    id: "010_phone_number_global_uniqueness",
+    sql: `
+      CREATE TRIGGER prevent_people_phone_from_matching_trusted_contact_on_insert
+      BEFORE INSERT ON people
+      WHEN NEW.phone_e164 IS NOT NULL
+        AND EXISTS (SELECT 1 FROM trusted_contacts WHERE phone_e164 = NEW.phone_e164)
+      BEGIN
+        SELECT RAISE(ABORT, 'phone number is already assigned');
+      END;
+
+      CREATE TRIGGER prevent_people_phone_from_matching_trusted_contact_on_update
+      BEFORE UPDATE OF phone_e164 ON people
+      WHEN NEW.phone_e164 IS NOT NULL
+        AND EXISTS (SELECT 1 FROM trusted_contacts WHERE phone_e164 = NEW.phone_e164)
+      BEGIN
+        SELECT RAISE(ABORT, 'phone number is already assigned');
+      END;
+
+      CREATE TRIGGER prevent_trusted_contact_phone_from_matching_person_on_insert
+      BEFORE INSERT ON trusted_contacts
+      WHEN NEW.phone_e164 IS NOT NULL
+        AND EXISTS (SELECT 1 FROM people WHERE phone_e164 = NEW.phone_e164)
+      BEGIN
+        SELECT RAISE(ABORT, 'phone number is already assigned');
+      END;
+
+      CREATE TRIGGER prevent_trusted_contact_phone_from_matching_person_on_update
+      BEFORE UPDATE OF phone_e164 ON trusted_contacts
+      WHEN NEW.phone_e164 IS NOT NULL
+        AND EXISTS (SELECT 1 FROM people WHERE phone_e164 = NEW.phone_e164)
+      BEGIN
+        SELECT RAISE(ABORT, 'phone number is already assigned');
+      END;
+    `,
+  },
+  {
+    id: "011_allow_person_trusted_contact_phone_overlap",
+    sql: `
+      DROP TRIGGER prevent_people_phone_from_matching_trusted_contact_on_insert;
+      DROP TRIGGER prevent_people_phone_from_matching_trusted_contact_on_update;
+      DROP TRIGGER prevent_trusted_contact_phone_from_matching_person_on_insert;
+      DROP TRIGGER prevent_trusted_contact_phone_from_matching_person_on_update;
+    `,
+  },
+  {
+    id: "012_person_own_trusted_contact_phone_distinct",
+    sql: `
+      CREATE TRIGGER prevent_trusted_contact_phone_matching_own_person_on_insert
+      BEFORE INSERT ON trusted_contacts
+      WHEN NEW.phone_e164 IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM people
+          WHERE id = NEW.person_id AND phone_e164 = NEW.phone_e164
+        )
+      BEGIN
+        SELECT RAISE(ABORT, 'trusted contact phone matches enrolled person');
+      END;
+
+      CREATE TRIGGER prevent_trusted_contact_phone_matching_own_person_on_update
+      BEFORE UPDATE OF phone_e164 ON trusted_contacts
+      WHEN NEW.phone_e164 IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM people
+          WHERE id = NEW.person_id AND phone_e164 = NEW.phone_e164
+        )
+      BEGIN
+        SELECT RAISE(ABORT, 'trusted contact phone matches enrolled person');
+      END;
+
+      CREATE TRIGGER prevent_person_phone_matching_own_trusted_contact_on_update
+      BEFORE UPDATE OF phone_e164 ON people
+      WHEN NEW.phone_e164 IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM trusted_contacts
+          WHERE person_id = NEW.id AND phone_e164 = NEW.phone_e164
+        )
+      BEGIN
+        SELECT RAISE(ABORT, 'person phone matches trusted contact');
+      END;
+    `,
+  },
+  {
+    id: "013_access_grants_trusted_contact",
+    sql: `
+      CREATE INDEX idx_access_grants_trusted_contact
+        ON access_grants(trusted_contact_id);
+    `,
+  },
 ] as const;

@@ -223,6 +223,17 @@ export function createRepositories(database: IrisDatabase) {
       return rows.map(toPerson);
     },
 
+    deletePerson(id: string) {
+      return database.prepare("DELETE FROM people WHERE id = ?").run(id).changes === 1;
+    },
+
+    updatePersonPhone(id: string, phoneE164: string) {
+      const updated = database.prepare(
+        "UPDATE people SET phone_e164 = ? WHERE id = ?",
+      ).run(phoneE164, id);
+      return updated.changes === 1 ? this.getPerson(id) : null;
+    },
+
     createTrustedContact(input: {
       id: string;
       personId: string;
@@ -249,6 +260,17 @@ export function createRepositories(database: IrisDatabase) {
         .prepare("SELECT * FROM trusted_contacts WHERE id = ?")
         .get(input.id) as ContactRow;
       return toContact(row);
+    },
+
+    updateTrustedContactPhone(id: string, phoneE164: string) {
+      const updated = database.prepare(
+        "UPDATE trusted_contacts SET phone_e164 = ? WHERE id = ?",
+      ).run(phoneE164, id);
+      return updated.changes === 1 ? this.getTrustedContact(id) : null;
+    },
+
+    deleteTrustedContact(id: string) {
+      return database.prepare("DELETE FROM trusted_contacts WHERE id = ?").run(id).changes === 1;
     },
 
     getTrustedContact(id: string) {
@@ -405,6 +427,16 @@ export function createRepositories(database: IrisDatabase) {
               ? "retryable"
               : "queued";
       return { optInLinkState: linkState, confirmationState };
+    },
+
+    findLatestActiveSmsOptInInvitation(trustedContactId: string, at = now()) {
+      const row = database.prepare(
+        `SELECT * FROM sms_opt_in_invitations
+         WHERE trusted_contact_id = ? AND consumed_at IS NULL AND expires_at > ?
+         ORDER BY created_at DESC, rowid DESC
+         LIMIT 1`,
+      ).get(trustedContactId, at) as SmsOptInInvitationRow | undefined;
+      return row ? toSmsOptInInvitation(row) : null;
     },
 
     createSmsOptInInvitation(input: {
@@ -583,10 +615,42 @@ export function createRepositories(database: IrisDatabase) {
       return row ? toGrant(row) : null;
     },
 
-    revokeGrant(id: string) {
+    getGrant(id: string) {
+      const row = database
+        .prepare("SELECT * FROM access_grants WHERE id = ?")
+        .get(id) as GrantRow | undefined;
+      return row ? toGrant(row) : null;
+    },
+
+    findLatestActiveGrantForTrustedContact(trustedContactId: string, at = now()) {
+      const row = database
+        .prepare(
+          `SELECT * FROM access_grants
+           WHERE trusted_contact_id = ? AND revoked_at IS NULL AND expires_at > ?
+           ORDER BY created_at DESC, rowid DESC
+           LIMIT 1`,
+        )
+        .get(trustedContactId, at) as GrantRow | undefined;
+      return row ? toGrant(row) : null;
+    },
+
+    revokeActiveGrantsForTrustedContact(trustedContactId: string, at = now()) {
       database
-        .prepare("UPDATE access_grants SET revoked_at = ? WHERE id = ?")
+        .prepare(
+          `UPDATE access_grants
+           SET revoked_at = ?
+           WHERE trusted_contact_id = ? AND revoked_at IS NULL AND expires_at > ?`,
+        )
+        .run(now(), trustedContactId, at);
+    },
+
+    revokeGrant(id: string) {
+      const result = database
+        .prepare(
+          "UPDATE access_grants SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+        )
         .run(now(), id);
+      return result.changes === 1;
     },
 
     recordConsent(input: {
