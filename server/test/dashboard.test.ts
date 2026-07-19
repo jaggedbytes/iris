@@ -144,6 +144,55 @@ test("allows an admin to view a person overview", async () => {
   }
 });
 
+test("limits consent attestation to admins and requires retention before care sharing", async () => {
+  const fixture = await createDashboardServer();
+  try {
+    fixture.repositories.grantAccess({
+      id: "grant-summaries", personId: "person-a", trustedContactId: "contact-a",
+      scopes: ["view_summaries"], tokenHash: hash("summaries-token"), expiresAt: futureExpiry(),
+    });
+    const headers = { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" };
+    const denied = await fetch(`${fixture.url}/api/dashboard/people/person-a/consents/summary_retention`, {
+      method: "POST", headers: { Authorization: "Bearer summaries-token", "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "granted", operatorAttested: true }),
+    });
+    assert.equal(denied.status, 403);
+
+    const missingAttestation = await fetch(`${fixture.url}/api/dashboard/people/person-a/consents/summary_retention`, {
+      method: "POST", headers, body: JSON.stringify({ status: "granted", operatorAttested: false }),
+    });
+    assert.equal(missingAttestation.status, 400);
+
+    const careWithoutRetention = await fetch(`${fixture.url}/api/dashboard/people/person-a/consents/care_summary_sharing`, {
+      method: "POST", headers, body: JSON.stringify({ status: "granted", operatorAttested: true }),
+    });
+    assert.equal(careWithoutRetention.status, 409);
+
+    const retention = await fetch(`${fixture.url}/api/dashboard/people/person-a/consents/summary_retention`, {
+      method: "POST", headers, body: JSON.stringify({ status: "granted", operatorAttested: true }),
+    });
+    assert.equal(retention.status, 201);
+    const care = await fetch(`${fixture.url}/api/dashboard/people/person-a/consents/care_summary_sharing`, {
+      method: "POST", headers, body: JSON.stringify({ status: "granted", operatorAttested: true }),
+    });
+    assert.equal(care.status, 201);
+    assert.deepEqual(
+      fixture.database.prepare("SELECT actor_type, action, target_type, metadata_json FROM audit_events WHERE person_id = ? ORDER BY occurred_at, rowid").all("person-a"),
+      [
+        { actor_type: "operator", action: "person.consent_attested", target_type: "person", metadata_json: '{"kind":"summary_retention","status":"granted"}' },
+        { actor_type: "operator", action: "person.consent_attested", target_type: "person", metadata_json: '{"kind":"care_summary_sharing","status":"granted"}' },
+      ],
+    );
+
+    const retentionWhileSharing = await fetch(`${fixture.url}/api/dashboard/people/person-a/consents/summary_retention`, {
+      method: "POST", headers, body: JSON.stringify({ status: "revoked", operatorAttested: true }),
+    });
+    assert.equal(retentionWhileSharing.status, 409);
+  } finally {
+    fixture.close();
+  }
+});
+
 test("limits enrollment drafting and opt-in invitations to operators", async () => {
   const fixture = await createDashboardServer();
   try {
@@ -246,20 +295,29 @@ test("projects dashboard data without SMS, provider, transcript, or audit fields
   const secretPhone = "+15551234567";
   const secretProviderId = "SM-private-provider-id";
   const secretTranscript = "private raw transcript words";
+  const secretNarrowRecap = "Private narrow recap";
   const secretFact = "private durable fact";
   const secretAnchor = "private recall anchor";
+  const safeCareSummary = {
+    recap: "Avery shared that the night felt difficult.",
+    moodAndConcerns: ["Avery said they felt worried."],
+    irisSuggestedNextSteps: ["Iris suggested taking a quiet break."],
+  };
 
   try {
+    fixture.repositories.recordConsent({ id: "retention", personId: "person-a", kind: "summary_retention", status: "granted", source: "test" });
+    fixture.repositories.recordConsent({ id: "care", personId: "person-a", kind: "care_summary_sharing", status: "granted", source: "test" });
     fixture.repositories.createCall({
       id: "call-private", personId: "person-a", providerCallId: "CA-private-provider-id", status: "completed",
     });
     fixture.repositories.completeCall({
       id: "call-private", status: "completed", summaryJson: JSON.stringify({
-        recap: "A safe recap.",
+        recap: secretNarrowRecap,
         facts: [secretFact],
         people: [{ name: "Private person", relationshipOrContext: "private context" }],
         unresolvedTopics: ["private topic"],
         recallAnchor: secretAnchor,
+        careSummary: safeCareSummary,
       }),
     });
     fixture.repositories.createActionRequest({
@@ -293,12 +351,12 @@ test("projects dashboard data without SMS, provider, transcript, or audit fields
       actions: Array<Record<string, unknown>>;
     };
     const serialized = JSON.stringify(body);
-    for (const value of [secretSmsBody, secretPhone, secretProviderId, secretTranscript, secretFact, secretAnchor, "Private person", "private context", "private topic", "CA-private-provider-id", "summaryJson"]) {
+    for (const value of [secretSmsBody, secretPhone, secretProviderId, secretTranscript, secretNarrowRecap, secretFact, secretAnchor, "Private person", "private context", "private topic", "CA-private-provider-id", "summaryJson"]) {
       assert.equal(serialized.includes(value), false);
     }
     assert.equal("providerCallId" in body.calls[0], false);
     assert.equal("summaryJson" in body.calls[0], false);
-    assert.equal(body.calls[0].summaryRecap, "A safe recap.");
+    assert.deepEqual(body.calls[0].careSummary, safeCareSummary);
     assert.equal("payload" in body.actions[0], false);
     assert.deepEqual(body.events.find((event) => event.type === "call.completed")?.payload, {});
     assert.deepEqual(body.events.find((event) => event.type === "bridge.sms_sent")?.payload, { contactName: "Robin" });
@@ -307,6 +365,50 @@ test("projects dashboard data without SMS, provider, transcript, or audit fields
   } finally {
     fixture.close();
   }
+});
+
+test("shares care recaps only while both consents are active and the link has view_summaries", async () => {
+  const fixture = await createDashboardServer();
+  const careSummary = {
+    recap: "Avery had a difficult night.",
+    moodAndConcerns: ["Avery said they had a nightmare."],
+    irisSuggestedNextSteps: ["Iris suggested having breakfast."],
+  };
+  try {
+    fixture.repositories.recordConsent({ id: "retention", personId: "person-a", kind: "summary_retention", status: "granted", source: "test" });
+    fixture.repositories.recordConsent({ id: "care", personId: "person-a", kind: "care_summary_sharing", status: "granted", source: "test" });
+    fixture.repositories.createCall({ id: "call-care", personId: "person-a", status: "completed" });
+    fixture.repositories.completeCall({
+      id: "call-care", status: "completed",
+      summaryJson: JSON.stringify({ recap: "Private memory.", facts: ["Avery gardens."], people: [], unresolvedTopics: [], recallAnchor: "your garden", careSummary }),
+    });
+    fixture.repositories.grantAccess({
+      id: "grant-summaries", personId: "person-a", trustedContactId: "contact-a",
+      scopes: ["view_summaries"], tokenHash: hash("summaries-token"), expiresAt: futureExpiry(),
+    });
+    fixture.repositories.grantAccess({
+      id: "grant-events", personId: "person-a", trustedContactId: "contact-a",
+      scopes: ["view_events"], tokenHash: hash("events-token"), expiresAt: futureExpiry(),
+    });
+    const [adminResponse, trustedResponse, unscopedResponse] = await Promise.all([
+      fetch(`${fixture.url}/api/dashboard/people/person-a/overview`, { headers: { Authorization: `Bearer ${adminToken}` } }),
+      fetch(`${fixture.url}/api/dashboard/people/person-a/overview`, { headers: { Authorization: "Bearer summaries-token" } }),
+      fetch(`${fixture.url}/api/dashboard/people/person-a/overview`, { headers: { Authorization: "Bearer events-token" } }),
+    ]);
+    const admin = await adminResponse.json() as { calls: Array<{ careSummary: unknown }> };
+    const trusted = await trustedResponse.json() as { calls: Array<{ careSummary: unknown }>; consents: unknown };
+    const unscoped = await unscopedResponse.json() as { calls: unknown[] };
+    assert.deepEqual(admin.calls[0]?.careSummary, careSummary);
+    assert.deepEqual(trusted.calls[0]?.careSummary, careSummary);
+    assert.equal(trusted.consents, null);
+    assert.deepEqual(unscoped.calls, []);
+
+    fixture.repositories.recordCareSummarySharingConsent({ id: "care-revoked", personId: "person-a", status: "revoked", source: "test" });
+    const revoked = await fetch(`${fixture.url}/api/dashboard/people/person-a/overview`, { headers: { Authorization: "Bearer summaries-token" } });
+    const revokedBody = await revoked.json() as { calls: Array<{ careSummary: unknown }> };
+    assert.equal(revokedBody.calls[0]?.careSummary, null);
+    assert.equal(JSON.stringify(revokedBody).includes(careSummary.recap), false);
+  } finally { fixture.close(); }
 });
 
 test("projects generic Shield safety events to trusted contacts with view_events only", async () => {
@@ -406,6 +508,7 @@ test("limits a trusted contact link to its person and granted scopes", async () 
     assert.equal(permittedBody.person.id, "person-a");
     assert.equal(permittedBody.person.phoneE164, null);
     assert.deepEqual(permittedBody.calls.map((call) => call.id), ["call-a"]);
+    assert.equal((permittedBody.calls[0] as { careSummary?: unknown } | undefined)?.careSummary, null);
     assert.deepEqual(permittedBody.contacts, []);
     assert.deepEqual(permittedBody.events, []);
     assert.deepEqual(permittedBody.actions, []);

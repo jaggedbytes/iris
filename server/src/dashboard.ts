@@ -153,27 +153,46 @@ function timelineEvent(event: TimelineEvent) {
   return { id: event.id, type: event.type, payload, occurredAt: event.occurredAt };
 }
 
-function summaryRecap(summaryJson: string | null) {
+type SharedCareSummary = {
+  recap: string;
+  moodAndConcerns: string[];
+  irisSuggestedNextSteps: string[];
+};
+
+function stringArray(value: unknown, maxItems: number, maxLength: number) {
+  if (!Array.isArray(value) || value.length > maxItems) return null;
+  const values = value.map((item) => stringField(item, maxLength));
+  return values.every((item): item is string => !!item) ? values : null;
+}
+
+function sharedCareSummary(summaryJson: string | null): SharedCareSummary | null {
   if (!summaryJson) return null;
   try {
     const summary = JSON.parse(summaryJson) as unknown;
     if (!summary || typeof summary !== "object" || Array.isArray(summary)) return null;
-    const recap = stringField((summary as Record<string, unknown>).recap, 500)?.trim();
-    return recap || null;
+    const care = (summary as Record<string, unknown>).careSummary;
+    if (!care || typeof care !== "object" || Array.isArray(care)) return null;
+    const fields = care as Record<string, unknown>;
+    const recap = stringField(fields.recap, 500);
+    const moodAndConcerns = stringArray(fields.moodAndConcerns, 8, 280);
+    const irisSuggestedNextSteps = stringArray(fields.irisSuggestedNextSteps, 8, 280);
+    return recap && moodAndConcerns && irisSuggestedNextSteps
+      ? { recap, moodAndConcerns, irisSuggestedNextSteps }
+      : null;
   } catch {
     return null;
   }
 }
 
-function callOverview(call: CallRecord) {
+function callOverview(call: CallRecord, includeSharedCareSummary: boolean) {
   return {
     id: call.id,
     status: call.status,
     startedAt: call.startedAt,
-    // summaryJson contains memory-extraction fields which are intentionally
-    // unavailable to dashboard consumers. The recap is the sole call-summary
-    // field exposed here; recall anchors never cross this boundary.
-    summaryRecap: summaryRecap(call.summaryJson),
+    // Narrow summary fields are private Iris memory. The care section is
+    // separately consented and explicitly projected rather than spreading the
+    // storage format into the browser contract.
+    careSummary: includeSharedCareSummary ? sharedCareSummary(call.summaryJson) : null,
     summaryState: call.summaryState,
   };
 }
@@ -268,6 +287,8 @@ export function createDashboardRouter(context: DashboardContext) {
     const activeCall = hasScope(principal, "request_check_in")
       ? context.repositories.findActiveCall(personId)
       : null;
+    const careSummarySharingActive = context.repositories.hasActiveConsent(personId, "summary_retention")
+      && context.repositories.hasActiveConsent(personId, "care_summary_sharing");
 
     response.json({
       // The phone number is operator-only PII; trusted contacts receive a
@@ -287,7 +308,7 @@ export function createDashboardRouter(context: DashboardContext) {
               phoneNumberStatus: "private",
             },
       calls: hasScope(principal, "view_summaries")
-        ? context.repositories.listCalls(personId).map(callOverview)
+        ? context.repositories.listCalls(personId).map((call) => callOverview(call, careSummarySharingActive))
         : [],
       activeCall: activeCall
         ? { id: activeCall.id, status: activeCall.status, startedAt: activeCall.startedAt }
@@ -324,8 +345,71 @@ export function createDashboardRouter(context: DashboardContext) {
               dispatchState: context.repositories.getActionDispatch(action.id)?.state ?? null,
             }))
           : [],
+      consents:
+        principal.role === "admin"
+          ? {
+              summaryRetention: context.repositories.hasActiveConsent(personId, "summary_retention"),
+              careSummarySharing: context.repositories.hasActiveConsent(personId, "care_summary_sharing"),
+            }
+          : null,
       permissions:
         principal.role === "admin" ? ALL_SCOPES : principal.scopes,
+    });
+  });
+
+  router.post("/people/:personId/consents/:kind", (request, response) => {
+    const principal = requirePrincipal(request, response, context);
+    if (!principal) return;
+    if (principal.role !== "admin") {
+      response.status(403).json({ error: "Admin access is required." });
+      return;
+    }
+    const person = context.repositories.getPerson(request.params.personId);
+    if (!person) {
+      response.status(404).json({ error: "Person not found." });
+      return;
+    }
+    const kind = request.params.kind;
+    if (kind !== "summary_retention" && kind !== "care_summary_sharing") {
+      response.status(400).json({ error: "Unsupported consent kind." });
+      return;
+    }
+    const status = request.body?.status;
+    if (status !== "granted" && status !== "revoked") {
+      response.status(400).json({ error: "Consent status must be granted or revoked." });
+      return;
+    }
+    if (request.body?.operatorAttested !== true) {
+      response.status(400).json({ error: "Operator attestation is required." });
+      return;
+    }
+
+    if (
+      kind === "summary_retention"
+      && status === "revoked"
+      && context.repositories.hasActiveConsent(person.id, "care_summary_sharing")
+    ) {
+      response.status(409).json({ error: "Revoke care sharing before revoking summary retention." });
+      return;
+    }
+
+    if (kind === "care_summary_sharing") {
+      const recorded = context.repositories.recordCareSummarySharingConsent({
+        id: randomUUID(), personId: person.id, status, source: "operator_attestation", operatorAttestationAuditId: randomUUID(),
+      });
+      if (!recorded) {
+        response.status(409).json({ error: "Summary retention must be active before care sharing can be granted." });
+        return;
+      }
+    } else {
+      context.repositories.recordConsent({
+        id: randomUUID(), personId: person.id, kind, status, source: "operator_attestation", operatorAttestationAuditId: randomUUID(),
+      });
+    }
+
+    response.status(201).json({
+      summaryRetention: context.repositories.hasActiveConsent(person.id, "summary_retention"),
+      careSummarySharing: context.repositories.hasActiveConsent(person.id, "care_summary_sharing"),
     });
   });
 

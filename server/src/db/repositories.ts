@@ -595,23 +595,109 @@ export function createRepositories(database: IrisDatabase) {
       kind: ConsentKind;
       status: ConsentStatus;
       source: string;
+      operatorAttestationAuditId?: string;
     }) {
-      const timestamp = now();
-      database
-        .prepare(
-          `INSERT INTO consents
-             (id, person_id, kind, status, source, granted_at, revoked_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          input.id,
-          input.personId,
-          input.kind,
-          input.status,
-          input.source,
-          timestamp,
-          input.status === "revoked" ? timestamp : null,
-        );
+      const record = () => {
+        const timestamp = now();
+        database
+          .prepare(
+            `INSERT INTO consents
+               (id, person_id, kind, status, source, granted_at, revoked_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            input.id,
+            input.personId,
+            input.kind,
+            input.status,
+            input.source,
+            timestamp,
+            input.status === "revoked" ? timestamp : null,
+          );
+        if (input.operatorAttestationAuditId) {
+          database.prepare(
+            `INSERT INTO audit_events
+               (id, person_id, actor_type, actor_id, action, target_type, target_id, metadata_json, occurred_at)
+             VALUES (?, ?, 'operator', NULL, 'person.consent_attested', 'person', ?, ?, ?)`,
+          ).run(
+            input.operatorAttestationAuditId,
+            input.personId,
+            input.personId,
+            JSON.stringify({ kind: input.kind, status: input.status }),
+            timestamp,
+          );
+        }
+      };
+      if (input.operatorAttestationAuditId) database.transaction(record)();
+      else record();
+    },
+
+    /**
+     * Care-summary sharing is a second, stricter consent. Revocation removes
+     * only the dashboard-only field; narrow memory remains under its separate
+     * summary-retention consent.
+     */
+    recordCareSummarySharingConsent(input: {
+      id: string;
+      personId: string;
+      status: ConsentStatus;
+      source: string;
+      operatorAttestationAuditId?: string;
+    }) {
+      if (input.status === "granted" && !this.hasActiveConsent(input.personId, "summary_retention")) {
+        return false;
+      }
+
+      database.transaction(() => {
+        const timestamp = now();
+        database
+          .prepare(
+            `INSERT INTO consents
+               (id, person_id, kind, status, source, granted_at, revoked_at)
+             VALUES (?, ?, 'care_summary_sharing', ?, ?, ?, ?)`,
+          )
+          .run(
+            input.id,
+            input.personId,
+            input.status,
+            input.source,
+            timestamp,
+            input.status === "revoked" ? timestamp : null,
+          );
+
+        if (input.operatorAttestationAuditId) {
+          database.prepare(
+            `INSERT INTO audit_events
+               (id, person_id, actor_type, actor_id, action, target_type, target_id, metadata_json, occurred_at)
+             VALUES (?, ?, 'operator', NULL, 'person.consent_attested', 'person', ?, ?, ?)`,
+          ).run(
+            input.operatorAttestationAuditId,
+            input.personId,
+            input.personId,
+            JSON.stringify({ kind: "care_summary_sharing", status: input.status }),
+            timestamp,
+          );
+        }
+
+        if (input.status !== "revoked") return;
+
+        const calls = database.prepare(
+          "SELECT id, summary_json FROM calls WHERE person_id = ? AND summary_json IS NOT NULL",
+        ).all(input.personId) as Array<{ id: string; summary_json: string }>;
+        const update = database.prepare("UPDATE calls SET summary_json = ? WHERE id = ?");
+        for (const call of calls) {
+          try {
+            const parsed = JSON.parse(call.summary_json) as unknown;
+            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || !("careSummary" in parsed)) continue;
+            const { careSummary: _careSummary, ...privateSummary } = parsed as Record<string, unknown>;
+            update.run(JSON.stringify(privateSummary), call.id);
+          } catch {
+            // Malformed historical JSON cannot contain a safely addressable
+            // top-level field, so leave it unchanged rather than corrupt it.
+          }
+        }
+      })();
+      return true;
     },
 
     hasActiveConsent(personId: string, kind: ConsentKind) {
