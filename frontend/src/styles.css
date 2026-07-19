@@ -210,7 +210,8 @@
     @apply p-2;
   }
 
-  .remove-person-button {
+  .remove-person-button,
+  .remove-contact-button {
     @apply justify-self-end text-[0.78rem] font-bold text-attention underline underline-offset-2 disabled:cursor-not-allowed disabled:opacity-50;
   }
 

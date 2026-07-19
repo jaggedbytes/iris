@@ -12,6 +12,7 @@ import type { DashboardOverview, DashboardPersonList, DashboardPrincipal } from 
 const SESSION_TOKEN_KEY = "iris-dashboard-access-token";
 const DASHBOARD_POLL_INTERVAL_MS = 2_500;
 const ADD_PERSON_OPTION = "__add_person__";
+const ADD_CONTACT_OPTION = "__add_contact__";
 let capturedOptInToken: string | null | undefined;
 
 function readMagicLinkToken() {
@@ -55,6 +56,10 @@ function phoneNumberLabel(person: DashboardOverview["person"]) {
   if (person.phoneNumberStatus === "private") return "Phone number is private in this view.";
   if (person.phoneNumberStatus === "not_configured") return "Phone number not configured";
   return person.phoneE164 ?? "Phone number unavailable";
+}
+
+function contactPhoneLabel(phoneE164: string | null) {
+  return phoneE164 ?? "Phone number not configured";
 }
 
 function timelineCopy(event: DashboardOverview["events"][number], personName: string) {
@@ -136,11 +141,19 @@ function DashboardApp() {
   const [newPersonFormError, setNewPersonFormError] = useState<string | null>(null);
   const [newPersonErrorField, setNewPersonErrorField] = useState<"name" | "phone">("name");
   const [isCreatingContact, setIsCreatingContact] = useState(false);
+  const [isAddingContact, setIsAddingContact] = useState(false);
+  const [newContactFormError, setNewContactFormError] = useState<string | null>(null);
+  const [newContactErrorField, setNewContactErrorField] = useState<"name" | "relationship" | "phone">("name");
   const [isRemovingPerson, setIsRemovingPerson] = useState(false);
+  const [isRemovingContact, setIsRemovingContact] = useState(false);
   const [isEditingPhone, setIsEditingPhone] = useState(false);
   const [phoneDraft, setPhoneDraft] = useState("");
   const [isSavingPhone, setIsSavingPhone] = useState(false);
   const [phoneFormError, setPhoneFormError] = useState<string | null>(null);
+  const [isEditingContactPhone, setIsEditingContactPhone] = useState(false);
+  const [contactPhoneDraft, setContactPhoneDraft] = useState("");
+  const [isSavingContactPhone, setIsSavingContactPhone] = useState(false);
+  const [contactPhoneFormError, setContactPhoneFormError] = useState<string | null>(null);
   const [selectedTrustedContactId, setSelectedTrustedContactId] = useState("");
   const [attestedContactIds, setAttestedContactIds] = useState<Record<string, boolean>>({});
   const [contactAttestationErrorId, setContactAttestationErrorId] = useState<string | null>(null);
@@ -154,6 +167,7 @@ function DashboardApp() {
   const [refreshVersion, setRefreshVersion] = useState(0);
   const magicLinkRequestId = useRef(0);
   const overviewRequestId = useRef(0);
+  const pendingTrustedContactId = useRef<string | null>(null);
   // Skip interval/visibility refreshes while an overview load is still running so
   // a slow response is not cancelled every 2.5s into an endless backlog.
   const overviewLoadInFlight = useRef(false);
@@ -186,10 +200,23 @@ function DashboardApp() {
 
   useEffect(() => {
     const contacts = overview?.contacts ?? [];
-    setSelectedTrustedContactId((current) => (
-      contacts.some((contact) => contact.id === current) ? current : (contacts[0]?.id ?? "")
-    ));
-  }, [personId, trustedContactIds]);
+    if (contacts.length === 0) {
+      setSelectedTrustedContactId("");
+      setIsAddingContact(principal?.role === "admin");
+      return;
+    }
+    const pendingId = pendingTrustedContactId.current;
+    if (pendingId) {
+      if (!contacts.some((contact) => contact.id === pendingId)) return;
+      pendingTrustedContactId.current = null;
+      setSelectedTrustedContactId(pendingId);
+      setIsAddingContact(false);
+      return;
+    }
+    if (contacts.some((contact) => contact.id === selectedTrustedContactId)) return;
+    setSelectedTrustedContactId(contacts[0]!.id);
+    setIsAddingContact(false);
+  }, [personId, trustedContactIds, principal?.role, selectedTrustedContactId]);
 
   const saveConsents = async () => {
     if (!personId || !careConsents || !consentDirty) return;
@@ -457,9 +484,18 @@ function DashboardApp() {
     event.preventDefault();
     if (!personId) return;
     setIsCreatingContact(true);
+    setNewContactFormError(null);
     setError(null);
     try {
-      await dashboardJson(`/api/dashboard/people/${personId}/trusted-contacts`, token, {
+      const result = await dashboardJson<{
+        contact: {
+          id: string;
+          displayName: string;
+          relationship: string;
+          phoneE164: string | null;
+        };
+        smsOptInStatus: "not_opted_in";
+      }>(`/api/dashboard/people/${personId}/trusted-contacts`, token, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -471,11 +507,111 @@ function DashboardApp() {
       setContactName("");
       setContactRelationship("");
       setContactPhone("");
+      setNewContactFormError(null);
+      pendingTrustedContactId.current = result.contact.id;
+      setIsAddingContact(false);
+      setSelectedTrustedContactId(result.contact.id);
+      setOverview((current) => current
+        ? {
+            ...current,
+            contacts: [
+              ...current.contacts,
+              {
+                id: result.contact.id,
+                displayName: result.contact.displayName,
+                relationship: result.contact.relationship,
+                phoneE164: result.contact.phoneE164,
+                smsOptInStatus: result.smsOptInStatus,
+                optInLinkState: "none",
+                confirmationState: "not_requested",
+                smsOptInInvitation: null,
+                dashboardGrant: null,
+              },
+            ],
+          }
+        : current);
       setRefreshVersion((current) => current + 1);
     } catch (contactError) {
-      setError(contactError instanceof Error ? contactError.message : "Unable to draft the trusted contact.");
+      const message = contactError instanceof Error ? contactError.message : "Unable to draft the trusted contact.";
+      setNewContactErrorField(
+        /relationship/i.test(message) ? "relationship" : /name/i.test(message) ? "name" : "phone",
+      );
+      setNewContactFormError(message);
     } finally {
       setIsCreatingContact(false);
+    }
+  };
+
+  const saveContactPhone = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!personId || !selectedTrustedContact) return;
+    setIsSavingContactPhone(true);
+    setContactPhoneFormError(null);
+    setError(null);
+    try {
+      const result = await dashboardJson<{ contact: { phoneE164: string } }>(
+        `/api/dashboard/people/${personId}/trusted-contacts/${selectedTrustedContact.id}/phone`,
+        token,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phoneE164: contactPhoneDraft }),
+        },
+      );
+      setOverview((current) => current
+        ? {
+            ...current,
+            contacts: current.contacts.map((contact) => contact.id === selectedTrustedContact.id
+              ? { ...contact, phoneE164: result.contact.phoneE164 }
+              : contact),
+          }
+        : current);
+      setIsEditingContactPhone(false);
+    } catch (phoneError) {
+      setContactPhoneFormError(phoneError instanceof Error ? phoneError.message : "Unable to save the phone number.");
+    } finally {
+      setIsSavingContactPhone(false);
+    }
+  };
+
+  const removeSelectedContact = async () => {
+    if (!personId || !selectedTrustedContact) return;
+    if (!window.confirm(`Remove ${selectedTrustedContact.displayName}? This removes their dashboard links and SMS invitation state.`)) {
+      return;
+    }
+
+    setIsRemovingContact(true);
+    setError(null);
+    try {
+      await dashboardRequest(
+        `/api/dashboard/people/${personId}/trusted-contacts/${selectedTrustedContact.id}`,
+        token,
+        { method: "DELETE" },
+      ).then(async (response) => {
+        if (!response.ok) {
+          const body = (await response.json().catch(() => null)) as { error?: string } | null;
+          throw new DashboardError(body?.error ?? "Unable to remove this trusted contact.", response.status);
+        }
+      });
+      const removedId = selectedTrustedContact.id;
+      pendingTrustedContactId.current = null;
+      setMagicLink(null);
+      setOptInLink(null);
+      setOptInInvitation(null);
+      setIsEditingContactPhone(false);
+      setContactPhoneFormError(null);
+      setOverview((current) => {
+        if (!current) return current;
+        const contacts = current.contacts.filter((contact) => contact.id !== removedId);
+        return { ...current, contacts };
+      });
+      setSelectedTrustedContactId("");
+      setIsAddingContact(false);
+      setRefreshVersion((current) => current + 1);
+    } catch (removeError) {
+      setError(removeError instanceof Error ? removeError.message : "Unable to remove this trusted contact.");
+    } finally {
+      setIsRemovingContact(false);
     }
   };
 
@@ -689,6 +825,7 @@ function DashboardApp() {
                     }
                     setIsAddingPerson(false);
                     setNewPersonFormError(null);
+                    pendingTrustedContactId.current = null;
                     setSelectedPersonId(value);
                     setOptInLink(null);
                     setOptInInvitation(null);
@@ -914,32 +1051,93 @@ function DashboardApp() {
               <h2>People in the circle</h2>
               <p className="privacy-note">Add the people who can stay connected with {overview.person.displayName}. They can receive a dashboard link, request an Iris check-in, and choose whether to receive text messages.</p>
             </div>
-            {overview.contacts.length ? (
+            {principal?.role === "admin" || overview.contacts.length ? (
               <>
                 <div className="trusted-contact-picker">
                   <strong>Trusted contact</strong>
-                  <span>Choose who the dashboard and SMS actions below apply to.</span>
+                  <span>{isAddingContact ? "Fill in the form below, then save to add them to the care circle." : "Choose who the dashboard and SMS actions below apply to."}</span>
                   <label className="sr-only" htmlFor="trusted-contact-select">Trusted contact</label>
                   <select
                     id="trusted-contact-select"
-                    value={selectedTrustedContact?.id ?? ""}
+                    value={isAddingContact || overview.contacts.length === 0 ? ADD_CONTACT_OPTION : (selectedTrustedContact?.id ?? "")}
                     onChange={(event) => {
-                      setSelectedTrustedContactId(event.target.value);
+                      const value = event.target.value;
+                      if (value === ADD_CONTACT_OPTION) {
+                        setIsAddingContact(true);
+                        setMagicLink(null);
+                        setOptInLink(null);
+                        setOptInInvitation(null);
+                        setContactAttestationErrorId(null);
+                        setIsEditingContactPhone(false);
+                        setContactPhoneFormError(null);
+                        setNewContactFormError(null);
+                        return;
+                      }
+                      setIsAddingContact(false);
+                      setSelectedTrustedContactId(value);
                       setMagicLink(null);
                       setOptInLink(null);
                       setOptInInvitation(null);
                       setContactAttestationErrorId(null);
+                      setIsEditingContactPhone(false);
+                      setContactPhoneFormError(null);
                     }}
                   >
                     {overview.contacts.map((contact) => <option key={contact.id} value={contact.id}>{contact.displayName}</option>)}
+                    {principal?.role === "admin" && <option value={ADD_CONTACT_OPTION}>Add a trusted contact…</option>}
                   </select>
+                  {!isAddingContact && selectedTrustedContact && principal?.role === "admin" && (
+                    <button
+                      className="remove-contact-button"
+                      type="button"
+                      disabled={isRemovingContact}
+                      onClick={() => void removeSelectedContact()}
+                    >
+                      {isRemovingContact ? "Removing…" : "Remove contact"}
+                    </button>
+                  )}
                 </div>
+                {!isAddingContact && selectedTrustedContact && (
                 <ul className="contact-list">
-                {selectedTrustedContact && (
                   <li key={selectedTrustedContact.id}>
                     <div className="contact-details">
                       <strong>{selectedTrustedContact.displayName}</strong>
                       <span className="contact-relationship">{selectedTrustedContact.relationship}</span>
+                      <div className="person-phone-row">
+                        <p className="person-phone">{contactPhoneLabel(selectedTrustedContact.phoneE164)}</p>
+                        {principal?.role === "admin" && (
+                          <button
+                            className="person-phone-edit"
+                            type="button"
+                            onClick={() => {
+                              setContactPhoneDraft(selectedTrustedContact.phoneE164 ?? "");
+                              setContactPhoneFormError(null);
+                              setIsEditingContactPhone(true);
+                            }}
+                          >
+                            Edit
+                          </button>
+                        )}
+                      </div>
+                      {principal?.role === "admin" && isEditingContactPhone && (
+                        <form className="phone-editor" onSubmit={saveContactPhone}>
+                          <label className="form-field">
+                            Phone number
+                            <input required placeholder="E.164, e.g. +15551234567" value={contactPhoneDraft} onChange={(event) => {
+                              setContactPhoneDraft(event.target.value);
+                              setContactPhoneFormError(null);
+                            }} />
+                            {contactPhoneFormError && <p className="form-validation-error" role="alert">{contactPhoneFormError}</p>}
+                          </label>
+                          <div className="phone-editor-actions">
+                            <button className="secondary-button" type="submit" disabled={isSavingContactPhone}>{isSavingContactPhone ? "Saving…" : "Save"}</button>
+                            <button className="secondary-button" type="button" disabled={isSavingContactPhone} onClick={() => {
+                              setContactPhoneFormError(null);
+                              setIsEditingContactPhone(false);
+                            }}>Cancel</button>
+                          </div>
+                        </form>
+                      )}
                       <ul className="contact-status-list">
                         <li>
                           <span>SMS</span>
@@ -1010,13 +1208,13 @@ function DashboardApp() {
                       </div>
                     )}
                   </li>
-                )}
                 </ul>
+                )}
               </>
             ) : (
               <p className="empty-state">Contact access is not available through this link.</p>
             )}
-            {(selectedTrustedContact?.dashboardGrant || magicLink) && (
+            {!isAddingContact && (selectedTrustedContact?.dashboardGrant || magicLink) && (
               <div className="compact-form magic-link" aria-live="polite">
                 <strong>Dashboard link</strong>
                 {magicLink ? (
@@ -1051,7 +1249,7 @@ function DashboardApp() {
                 )}
               </div>
             )}
-            {(optInLink || selectedTrustedContact?.smsOptInInvitation) && (
+            {!isAddingContact && (optInLink || selectedTrustedContact?.smsOptInInvitation) && (
               <div className="compact-form magic-link" aria-live="polite">
                 <label className="form-field" htmlFor="sms-opt-in-link">SMS opt-in link</label>
                 {optInLink ? (
@@ -1075,20 +1273,32 @@ function DashboardApp() {
                 )}
               </div>
             )}
-            {principal?.role === "admin" && (
+            {principal?.role === "admin" && isAddingContact && (
               <form className="compact-form" onSubmit={createTrustedContact}>
                 <strong>Add a trusted contact</strong>
                 <label className="form-field">
                   Name
-                  <input required placeholder="e.g. Evelyn Carter" value={contactName} onChange={(event) => setContactName(event.target.value)} />
+                  <input required placeholder="e.g. Evelyn Carter" value={contactName} onChange={(event) => {
+                    setContactName(event.target.value);
+                    if (newContactErrorField === "name") setNewContactFormError(null);
+                  }} />
+                  {newContactFormError && newContactErrorField === "name" && <p className="form-validation-error" role="alert">{newContactFormError}</p>}
                 </label>
                 <label className="form-field">
                   Relationship
-                  <input required placeholder="e.g. Neighbor" value={contactRelationship} onChange={(event) => setContactRelationship(event.target.value)} />
+                  <input required placeholder="e.g. Neighbor" value={contactRelationship} onChange={(event) => {
+                    setContactRelationship(event.target.value);
+                    if (newContactErrorField === "relationship") setNewContactFormError(null);
+                  }} />
+                  {newContactFormError && newContactErrorField === "relationship" && <p className="form-validation-error" role="alert">{newContactFormError}</p>}
                 </label>
                 <label className="form-field">
-                  Mobile number
-                  <input required placeholder="E.164, e.g. +15551234567" value={contactPhone} onChange={(event) => setContactPhone(event.target.value)} />
+                  Phone number
+                  <input required placeholder="E.164, e.g. +15551234567" value={contactPhone} onChange={(event) => {
+                    setContactPhone(event.target.value);
+                    if (newContactErrorField === "phone") setNewContactFormError(null);
+                  }} />
+                  {newContactFormError && newContactErrorField === "phone" && <p className="form-validation-error" role="alert">{newContactFormError}</p>}
                 </label>
                 <button className="secondary-button create-person-button" type="submit" disabled={isCreatingContact}>{isCreatingContact ? "Saving…" : "Add contact"}</button>
               </form>

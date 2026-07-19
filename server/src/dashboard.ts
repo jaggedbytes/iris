@@ -51,6 +51,15 @@ function isPeoplePhoneUniqueViolation(error: unknown) {
   );
 }
 
+function isTrustedContactPhoneUniqueViolation(error: unknown) {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    error.code === "SQLITE_CONSTRAINT_UNIQUE" &&
+    error.message.includes("trusted_contacts.phone_e164")
+  );
+}
+
 function bearerToken(request: Request) {
   const authorization = request.header("authorization");
   if (!authorization?.startsWith("Bearer ")) return null;
@@ -544,18 +553,85 @@ export function createDashboardRouter(context: DashboardContext) {
     const displayName = stringField(request.body?.displayName);
     const relationship = stringField(request.body?.relationship);
     const phoneE164 = e164Field(request.body?.phoneE164);
-    if (!displayName || !relationship || !phoneE164) {
-      response.status(400).json({ error: "Display name, relationship, and an E.164 mobile number are required." });
+    if (!displayName) {
+      response.status(400).json({ error: "Enter a name to add this person." });
       return;
     }
-    const contact = context.repositories.createTrustedContact({
-      id: randomUUID(),
-      personId: person.id,
-      displayName,
-      relationship,
-      phoneE164,
-    });
-    response.status(201).json({ contact, smsOptInStatus: "not_opted_in" });
+    if (!relationship) {
+      response.status(400).json({ error: "Enter a relationship for this trusted contact." });
+      return;
+    }
+    if (!phoneE164) {
+      response.status(400).json({ error: "Use a E.164 format phone number (e.g. +15551234567)." });
+      return;
+    }
+    try {
+      const contact = context.repositories.createTrustedContact({
+        id: randomUUID(),
+        personId: person.id,
+        displayName,
+        relationship,
+        phoneE164,
+      });
+      response.status(201).json({ contact, smsOptInStatus: "not_opted_in" });
+    } catch (error) {
+      if (isTrustedContactPhoneUniqueViolation(error)) {
+        response.status(409).json({ error: "This phone number is already used by a trusted contact." });
+        return;
+      }
+      throw error;
+    }
+  });
+
+  router.patch("/people/:personId/trusted-contacts/:trustedContactId/phone", (request, response) => {
+    const principal = requirePrincipal(request, response, context);
+    if (!principal) return;
+    if (principal.role !== "admin") {
+      response.status(403).json({ error: "Admin access is required." });
+      return;
+    }
+    const person = context.repositories.getPerson(request.params.personId);
+    const contact = context.repositories.getTrustedContact(request.params.trustedContactId);
+    if (!person || !contact || contact.personId !== person.id) {
+      response.status(404).json({ error: "Trusted contact not found." });
+      return;
+    }
+    const phoneE164 = e164Field(request.body?.phoneE164);
+    if (!phoneE164) {
+      response.status(400).json({ error: "Use a E.164 format phone number (e.g. +15551234567)." });
+      return;
+    }
+    try {
+      const updated = context.repositories.updateTrustedContactPhone(contact.id, phoneE164);
+      if (!updated) {
+        response.status(404).json({ error: "Trusted contact not found." });
+        return;
+      }
+      response.json({ contact: updated });
+    } catch (error) {
+      if (isTrustedContactPhoneUniqueViolation(error)) {
+        response.status(409).json({ error: "This phone number is already used by a trusted contact." });
+        return;
+      }
+      throw error;
+    }
+  });
+
+  router.delete("/people/:personId/trusted-contacts/:trustedContactId", (request, response) => {
+    const principal = requirePrincipal(request, response, context);
+    if (!principal) return;
+    if (principal.role !== "admin") {
+      response.status(403).json({ error: "Admin access is required." });
+      return;
+    }
+    const person = context.repositories.getPerson(request.params.personId);
+    const contact = context.repositories.getTrustedContact(request.params.trustedContactId);
+    if (!person || !contact || contact.personId !== person.id) {
+      response.status(404).json({ error: "Trusted contact not found." });
+      return;
+    }
+    context.repositories.deleteTrustedContact(contact.id);
+    response.status(204).end();
   });
 
   router.post("/people/:personId/trusted-contacts/:trustedContactId/opt-in-invitations", (request, response) => {

@@ -202,6 +202,36 @@ test("allows an admin to add or correct a person's phone number", async () => {
   }
 });
 
+test("keeps trusted-contact phone numbers unique and reports conflicts", async () => {
+  const fixture = await createDashboardServer();
+  try {
+    const headers = { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" };
+    const created = await fetch(`${fixture.url}/api/dashboard/people/person-b/trusted-contacts`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ displayName: "Casey", relationship: "friend", phoneE164: "+15550008888" }),
+    });
+    assert.equal(created.status, 201);
+
+    const duplicate = await fetch(`${fixture.url}/api/dashboard/people/person-a/trusted-contacts`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ displayName: "Morgan", relationship: "neighbor", phoneE164: "+15550008888" }),
+    });
+    assert.equal(duplicate.status, 409);
+    assert.match(((await duplicate.json()) as { error: string }).error, /already used by a trusted contact/i);
+
+    const duplicateEdit = await fetch(`${fixture.url}/api/dashboard/people/person-a/trusted-contacts/contact-a/phone`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ phoneE164: "+15550008888" }),
+    });
+    assert.equal(duplicateEdit.status, 409);
+  } finally {
+    fixture.close();
+  }
+});
+
 test("limits consent attestation to admins and requires retention before care sharing", async () => {
   const fixture = await createDashboardServer();
   try {
@@ -287,6 +317,17 @@ test("limits enrollment drafting and opt-in invitations to operators", async () 
       body: JSON.stringify({ displayName: "Lee", relationship: "friend", phoneE164: "5550005555" }),
     });
     assert.equal(badContact.status, 400);
+    const badContactBody = (await badContact.json()) as { error: string };
+    assert.match(badContactBody.error, /E\.164/i);
+
+    const missingName = await fetch(`${fixture.url}/api/dashboard/people/${person.person.id}/trusted-contacts`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ displayName: " ", relationship: "friend", phoneE164: "+15550005555" }),
+    });
+    assert.equal(missingName.status, 400);
+    const missingNameBody = (await missingName.json()) as { error: string };
+    assert.match(missingNameBody.error, /enter a name/i);
 
     const createdContact = await fetch(`${fixture.url}/api/dashboard/people/${person.person.id}/trusted-contacts`, {
       method: "POST",
@@ -294,8 +335,31 @@ test("limits enrollment drafting and opt-in invitations to operators", async () 
       body: JSON.stringify({ displayName: "Lee", relationship: "friend", phoneE164: "+15550005555" }),
     });
     assert.equal(createdContact.status, 201);
-    const contact = (await createdContact.json()) as { contact: { id: string }; smsOptInStatus: string };
-    assert.equal(contact.smsOptInStatus, "not_opted_in");
+    const firstContact = (await createdContact.json()) as { contact: { id: string }; smsOptInStatus: string };
+    assert.equal(firstContact.smsOptInStatus, "not_opted_in");
+
+    const correctedPhone = await fetch(`${fixture.url}/api/dashboard/people/${person.person.id}/trusted-contacts/${firstContact.contact.id}/phone`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ phoneE164: "+15550006666" }),
+    });
+    assert.equal(correctedPhone.status, 200);
+    assert.equal(fixture.repositories.getTrustedContact(firstContact.contact.id)?.phoneE164, "+15550006666");
+
+    const removedContact = await fetch(`${fixture.url}/api/dashboard/people/${person.person.id}/trusted-contacts/${firstContact.contact.id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    assert.equal(removedContact.status, 204);
+    assert.equal(fixture.repositories.getTrustedContact(firstContact.contact.id), null);
+
+    const recreatedContact = await fetch(`${fixture.url}/api/dashboard/people/${person.person.id}/trusted-contacts`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ displayName: "Lee", relationship: "friend", phoneE164: "+15550005555" }),
+    });
+    assert.equal(recreatedContact.status, 201);
+    const contact = (await recreatedContact.json()) as { contact: { id: string }; smsOptInStatus: string };
 
     const missingAttestation = await fetch(`${fixture.url}/api/dashboard/people/${person.person.id}/trusted-contacts/${contact.contact.id}/opt-in-invitations`, {
       method: "POST",

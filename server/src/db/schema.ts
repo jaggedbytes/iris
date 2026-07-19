@@ -287,4 +287,12 @@ export const migrations = [
       CREATE INDEX idx_sms_opt_in_invitations_contact ON sms_opt_in_invitations(trusted_contact_id, created_at DESC);
     `,
   },
+  {
+    id: "009_trusted_contact_phone_unique",
+    sql: `
+      CREATE UNIQUE INDEX idx_trusted_contacts_phone_e164_unique
+        ON trusted_contacts(phone_e164)
+        WHERE phone_e164 IS NOT NULL;
+    `,
+  },
 ] as const;

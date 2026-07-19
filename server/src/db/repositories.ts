@@ -262,6 +262,17 @@ export function createRepositories(database: IrisDatabase) {
       return toContact(row);
     },
 
+    updateTrustedContactPhone(id: string, phoneE164: string) {
+      const updated = database.prepare(
+        "UPDATE trusted_contacts SET phone_e164 = ? WHERE id = ?",
+      ).run(phoneE164, id);
+      return updated.changes === 1 ? this.getTrustedContact(id) : null;
+    },
+
+    deleteTrustedContact(id: string) {
+      return database.prepare("DELETE FROM trusted_contacts WHERE id = ?").run(id).changes === 1;
+    },
+
     getTrustedContact(id: string) {
       const row = database
         .prepare("SELECT * FROM trusted_contacts WHERE id = ?")
