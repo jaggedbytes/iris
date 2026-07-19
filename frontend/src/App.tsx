@@ -495,26 +495,38 @@ function DashboardApp() {
         <div className="dashboard-grid">
           {principal?.role === "admin" && (
             <section className="overview-card enrollment-card">
-              <p className="card-kicker">Enrollment</p>
-              <h2>People and invitations</h2>
-              <p className="privacy-note">Add the older adult Iris calls. Then open their profile to invite trusted contacts and create SMS opt-in links.</p>
-              <label htmlFor="person-select">Person</label>
-              <select
-                id="person-select"
-                value={personId}
-                onChange={(event) => {
-                  setSelectedPersonId(event.target.value);
-                  setOptInLink(null);
-                  setMagicLink(null);
-                }}
-              >
-                {adminPeople.map((person) => <option key={person.id} value={person.id}>{person.displayName}</option>)}
-              </select>
+              <div className="enrollment-header">
+                <p className="card-kicker">Enrollment</p>
+                <h2>People and invitations</h2>
+                <p className="privacy-note">Add the person Iris will call. Then invite trusted contacts and create their SMS opt-in links.</p>
+              </div>
+              <div className="person-picker">
+                <strong>Person</strong>
+                <span>Select who will receive calls, invitations, and other actions.</span>
+                <label className="sr-only" htmlFor="person-select">Person</label>
+                <select
+                  id="person-select"
+                  value={personId}
+                  onChange={(event) => {
+                    setSelectedPersonId(event.target.value);
+                    setOptInLink(null);
+                    setMagicLink(null);
+                  }}
+                >
+                  {adminPeople.map((person) => <option key={person.id} value={person.id}>{person.displayName}</option>)}
+                </select>
+              </div>
               <form className="compact-form" onSubmit={createPerson}>
                 <strong>Add a person</strong>
-                <input required placeholder="Display name" value={newPersonName} onChange={(event) => setNewPersonName(event.target.value)} />
-                <input placeholder="Phone in E.164 (optional)" value={newPersonPhone} onChange={(event) => setNewPersonPhone(event.target.value)} />
-                <button className="secondary-button" type="submit" disabled={isCreatingPerson}>
+                <label className="form-field">
+                  Name
+                  <input required placeholder="e.g. Avery Morgan" value={newPersonName} onChange={(event) => setNewPersonName(event.target.value)} />
+                </label>
+                <label className="form-field">
+                  Phone number <span>(optional)</span>
+                  <input placeholder="E.164, e.g. +15551234567" value={newPersonPhone} onChange={(event) => setNewPersonPhone(event.target.value)} />
+                </label>
+                <button className="secondary-button create-person-button" type="submit" disabled={isCreatingPerson}>
                   {isCreatingPerson ? "Adding…" : "Add person"}
                 </button>
               </form>
