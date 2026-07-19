@@ -172,6 +172,36 @@ test("allows an admin to remove a selected person while preserving one enrollmen
   }
 });
 
+test("allows an admin to add or correct a person's phone number", async () => {
+  const fixture = await createDashboardServer();
+  try {
+    const added = await fetch(`${fixture.url}/api/dashboard/people/person-b/phone`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ phoneE164: "+15550008888" }),
+    });
+    assert.equal(added.status, 200);
+    assert.equal(fixture.repositories.getPerson("person-b")?.phoneE164, "+15550008888");
+
+    const corrected = await fetch(`${fixture.url}/api/dashboard/people/person-b/phone`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ phoneE164: "+15550007777" }),
+    });
+    assert.equal(corrected.status, 200);
+    assert.equal(fixture.repositories.getPerson("person-b")?.phoneE164, "+15550007777");
+
+    const duplicate = await fetch(`${fixture.url}/api/dashboard/people/person-b/phone`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ phoneE164: "+15550009999" }),
+    });
+    assert.equal(duplicate.status, 409);
+  } finally {
+    fixture.close();
+  }
+});
+
 test("limits consent attestation to admins and requires retention before care sharing", async () => {
   const fixture = await createDashboardServer();
   try {

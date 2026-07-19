@@ -133,6 +133,9 @@ function DashboardApp() {
   const [isCreatingPerson, setIsCreatingPerson] = useState(false);
   const [isCreatingContact, setIsCreatingContact] = useState(false);
   const [isRemovingPerson, setIsRemovingPerson] = useState(false);
+  const [isEditingPhone, setIsEditingPhone] = useState(false);
+  const [phoneDraft, setPhoneDraft] = useState("");
+  const [isSavingPhone, setIsSavingPhone] = useState(false);
   const [selectedTrustedContactId, setSelectedTrustedContactId] = useState("");
   const [attestedContactIds, setAttestedContactIds] = useState<Record<string, boolean>>({});
   const [contactAttestationErrorId, setContactAttestationErrorId] = useState<string | null>(null);
@@ -476,6 +479,38 @@ function DashboardApp() {
     }
   };
 
+  const savePersonPhone = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!personId) return;
+    setIsSavingPhone(true);
+    setError(null);
+    try {
+      const result = await dashboardJson<{ person: { phoneE164: string } }>(
+        `/api/dashboard/people/${personId}/phone`,
+        token,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phoneE164: phoneDraft }),
+        },
+      );
+      setOverview((current) => current
+        ? {
+            ...current,
+            person: { ...current.person, phoneE164: result.person.phoneE164, phoneNumberStatus: "configured" },
+          }
+        : current);
+      setAdminPeople((people) => people.map((person) => person.id === personId
+        ? { ...person, phoneNumberStatus: "configured" }
+        : person));
+      setIsEditingPhone(false);
+    } catch (phoneError) {
+      setError(phoneError instanceof Error ? phoneError.message : "Unable to save the phone number.");
+    } finally {
+      setIsSavingPhone(false);
+    }
+  };
+
   const createOptInLink = async (trustedContactId: string) => {
     if (!personId) return;
     setOptInLink(null);
@@ -643,7 +678,33 @@ function DashboardApp() {
             <div className="card-header">
               <p className="card-kicker">Person</p>
               <h2>{overview.person.displayName}</h2>
-              <p className="person-phone">{phoneNumberLabel(overview.person)}</p>
+              <div className="person-phone-row">
+                <p className="person-phone">{phoneNumberLabel(overview.person)}</p>
+                {principal?.role === "admin" && (
+                  <button
+                    className="person-phone-edit"
+                    type="button"
+                    onClick={() => {
+                      setPhoneDraft(overview.person.phoneE164 ?? "");
+                      setIsEditingPhone(true);
+                    }}
+                  >
+                    Edit
+                  </button>
+                )}
+              </div>
+              {principal?.role === "admin" && isEditingPhone && (
+                <form className="phone-editor" onSubmit={savePersonPhone}>
+                  <label className="form-field">
+                    Phone number
+                    <input required placeholder="E.164, e.g. +15551234567" value={phoneDraft} onChange={(event) => setPhoneDraft(event.target.value)} />
+                  </label>
+                  <div className="phone-editor-actions">
+                    <button className="secondary-button" type="submit" disabled={isSavingPhone}>{isSavingPhone ? "Saving…" : "Save"}</button>
+                    <button className="secondary-button" type="button" disabled={isSavingPhone} onClick={() => setIsEditingPhone(false)}>Cancel</button>
+                  </div>
+                </form>
+              )}
               <p className="privacy-note">Choose what Iris remembers and what your care circle can see. Iris never saves raw audio or full transcripts.</p>
             </div>
             {principal?.role === "admin" && careConsents && (

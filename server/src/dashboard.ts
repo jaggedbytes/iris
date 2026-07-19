@@ -272,6 +272,35 @@ export function createDashboardRouter(context: DashboardContext) {
     response.status(204).end();
   });
 
+  router.patch("/people/:personId/phone", (request, response) => {
+    const principal = requirePrincipal(request, response, context);
+    if (!principal) return;
+    if (principal.role !== "admin") {
+      response.status(403).json({ error: "Admin access is required." });
+      return;
+    }
+
+    const phoneE164 = e164Field(request.body?.phoneE164);
+    if (!phoneE164) {
+      response.status(400).json({ error: "An E.164 phone number is required." });
+      return;
+    }
+    try {
+      const person = context.repositories.updatePersonPhone(request.params.personId, phoneE164);
+      if (!person) {
+        response.status(404).json({ error: "Person not found." });
+        return;
+      }
+      response.json({ person });
+    } catch (error) {
+      if (isPeoplePhoneUniqueViolation(error)) {
+        response.status(409).json({ error: "That phone number is already assigned." });
+        return;
+      }
+      throw error;
+    }
+  });
+
   router.get("/me", (request, response) => {
     const principal = requirePrincipal(request, response, context);
     if (!principal) return;
