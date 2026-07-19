@@ -33,6 +33,7 @@ export type DashboardOverview = {
     displayName: string;
     relationship: string;
     phoneE164: string | null;
+    smsOptInStatus: "opted_in" | "not_opted_in" | "opted_out";
   }>;
   actions: Array<{
     id: string;
@@ -45,6 +46,12 @@ export type DashboardOverview = {
   }>;
   permissions: string[];
 };
+
+export type DashboardPersonList = Array<{
+  id: string;
+  displayName: string;
+  phoneNumberStatus: "configured" | "not_configured";
+}>;
 
 export class DashboardError extends Error {
   readonly status: number;

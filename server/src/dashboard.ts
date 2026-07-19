@@ -109,7 +109,16 @@ function requestedScopes(value: unknown) {
 }
 
 function stringField(value: unknown, maxLength = 160) {
-  return typeof value === "string" && value.length <= maxLength ? value : undefined;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 && trimmed.length <= maxLength ? trimmed : undefined;
+}
+
+function e164Field(value: unknown) {
+  const phoneE164 = stringField(value, 16);
+  return phoneE164 && /^\+[1-9]\d{7,14}$/.test(phoneE164)
+    ? phoneE164
+    : undefined;
 }
 
 function objectPayload(value: unknown) {
@@ -171,6 +180,48 @@ function callOverview(call: CallRecord) {
 
 export function createDashboardRouter(context: DashboardContext) {
   const router = Router();
+
+  router.get("/people", (request, response) => {
+    const principal = requirePrincipal(request, response, context);
+    if (!principal) return;
+    if (principal.role !== "admin") {
+      response.status(403).json({ error: "Admin access is required." });
+      return;
+    }
+    response.json({ people: context.repositories.listPeople().map((person) => ({
+      id: person.id,
+      displayName: person.displayName,
+      phoneNumberStatus: person.phoneE164 ? "configured" : "not_configured",
+    })) });
+  });
+
+  router.post("/people", (request, response) => {
+    const principal = requirePrincipal(request, response, context);
+    if (!principal) return;
+    if (principal.role !== "admin") {
+      response.status(403).json({ error: "Admin access is required." });
+      return;
+    }
+    const displayName = stringField(request.body?.displayName);
+    const rawPhone = request.body?.phoneE164;
+    const phoneE164 = rawPhone === undefined || rawPhone === null || rawPhone === ""
+      ? null
+      : e164Field(rawPhone);
+    if (!displayName || (rawPhone && !phoneE164)) {
+      response.status(400).json({ error: "A display name and, when supplied, an E.164 phone number are required." });
+      return;
+    }
+    try {
+      const person = context.repositories.createPerson({
+        id: randomUUID(),
+        displayName,
+        phoneE164,
+      });
+      response.status(201).json({ person });
+    } catch {
+      response.status(409).json({ error: "That phone number is already assigned." });
+    }
+  });
 
   router.get("/me", (request, response) => {
     const principal = requirePrincipal(request, response, context);
@@ -242,7 +293,17 @@ export function createDashboardRouter(context: DashboardContext) {
         : [],
       contacts:
         principal.role === "admin"
-          ? context.repositories.listTrustedContacts(personId)
+          ? context.repositories.listTrustedContacts(personId).map((contact) => {
+              const status = context.repositories.getTrustedContactSmsOptInStatus(contact.id);
+              return {
+                ...contact,
+                smsOptInStatus: status === "granted"
+                  ? "opted_in"
+                  : status === "revoked"
+                    ? "opted_out"
+                    : "not_opted_in",
+              };
+            })
           : [],
       actions:
         principal.role === "admin"
@@ -309,6 +370,73 @@ export function createDashboardRouter(context: DashboardContext) {
     response.status(201).json({
       grant: { id: grant.id, expiresAt: grant.expiresAt, scopes: grant.scopes },
       magicLink: magicLink.toString(),
+    });
+  });
+
+  router.post("/people/:personId/trusted-contacts", (request, response) => {
+    const principal = requirePrincipal(request, response, context);
+    if (!principal) return;
+    if (principal.role !== "admin") {
+      response.status(403).json({ error: "Admin access is required." });
+      return;
+    }
+    const person = context.repositories.getPerson(request.params.personId);
+    if (!person) {
+      response.status(404).json({ error: "Person not found." });
+      return;
+    }
+    const displayName = stringField(request.body?.displayName);
+    const relationship = stringField(request.body?.relationship);
+    const phoneE164 = e164Field(request.body?.phoneE164);
+    if (!displayName || !relationship || !phoneE164) {
+      response.status(400).json({ error: "Display name, relationship, and an E.164 mobile number are required." });
+      return;
+    }
+    const contact = context.repositories.createTrustedContact({
+      id: randomUUID(),
+      personId: person.id,
+      displayName,
+      relationship,
+      phoneE164,
+    });
+    response.status(201).json({ contact, smsOptInStatus: "not_opted_in" });
+  });
+
+  router.post("/people/:personId/trusted-contacts/:trustedContactId/opt-in-invitations", (request, response) => {
+    const principal = requirePrincipal(request, response, context);
+    if (!principal) return;
+    if (principal.role !== "admin") {
+      response.status(403).json({ error: "Admin access is required." });
+      return;
+    }
+    if (request.body?.operatorAttested !== true) {
+      response.status(400).json({ error: "Operator attestation is required before inviting a trusted contact." });
+      return;
+    }
+    const person = context.repositories.getPerson(request.params.personId);
+    const contact = context.repositories.getTrustedContact(request.params.trustedContactId);
+    if (!person || !contact || contact.personId !== person.id || !contact.phoneE164) {
+      response.status(404).json({ error: "Trusted contact with a mobile number was not found for this person." });
+      return;
+    }
+    const token = randomBytes(32).toString("base64url");
+    const invitation = context.repositories.createSmsOptInInvitation({
+      id: randomUUID(),
+      personId: person.id,
+      trustedContactId: contact.id,
+      tokenHash: hashToken(token),
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    });
+    context.repositories.recordOperatorSmsInviteAttestation({
+      id: randomUUID(),
+      personId: person.id,
+      trustedContactId: contact.id,
+    });
+    const optInUrl = new URL("/opt-in", context.frontendOrigin);
+    optInUrl.searchParams.set("token", token);
+    response.status(201).json({
+      invitation: { id: invitation.id, expiresAt: invitation.expiresAt },
+      optInLink: optInUrl.toString(),
     });
   });
 

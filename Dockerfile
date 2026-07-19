@@ -14,6 +14,7 @@ RUN cd server && npm run build
 FROM node:24-bookworm-slim
 WORKDIR /app/server
 ENV NODE_ENV=production
+ENV IRIS_DATABASE_PATH=/app/data/iris.sqlite
 
 COPY --from=build /app/server/package.json ./package.json
 COPY --from=build /app/server/node_modules ./node_modules

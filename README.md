@@ -39,9 +39,14 @@ workflow remains the reproducible fallback.
 This repository includes a single-service Docker deployment. In Railway:
 
 1. Deploy from this repository and generate one public HTTPS domain.
-2. Attach a persistent volume at `/app/data`, set `IRIS_DATABASE_PATH=/app/data/iris.sqlite`, and keep the service at one replica. SQLite and active phone sessions are intentionally single-process in this prototype.
-3. Set `IRIS_PUBLIC_BASE_URL` and `FRONTEND_ORIGIN` to that same public domain, plus the existing OpenAI, Twilio, dashboard-token, and demo-person variables.
+2. Attach a persistent volume at `/app/data`. The image pins `IRIS_DATABASE_PATH=/app/data/iris.sqlite`; keep the service at one replica. SQLite and active phone sessions are intentionally single-process in this prototype.
+3. Set `IRIS_PUBLIC_BASE_URL=https://your-public-domain` and `FRONTEND_ORIGIN=https://your-public-domain` to the same Railway domain, plus the existing OpenAI, Twilio, dashboard-token, and demo-person variables. Production startup fails if `FRONTEND_ORIGIN` is omitted, preventing copied opt-in links from pointing to localhost.
 4. Configure Twilio’s Voice webhooks to reach that domain. From the Railway shell, run `npm run db:seed:prod` only when you want the demo fixture reset; the production image intentionally contains compiled `dist/` files rather than TypeScript source.
+
+SMS enrollment and confirmation messages depend on a live Twilio Messaging Service
+and registered A2P 10DLC campaign. Before that is live, a confirmation may fail or
+require operator recovery; that is external carrier configuration, not an
+enrollment-data failure.
 
 The container serves the production dashboard and public SPA routes such as `/opt-in` from Express. `/api/*`, Twilio webhooks, and the Media Stream endpoint remain server routes rather than SPA fallbacks.
 

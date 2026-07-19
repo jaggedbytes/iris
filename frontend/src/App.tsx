@@ -5,7 +5,7 @@ import {
   dashboardJson,
   DashboardError,
 } from "./dashboard";
-import type { DashboardOverview, DashboardPrincipal } from "./dashboard";
+import type { DashboardOverview, DashboardPersonList, DashboardPrincipal } from "./dashboard";
 
 const SESSION_TOKEN_KEY = "iris-dashboard-access-token";
 const DASHBOARD_POLL_INTERVAL_MS = 2_500;
@@ -108,6 +108,17 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(Boolean(token));
   const [magicLink, setMagicLink] = useState<string | null>(null);
+  const [optInLink, setOptInLink] = useState<string | null>(null);
+  const [adminPeople, setAdminPeople] = useState<DashboardPersonList>([]);
+  const [selectedPersonId, setSelectedPersonId] = useState<string | null>(null);
+  const [newPersonName, setNewPersonName] = useState("");
+  const [newPersonPhone, setNewPersonPhone] = useState("");
+  const [contactName, setContactName] = useState("");
+  const [contactRelationship, setContactRelationship] = useState("");
+  const [contactPhone, setContactPhone] = useState("");
+  const [isCreatingPerson, setIsCreatingPerson] = useState(false);
+  const [isCreatingContact, setIsCreatingContact] = useState(false);
+  const [attestedContactIds, setAttestedContactIds] = useState<Record<string, boolean>>({});
   const [isCallRequesting, setIsCallRequesting] = useState(false);
   const [dispatchingActionId, setDispatchingActionId] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
@@ -141,7 +152,12 @@ export function App() {
     void (async () => {
       try {
         const nextPrincipal = await dashboardJson<DashboardPrincipal>("/api/dashboard/me", token);
-        const nextPersonId = nextPrincipal.personId;
+        const nextPersonId = nextPrincipal.role === "admin"
+          ? selectedPersonId ?? nextPrincipal.personId
+          : nextPrincipal.personId;
+        const people = nextPrincipal.role === "admin"
+          ? await dashboardJson<{ people: DashboardPersonList }>("/api/dashboard/people", token)
+          : null;
         const nextOverview = await dashboardJson<DashboardOverview>(
           `/api/dashboard/people/${nextPersonId}/overview`,
           token,
@@ -149,6 +165,7 @@ export function App() {
         if (cancelled || requestId !== overviewRequestId.current) return;
         setPrincipal(nextPrincipal);
         setOverview(nextOverview);
+        if (people) setAdminPeople(people.people);
         setError(null);
       } catch (loadError) {
         if (cancelled || requestId !== overviewRequestId.current) return;
@@ -168,7 +185,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [token, refreshVersion]);
+  }, [token, refreshVersion, selectedPersonId]);
 
   const shouldPoll = Boolean(
     overview?.activeCall || overview?.calls.some((call) => call.summaryState === "processing"),
@@ -206,6 +223,9 @@ export function App() {
     sessionStorage.removeItem(SESSION_TOKEN_KEY);
     setToken("");
     setMagicLink(null);
+    setOptInLink(null);
+    setSelectedPersonId(null);
+    setAdminPeople([]);
   };
 
   const createMagicLink = async (trustedContactId: string) => {
@@ -246,6 +266,73 @@ export function App() {
       setError(callError instanceof Error ? callError.message : "Iris could not place the call.");
     } finally {
       setIsCallRequesting(false);
+    }
+  };
+
+  const createPerson = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setIsCreatingPerson(true);
+    setError(null);
+    try {
+      const result = await dashboardJson<{ person: { id: string } }>("/api/dashboard/people", token, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ displayName: newPersonName, phoneE164: newPersonPhone || null }),
+      });
+      setNewPersonName("");
+      setNewPersonPhone("");
+      setSelectedPersonId(result.person.id);
+      setRefreshVersion((current) => current + 1);
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : "Unable to create the person.");
+    } finally {
+      setIsCreatingPerson(false);
+    }
+  };
+
+  const createTrustedContact = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!personId) return;
+    setIsCreatingContact(true);
+    setError(null);
+    try {
+      await dashboardJson(`/api/dashboard/people/${personId}/trusted-contacts`, token, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          displayName: contactName,
+          relationship: contactRelationship,
+          phoneE164: contactPhone,
+        }),
+      });
+      setContactName("");
+      setContactRelationship("");
+      setContactPhone("");
+      setRefreshVersion((current) => current + 1);
+    } catch (contactError) {
+      setError(contactError instanceof Error ? contactError.message : "Unable to draft the trusted contact.");
+    } finally {
+      setIsCreatingContact(false);
+    }
+  };
+
+  const createOptInLink = async (trustedContactId: string) => {
+    if (!personId) return;
+    setOptInLink(null);
+    setError(null);
+    try {
+      const result = await dashboardJson<{ optInLink: string }>(
+        `/api/dashboard/people/${personId}/trusted-contacts/${trustedContactId}/opt-in-invitations`,
+        token,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ operatorAttested: attestedContactIds[trustedContactId] === true }),
+        },
+      );
+      setOptInLink(result.optInLink);
+    } catch (inviteError) {
+      setError(inviteError instanceof Error ? inviteError.message : "Unable to create an opt-in link.");
     }
   };
 
@@ -338,6 +425,32 @@ export function App() {
 
       {overview && (
         <div className="dashboard-grid">
+          {principal?.role === "admin" && (
+            <section className="overview-card enrollment-card">
+              <p className="card-kicker">Enrollment</p>
+              <h2>People and invitations</h2>
+              <label htmlFor="person-select">Person</label>
+              <select
+                id="person-select"
+                value={personId}
+                onChange={(event) => {
+                  setSelectedPersonId(event.target.value);
+                  setOptInLink(null);
+                  setMagicLink(null);
+                }}
+              >
+                {adminPeople.map((person) => <option key={person.id} value={person.id}>{person.displayName}</option>)}
+              </select>
+              <form className="compact-form" onSubmit={createPerson}>
+                <strong>Add a person</strong>
+                <input required placeholder="Display name" value={newPersonName} onChange={(event) => setNewPersonName(event.target.value)} />
+                <input placeholder="Phone in E.164 (optional)" value={newPersonPhone} onChange={(event) => setNewPersonPhone(event.target.value)} />
+                <button className="secondary-button" type="submit" disabled={isCreatingPerson}>
+                  {isCreatingPerson ? "Adding…" : "Add person"}
+                </button>
+              </form>
+            </section>
+          )}
           <section className="overview-card profile-card">
             <p className="card-kicker">Person</p>
             <h2>{overview.person.displayName}</h2>
@@ -398,12 +511,21 @@ export function App() {
                   <li key={contact.id}>
                     <div>
                       <strong>{contact.displayName}</strong>
-                      <span>{contact.relationship}</span>
+                      <span>{contact.relationship} · SMS: {contact.smsOptInStatus === "opted_in" ? "opted in" : contact.smsOptInStatus === "opted_out" ? "opted out" : "not opted in"}</span>
                     </div>
                     {principal?.role === "admin" && (
-                      <button className="secondary-button" type="button" onClick={() => void createMagicLink(contact.id)}>
-                        Create link
-                      </button>
+                      <div className="contact-actions">
+                        <button className="secondary-button" type="button" onClick={() => void createMagicLink(contact.id)}>Create dashboard link</button>
+                        <label className="attestation-check">
+                          <input
+                            type="checkbox"
+                            checked={attestedContactIds[contact.id] === true}
+                            onChange={(event) => setAttestedContactIds((current) => ({ ...current, [contact.id]: event.target.checked }))}
+                          />
+                          I’m authorized to invite this contact
+                        </label>
+                        <button className="secondary-button" type="button" disabled={!attestedContactIds[contact.id]} onClick={() => void createOptInLink(contact.id)}>Create SMS opt-in link</button>
+                      </div>
                     )}
                   </li>
                 ))}
@@ -417,6 +539,22 @@ export function App() {
                 <input readOnly value={magicLink} aria-label="New trusted contact link" />
                 <span>Share this once; it expires in seven days and can be revoked.</span>
               </div>
+            )}
+            {optInLink && (
+              <div className="magic-link" aria-live="polite">
+                <strong>SMS opt-in link</strong>
+                <input readOnly value={optInLink} aria-label="Trusted contact SMS opt-in link" />
+                <span>Share within 24 hours. The contact must separately agree before Iris can send SMS.</span>
+              </div>
+            )}
+            {principal?.role === "admin" && (
+              <form className="compact-form" onSubmit={createTrustedContact}>
+                <strong>Draft a trusted contact</strong>
+                <input required placeholder="Display name" value={contactName} onChange={(event) => setContactName(event.target.value)} />
+                <input required placeholder="Relationship" value={contactRelationship} onChange={(event) => setContactRelationship(event.target.value)} />
+                <input required placeholder="Mobile in E.164" value={contactPhone} onChange={(event) => setContactPhone(event.target.value)} />
+                <button className="secondary-button" type="submit" disabled={isCreatingContact}>{isCreatingContact ? "Saving…" : "Save draft"}</button>
+              </form>
             )}
           </section>
 

@@ -53,14 +53,18 @@ export function loadDashboardConfig(
   environment: NodeJS.ProcessEnv = process.env,
 ): DashboardConfig {
   const adminToken = environment.IRIS_ADMIN_TOKEN?.trim();
+  const configuredFrontendOrigin = environment.FRONTEND_ORIGIN?.trim();
   if (!adminToken) {
     throw new Error("IRIS_ADMIN_TOKEN must be configured.");
+  }
+  if (environment.NODE_ENV === "production" && !configuredFrontendOrigin) {
+    throw new Error("FRONTEND_ORIGIN must be configured in production.");
   }
 
   return {
     adminToken,
     frontendOrigin: normalizeFrontendOrigin(
-      environment.FRONTEND_ORIGIN?.trim() || "http://localhost:5173",
+      configuredFrontendOrigin || "http://localhost:5173",
     ),
   };
 }

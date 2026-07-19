@@ -12,8 +12,12 @@ import type {
   CreateActionRequest,
   MemoryCategory,
   Person,
+  SmsOptInInvitation,
   TimelineEvent,
   TrustedContact,
+  TrustedContactSmsConsent,
+  TrustedContactSmsConsentSource,
+  TrustedContactSmsOptInStatus,
 } from "./types.js";
 
 type PersonRow = {
@@ -67,13 +71,33 @@ type EventRow = {
 type ActionRequestRow = {
   id: string;
   person_id: string;
-  feature: "bridge" | "shield" | "translator";
+  feature: "bridge" | "shield" | "translator" | "enrollment";
   action_type: string;
   payload_json: string;
   status: ActionStatus;
   approval_source: string | null;
   created_at: string;
   updated_at: string;
+};
+
+type TrustedContactSmsConsentRow = {
+  id: string;
+  trusted_contact_id: string;
+  phone_e164: string;
+  status: "granted" | "revoked";
+  source: TrustedContactSmsConsentSource;
+  disclosure_version: string | null;
+  occurred_at: string;
+};
+
+type SmsOptInInvitationRow = {
+  id: string;
+  person_id: string;
+  trusted_contact_id: string;
+  token_hash: string;
+  expires_at: string;
+  consumed_at: string | null;
+  created_at: string;
 };
 
 const now = () => new Date().toISOString();
@@ -138,6 +162,28 @@ const toActionRequest = (row: ActionRequestRow): ActionRequestRecord => ({
   updatedAt: row.updated_at,
 });
 
+const toTrustedContactSmsConsent = (
+  row: TrustedContactSmsConsentRow,
+): TrustedContactSmsConsent => ({
+  id: row.id,
+  trustedContactId: row.trusted_contact_id,
+  phoneE164: row.phone_e164,
+  status: row.status,
+  source: row.source,
+  disclosureVersion: row.disclosure_version,
+  occurredAt: row.occurred_at,
+});
+
+const toSmsOptInInvitation = (row: SmsOptInInvitationRow): SmsOptInInvitation => ({
+  id: row.id,
+  personId: row.person_id,
+  trustedContactId: row.trusted_contact_id,
+  tokenHash: row.token_hash,
+  expiresAt: row.expires_at,
+  consumedAt: row.consumed_at,
+  createdAt: row.created_at,
+});
+
 export function createRepositories(database: IrisDatabase) {
   return {
     createPerson(input: {
@@ -160,6 +206,13 @@ export function createRepositories(database: IrisDatabase) {
         .prepare("SELECT * FROM people WHERE id = ?")
         .get(id) as PersonRow | undefined;
       return row ? toPerson(row) : null;
+    },
+
+    listPeople() {
+      const rows = database
+        .prepare("SELECT * FROM people ORDER BY display_name")
+        .all() as PersonRow[];
+      return rows.map(toPerson);
     },
 
     createTrustedContact(input: {
@@ -204,6 +257,114 @@ export function createRepositories(database: IrisDatabase) {
         )
         .all(personId) as ContactRow[];
       return rows.map(toContact);
+    },
+
+    recordTrustedContactSmsConsent(input: {
+      id: string;
+      trustedContactId: string;
+      phoneE164: string;
+      status: "granted" | "revoked";
+      source: TrustedContactSmsConsentSource;
+      disclosureVersion?: string | null;
+    }) {
+      const occurredAt = now();
+      database.prepare(
+        `INSERT INTO trusted_contact_sms_consents
+           (id, trusted_contact_id, phone_e164, status, source, disclosure_version, occurred_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        input.id,
+        input.trustedContactId,
+        input.phoneE164,
+        input.status,
+        input.source,
+        input.disclosureVersion ?? null,
+        occurredAt,
+      );
+      return toTrustedContactSmsConsent(
+        database.prepare("SELECT * FROM trusted_contact_sms_consents WHERE id = ?")
+          .get(input.id) as TrustedContactSmsConsentRow,
+      );
+    },
+
+    listTrustedContactSmsConsents(trustedContactId: string) {
+      const rows = database.prepare(
+        `SELECT * FROM trusted_contact_sms_consents
+         WHERE trusted_contact_id = ?
+         ORDER BY occurred_at DESC, rowid DESC`,
+      ).all(trustedContactId) as TrustedContactSmsConsentRow[];
+      return rows.map(toTrustedContactSmsConsent);
+    },
+
+    getTrustedContactSmsOptInStatus(trustedContactId: string): TrustedContactSmsOptInStatus {
+      const row = database.prepare(
+        `SELECT status FROM trusted_contact_sms_consents
+         WHERE trusted_contact_id = ?
+         ORDER BY occurred_at DESC, rowid DESC
+         LIMIT 1`,
+      ).get(trustedContactId) as { status: "granted" | "revoked" } | undefined;
+      return row?.status ?? null;
+    },
+
+    createSmsOptInInvitation(input: {
+      id: string;
+      personId: string;
+      trustedContactId: string;
+      tokenHash: string;
+      expiresAt: string;
+    }) {
+      const createdAt = now();
+      const inserted = database.prepare(
+        `INSERT INTO sms_opt_in_invitations
+           (id, person_id, trusted_contact_id, token_hash, expires_at, created_at)
+         SELECT ?, ?, ?, ?, ?, ?
+         WHERE EXISTS (
+           SELECT 1 FROM trusted_contacts
+           WHERE id = ? AND person_id = ?
+         )`,
+      ).run(
+        input.id,
+        input.personId,
+        input.trustedContactId,
+        input.tokenHash,
+        input.expiresAt,
+        createdAt,
+        input.trustedContactId,
+        input.personId,
+      );
+      if (inserted.changes !== 1) {
+        throw new Error("Trusted contact does not belong to this person.");
+      }
+      return toSmsOptInInvitation(
+        database.prepare("SELECT * FROM sms_opt_in_invitations WHERE id = ?")
+          .get(input.id) as SmsOptInInvitationRow,
+      );
+    },
+
+    findActiveSmsOptInInvitation(tokenHash: string, at = now()) {
+      const row = database.prepare(
+        `SELECT * FROM sms_opt_in_invitations
+         WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ?`,
+      ).get(tokenHash, at) as SmsOptInInvitationRow | undefined;
+      return row ? toSmsOptInInvitation(row) : null;
+    },
+
+    consumeSmsOptInInvitation(id: string) {
+      return database.prepare(
+        "UPDATE sms_opt_in_invitations SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL AND expires_at > ?",
+      ).run(now(), id, now()).changes === 1;
+    },
+
+    recordOperatorSmsInviteAttestation(input: {
+      id: string;
+      personId: string;
+      trustedContactId: string;
+    }) {
+      database.prepare(
+        `INSERT INTO audit_events
+           (id, person_id, actor_type, actor_id, action, target_type, target_id, metadata_json, occurred_at)
+         VALUES (?, ?, 'operator', NULL, 'trusted_contact.sms_invite_authorized', 'trusted_contact', ?, '{}', ?)`,
+      ).run(input.id, input.personId, input.trustedContactId, now());
     },
 
     grantAccess(input: {
@@ -704,6 +865,8 @@ export function createRepositories(database: IrisDatabase) {
         DELETE FROM documents;
         DELETE FROM calls;
         DELETE FROM consents;
+        DELETE FROM sms_opt_in_invitations;
+        DELETE FROM trusted_contact_sms_consents;
         DELETE FROM access_grants;
         DELETE FROM trusted_contacts;
         DELETE FROM people;
