@@ -56,9 +56,7 @@ function isTrustedContactPhoneUniqueViolation(error: unknown) {
     error instanceof Error &&
     "code" in error &&
     error.code === "SQLITE_CONSTRAINT_UNIQUE" &&
-    (error.message.includes("trusted_contacts.phone_e164")
-      || error.message.includes("idx_trusted_contacts_person_phone_unique")
-      || error.message.includes("idx_trusted_contacts_phone_e164_unique"))
+    error.message.includes("trusted_contacts.phone_e164")
   );
 }
 

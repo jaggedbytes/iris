@@ -290,8 +290,8 @@ export const migrations = [
   {
     id: "009_trusted_contact_phone_unique",
     sql: `
-      CREATE UNIQUE INDEX idx_trusted_contacts_phone_e164_unique
-        ON trusted_contacts(phone_e164)
+      CREATE UNIQUE INDEX idx_trusted_contacts_person_phone_unique
+        ON trusted_contacts(person_id, phone_e164)
         WHERE phone_e164 IS NOT NULL;
     `,
   },
@@ -378,12 +378,10 @@ export const migrations = [
     `,
   },
   {
-    id: "013_trusted_contact_phone_unique_per_person",
+    id: "013_access_grants_trusted_contact",
     sql: `
-      DROP INDEX IF EXISTS idx_trusted_contacts_phone_e164_unique;
-      CREATE UNIQUE INDEX idx_trusted_contacts_person_phone_unique
-        ON trusted_contacts(person_id, phone_e164)
-        WHERE phone_e164 IS NOT NULL;
+      CREATE INDEX idx_access_grants_trusted_contact
+        ON access_grants(trusted_contact_id);
     `,
   },
 ] as const;
