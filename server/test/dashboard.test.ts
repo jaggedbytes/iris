@@ -165,6 +165,15 @@ test("limits enrollment drafting and opt-in invitations to operators", async () 
     const person = (await createdPerson.json()) as { person: { id: string; displayName: string } };
     assert.equal(person.person.displayName, "Morgan");
 
+    const duplicatePhone = await fetch(`${fixture.url}/api/dashboard/people`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ displayName: "Casey", phoneE164: "+15550004444" }),
+    });
+    assert.equal(duplicatePhone.status, 409);
+    const duplicateBody = (await duplicatePhone.json()) as { error: string };
+    assert.match(duplicateBody.error, /already assigned/i);
+
     const badContact = await fetch(`${fixture.url}/api/dashboard/people/${person.person.id}/trusted-contacts`, {
       method: "POST",
       headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" },

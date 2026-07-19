@@ -42,6 +42,15 @@ function safelyMatches(candidate: string, expected: string) {
   );
 }
 
+function isPeoplePhoneUniqueViolation(error: unknown) {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    error.code === "SQLITE_CONSTRAINT_UNIQUE" &&
+    error.message.includes("people.phone_e164")
+  );
+}
+
 function bearerToken(request: Request) {
   const authorization = request.header("authorization");
   if (!authorization?.startsWith("Bearer ")) return null;
@@ -209,8 +218,12 @@ export function createDashboardRouter(context: DashboardContext) {
         phoneE164,
       });
       response.status(201).json({ person });
-    } catch {
-      response.status(409).json({ error: "That phone number is already assigned." });
+    } catch (error) {
+      if (isPeoplePhoneUniqueViolation(error)) {
+        response.status(409).json({ error: "That phone number is already assigned." });
+        return;
+      }
+      throw error;
     }
   });
 
