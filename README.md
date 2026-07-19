@@ -30,6 +30,21 @@ Browser ─────────────── WebRTC audio + events ─�
 
 The browser WebRTC voice loop and token endpoint are still implemented as the earlier persona experiment. It is not part of the phone-first Bridge demo. The user’s microphone audio and Iris’s returned audio are live-only.
 
+## Hosted judge demo (Railway)
+
+The judge-facing demo should be a private, hosted instance operated by you; do
+not ask judges to configure Twilio or run a local server. The seeded local
+workflow remains the reproducible fallback.
+
+This repository includes a single-service Docker deployment. In Railway:
+
+1. Deploy from this repository and generate one public HTTPS domain.
+2. Attach a persistent volume at `/app/data`, set `IRIS_DATABASE_PATH=/app/data/iris.sqlite`, and keep the service at one replica. SQLite and active phone sessions are intentionally single-process in this prototype.
+3. Set `IRIS_PUBLIC_BASE_URL` and `FRONTEND_ORIGIN` to that same public domain, plus the existing OpenAI, Twilio, dashboard-token, and demo-person variables.
+4. Configure Twilio’s Voice webhooks to reach that domain. From the Railway shell, run `npm run db:seed:prod` only when you want the demo fixture reset; the production image intentionally contains compiled `dist/` files rather than TypeScript source.
+
+The container serves the production dashboard and public SPA routes such as `/opt-in` from Express. `/api/*`, Twilio webhooks, and the Media Stream endpoint remain server routes rather than SPA fallbacks.
+
 ## Local development
 
 Prerequisites: Node.js 22+ and an OpenAI API key.

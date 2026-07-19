@@ -1,3 +1,7 @@
+import { existsSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import cors from "cors";
 import express from "express";
 import rateLimit from "express-rate-limit";
@@ -9,16 +13,27 @@ import { createTelephonyRouter } from "./telephony/router.js";
 import type { OutboundCallManager } from "./telephony/outbound.js";
 import type { ActionDispatcher } from "./actions.js";
 
+const compiledStaticDir = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "../public",
+);
+
+function isProtectedPath(path: string) {
+  return path === "/api" || path.startsWith("/api/") || path === "/health";
+}
+
 export function createApp({
   request = fetch,
   dashboard,
   telephony,
   actions,
+  staticDir = compiledStaticDir,
 }: {
   request?: typeof fetch;
   dashboard?: DashboardContext;
   telephony?: OutboundCallManager;
   actions?: ActionDispatcher;
+  staticDir?: string;
 } = {}) {
   const app = express();
 
@@ -76,6 +91,23 @@ export function createApp({
       response.status(502).json({ error: "Unable to start a voice session." });
     }
   });
+
+  // The hosted image copies the Vite build to this directory. Local Vite
+  // development has no such directory, so this remains entirely opt-in there.
+  const indexHtml = resolve(staticDir, "index.html");
+  if (existsSync(indexHtml)) {
+    const serveStatic = express.static(staticDir);
+    app.use((request, response, next) => {
+      if (isProtectedPath(request.path)) return next();
+      return serveStatic(request, response, next);
+    });
+    // SPA routes such as /opt-in must resolve to the dashboard build, but only
+    // after all API/webhook routes have had a chance to handle the request.
+    app.use((request, response, next) => {
+      if (request.method !== "GET" || isProtectedPath(request.path)) return next();
+      response.sendFile(indexHtml);
+    });
+  }
 
   return app;
 }
