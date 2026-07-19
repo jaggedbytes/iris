@@ -44,13 +44,9 @@ function formatDate(value: string) {
   }).format(new Date(value));
 }
 
-function summaryLabel(summaryRecap: string | null, summaryState: DashboardOverview["calls"][number]["summaryState"]) {
-  if (summaryState === "processing") return "Preparing call summary…";
-  if (summaryState === "unavailable") return "Call summary unavailable";
-  if (summaryRecap) return summaryRecap;
-  if (summaryState === "ready") return "Saved call summary";
-  // not_requested: hangups with no transcript never enter extraction.
-  return "No conversation to summarize";
+function summaryLabel(careSummary: DashboardOverview["calls"][number]["careSummary"], summaryState: DashboardOverview["calls"][number]["summaryState"]) {
+  if (summaryState === "processing") return "Preparing shared care recap…";
+  return careSummary?.recap ?? "No shared care recap";
 }
 
 function phoneNumberLabel(person: DashboardOverview["person"]) {
@@ -76,7 +72,7 @@ function timelineCopy(event: DashboardOverview["events"][number], personName: st
     case "call.failed": return "Call could not be completed";
     case "call.interrupted": return "Call was interrupted";
     case "call.summary_ready": return "Call summary is ready";
-    case "call.summary_unavailable": return "No call summary was saved";
+    case "call.summary_unavailable": return "No shared care recap was saved";
     case "bridge.sms_sent": return `Iris sent a Bridge message to ${contact}`;
     case "shield.pause_offered": return "Iris offered a safety pause";
     case "shield.alert_sent": return `Iris asked ${contact} to check in`;
@@ -543,8 +539,24 @@ function DashboardApp() {
               <ol className="item-list">
                 {overview.calls.map((call) => (
                   <li key={call.id}>
-                    <strong>{summaryLabel(call.summaryRecap, call.summaryState)}</strong>
+                    <strong>{summaryLabel(call.careSummary, call.summaryState)}</strong>
                     <span>{formatDate(call.startedAt)} · {call.status}</span>
+                    {call.careSummary && (
+                      <div className="care-summary">
+                        {call.careSummary.moodAndConcerns.length > 0 && (
+                          <div>
+                            <strong>You shared</strong>
+                            <ul>{call.careSummary.moodAndConcerns.map((item, index) => <li key={`${call.id}-mood-${index}`}>{item}</li>)}</ul>
+                          </div>
+                        )}
+                        {call.careSummary.irisSuggestedNextSteps.length > 0 && (
+                          <div>
+                            <strong>Iris suggested</strong>
+                            <ul>{call.careSummary.irisSuggestedNextSteps.map((item, index) => <li key={`${call.id}-suggestion-${index}`}>{item}</li>)}</ul>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </li>
                 ))}
               </ol>

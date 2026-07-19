@@ -106,6 +106,9 @@ h2 { margin: 0; font-size: 1.35rem; }
 .consent-check input { margin-top: 0.2rem; }
 .legal-note { color: #68736a; font-size: 0.8rem; line-height: 1.45; }
 .legal-note a { color: #375f41; }
+.care-summary { display: grid; gap: 0.55rem; margin-top: 0.55rem; color: #4e5c51; }
+.care-summary strong { display: block; font-size: 0.82rem; }
+.care-summary ul { margin: 0.22rem 0 0; padding-left: 1.1rem; }
 
 @media (max-width: 820px) {
   .dashboard-header { flex-direction: column; }

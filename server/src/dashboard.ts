@@ -153,27 +153,46 @@ function timelineEvent(event: TimelineEvent) {
   return { id: event.id, type: event.type, payload, occurredAt: event.occurredAt };
 }
 
-function summaryRecap(summaryJson: string | null) {
+type SharedCareSummary = {
+  recap: string;
+  moodAndConcerns: string[];
+  irisSuggestedNextSteps: string[];
+};
+
+function stringArray(value: unknown, maxItems: number, maxLength: number) {
+  if (!Array.isArray(value) || value.length > maxItems) return null;
+  const values = value.map((item) => stringField(item, maxLength));
+  return values.every((item): item is string => !!item) ? values : null;
+}
+
+function sharedCareSummary(summaryJson: string | null): SharedCareSummary | null {
   if (!summaryJson) return null;
   try {
     const summary = JSON.parse(summaryJson) as unknown;
     if (!summary || typeof summary !== "object" || Array.isArray(summary)) return null;
-    const recap = stringField((summary as Record<string, unknown>).recap, 500)?.trim();
-    return recap || null;
+    const care = (summary as Record<string, unknown>).careSummary;
+    if (!care || typeof care !== "object" || Array.isArray(care)) return null;
+    const fields = care as Record<string, unknown>;
+    const recap = stringField(fields.recap, 500);
+    const moodAndConcerns = stringArray(fields.moodAndConcerns, 8, 280);
+    const irisSuggestedNextSteps = stringArray(fields.irisSuggestedNextSteps, 8, 280);
+    return recap && moodAndConcerns && irisSuggestedNextSteps
+      ? { recap, moodAndConcerns, irisSuggestedNextSteps }
+      : null;
   } catch {
     return null;
   }
 }
 
-function callOverview(call: CallRecord) {
+function callOverview(call: CallRecord, includeSharedCareSummary: boolean) {
   return {
     id: call.id,
     status: call.status,
     startedAt: call.startedAt,
-    // summaryJson contains memory-extraction fields which are intentionally
-    // unavailable to dashboard consumers. The recap is the sole call-summary
-    // field exposed here; recall anchors never cross this boundary.
-    summaryRecap: summaryRecap(call.summaryJson),
+    // Narrow summary fields are private Iris memory. The care section is
+    // separately consented and explicitly projected rather than spreading the
+    // storage format into the browser contract.
+    careSummary: includeSharedCareSummary ? sharedCareSummary(call.summaryJson) : null,
     summaryState: call.summaryState,
   };
 }
@@ -268,6 +287,8 @@ export function createDashboardRouter(context: DashboardContext) {
     const activeCall = hasScope(principal, "request_check_in")
       ? context.repositories.findActiveCall(personId)
       : null;
+    const careSummarySharingActive = context.repositories.hasActiveConsent(personId, "summary_retention")
+      && context.repositories.hasActiveConsent(personId, "care_summary_sharing");
 
     response.json({
       // The phone number is operator-only PII; trusted contacts receive a
@@ -287,7 +308,7 @@ export function createDashboardRouter(context: DashboardContext) {
               phoneNumberStatus: "private",
             },
       calls: hasScope(principal, "view_summaries")
-        ? context.repositories.listCalls(personId).map(callOverview)
+        ? context.repositories.listCalls(personId).map((call) => callOverview(call, careSummarySharingActive))
         : [],
       activeCall: activeCall
         ? { id: activeCall.id, status: activeCall.status, startedAt: activeCall.startedAt }

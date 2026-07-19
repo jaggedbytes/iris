@@ -18,7 +18,11 @@ export type DashboardOverview = {
     id: string;
     status: string;
     startedAt: string;
-    summaryRecap: string | null;
+    careSummary: {
+      recap: string;
+      moodAndConcerns: string[];
+      irisSuggestedNextSteps: string[];
+    } | null;
     summaryState: "not_requested" | "processing" | "ready" | "unavailable";
   }>;
   activeCall: { id: string; status: "attempted" | "answered"; startedAt: string } | null;
