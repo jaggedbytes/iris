@@ -462,6 +462,7 @@ function DashboardApp() {
             <section className="overview-card enrollment-card">
               <p className="card-kicker">Enrollment</p>
               <h2>People and invitations</h2>
+              <p className="privacy-note">Add the older adult Iris calls. Then open their profile to invite trusted contacts and create SMS opt-in links.</p>
               <label htmlFor="person-select">Person</label>
               <select
                 id="person-select"
