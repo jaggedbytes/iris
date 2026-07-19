@@ -131,6 +131,7 @@ function DashboardApp() {
   const [isCreatingContact, setIsCreatingContact] = useState(false);
   const [selectedTrustedContactId, setSelectedTrustedContactId] = useState("");
   const [attestedContactIds, setAttestedContactIds] = useState<Record<string, boolean>>({});
+  const [contactAttestationErrorId, setContactAttestationErrorId] = useState<string | null>(null);
   const [consentAttested, setConsentAttested] = useState(false);
   const [draftPrivateMemory, setDraftPrivateMemory] = useState(false);
   const [draftSharedCare, setDraftSharedCare] = useState(false);
@@ -700,6 +701,7 @@ function DashboardApp() {
                       setSelectedTrustedContactId(event.target.value);
                       setMagicLink(null);
                       setOptInLink(null);
+                      setContactAttestationErrorId(null);
                     }}
                   >
                     {overview.contacts.map((contact) => <option key={contact.id} value={contact.id}>{contact.displayName}</option>)}
@@ -719,17 +721,38 @@ function DashboardApp() {
                     </div>
                     {principal?.role === "admin" && (
                       <div className="contact-actions">
-                        <button className="secondary-button full-width-action" type="button" onClick={() => void createMagicLink(selectedTrustedContact.id)}>Create dashboard link</button>
-                        <button className="secondary-button full-width-action" type="button" disabled={!attestedContactIds[selectedTrustedContact.id]} onClick={() => void createOptInLink(selectedTrustedContact.id)}>Create SMS opt-in link</button>
                         <label className="contact-attestation">
                           <input
                             className="consent-toggle"
                             type="checkbox"
                             checked={attestedContactIds[selectedTrustedContact.id] === true}
-                            onChange={(event) => setAttestedContactIds((current) => ({ ...current, [selectedTrustedContact.id]: event.target.checked }))}
+                            onChange={(event) => {
+                              setAttestedContactIds((current) => ({ ...current, [selectedTrustedContact.id]: event.target.checked }));
+                              if (event.target.checked) setContactAttestationErrorId(null);
+                            }}
                           />
                           <span>I have permission to invite {selectedTrustedContact.displayName} to receive Iris text messages.</span>
                         </label>
+                        {contactAttestationErrorId === selectedTrustedContact.id && (
+                          <p className="contact-attestation-error" role="alert">
+                            Confirm that you have permission to invite {selectedTrustedContact.displayName} before creating an SMS opt-in link.
+                          </p>
+                        )}
+                        <button className="secondary-button full-width-action" type="button" onClick={() => void createMagicLink(selectedTrustedContact.id)}>Create dashboard link</button>
+                        <button
+                          className="secondary-button full-width-action"
+                          type="button"
+                          onClick={() => {
+                            if (!attestedContactIds[selectedTrustedContact.id]) {
+                              setContactAttestationErrorId(selectedTrustedContact.id);
+                              return;
+                            }
+                            setContactAttestationErrorId(null);
+                            void createOptInLink(selectedTrustedContact.id);
+                          }}
+                        >
+                          Create SMS opt-in link
+                        </button>
                       </div>
                     )}
                   </li>
@@ -740,17 +763,21 @@ function DashboardApp() {
               <p className="empty-state">Contact access is not available through this link.</p>
             )}
             {magicLink && (
-              <div className="magic-link" aria-live="polite">
-                <strong>New family link</strong>
-                <input readOnly value={magicLink} aria-label="New trusted contact link" />
-                <span>Share this once; it expires in seven days and can be revoked.</span>
+              <div className="compact-form magic-link" aria-live="polite">
+                <label className="form-field">
+                  Dashboard link
+                  <input readOnly value={magicLink} aria-label="New trusted contact link" />
+                </label>
+                <p className="privacy-note">Share this once; it expires in seven days and can be revoked.</p>
               </div>
             )}
             {optInLink && (
-              <div className="magic-link" aria-live="polite">
-                <strong>SMS opt-in link</strong>
-                <input readOnly value={optInLink} aria-label="Trusted contact SMS opt-in link" />
-                <span>Share within 24 hours. The contact must separately agree before Iris can send SMS.</span>
+              <div className="compact-form magic-link" aria-live="polite">
+                <label className="form-field">
+                  SMS opt-in link
+                  <input readOnly value={optInLink} aria-label="Trusted contact SMS opt-in link" />
+                </label>
+                <p className="privacy-note">Share within 24 hours. The contact must separately agree before Iris can send SMS.</p>
               </div>
             )}
             {principal?.role === "admin" && (

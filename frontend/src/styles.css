@@ -383,6 +383,10 @@
     @apply flex items-start gap-[0.55rem] text-left text-[0.78rem] leading-snug text-muted;
   }
 
+  .contact-attestation-error {
+    @apply -mt-1 ml-[2.9rem] text-[0.75rem] leading-snug font-bold text-attention;
+  }
+
   .magic-link {
     @apply mt-4 grid gap-2 border-t border-border pt-4;
   }
