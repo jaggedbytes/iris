@@ -1,6 +1,18 @@
 :root {
-  color: #27362c;
-  background: #f5f3ed;
+  --ink: #241B33;
+  --primary: #6A4C93;
+  --primary-dark: #3E2C63;
+  --surface: #FAF8FC;
+  --page-bg: #F3EFF9;
+  --soft-lilac: #C9B6E4;
+  --accent: #E0A458;
+  --calm: #5B8A72;
+  --attention: #D8973C;
+  --border: color-mix(in srgb, var(--primary) 26%, var(--surface));
+  --muted: color-mix(in srgb, var(--ink) 68%, var(--surface));
+  --subtle-surface: color-mix(in srgb, var(--soft-lilac) 22%, var(--surface));
+  color: var(--ink);
+  background: var(--page-bg);
   font-family: ui-sans-serif, system-ui, sans-serif;
   font-synthesis: none;
 }
@@ -12,11 +24,13 @@ body { margin: 0; min-width: 320px; }
 button, input, select { font: inherit; }
 
 button { cursor: pointer; }
+a { color: var(--primary); }
+:focus-visible { outline: 3px solid var(--primary); outline-offset: 3px; }
 
 .access-shell, .dashboard-shell {
   min-height: 100vh;
   padding: clamp(1.25rem, 4vw, 3.5rem);
-  background: radial-gradient(circle at top left, #fffdf8, #e9e5da 75%);
+  background: radial-gradient(circle at top left, var(--surface), var(--page-bg) 75%);
 }
 
 .access-shell { display: grid; place-items: center; }
@@ -24,89 +38,90 @@ button { cursor: pointer; }
 .access-card {
   width: min(100%, 32rem);
   padding: clamp(2rem, 8vw, 3.75rem);
-  border: 1px solid #d7d0c1;
+  border: 1px solid var(--border);
   border-radius: 1.5rem;
-  background: rgb(255 253 248 / 92%);
-  box-shadow: 0 1.5rem 4rem rgb(73 61 42 / 12%);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: 0 1.5rem 4rem color-mix(in srgb, var(--primary-dark) 12%, transparent);
 }
 
 .eyebrow, .card-kicker {
   margin: 0 0 0.5rem;
-  color: #5a765e;
+  color: var(--calm);
   font-size: 0.72rem;
   font-weight: 800;
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
-h1, h2 { font-family: Georgia, "Times New Roman", serif; font-weight: 500; }
+h1, h2 { color: var(--primary-dark); font-family: Georgia, "Times New Roman", serif; font-weight: 500; }
 h1 { margin: 0; font-size: clamp(2.3rem, 6vw, 4rem); line-height: 1; }
 h2 { margin: 0; font-size: 1.35rem; }
 
-.access-card > p { color: #5b665d; line-height: 1.6; }
+.access-card > p { color: var(--muted); line-height: 1.6; }
 .access-card form { display: grid; gap: 0.65rem; margin-top: 1.75rem; }
 .access-card label { font-size: 0.85rem; font-weight: 700; }
 .access-card input, .magic-link input {
   width: 100%;
   padding: 0.75rem;
-  border: 1px solid #c9c1b2;
+  border: 1px solid var(--border);
   border-radius: 0.6rem;
-  background: #fffdf8;
+  background: var(--surface);
 }
 
 .access-card button, .call-button {
   padding: 0.8rem 1.15rem;
   border: 0;
   border-radius: 999px;
-  color: #fffdf8;
-  background: #527058;
+  color: var(--ink);
+  background: var(--accent);
   font-weight: 800;
 }
 
 .dashboard-shell { max-width: 88rem; margin: 0 auto; }
 .dashboard-header { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; margin-bottom: 2rem; }
-.header-subtitle { margin: 0.6rem 0 0; color: #637068; }
+.header-subtitle { margin: 0.6rem 0 0; color: var(--muted); }
 .header-actions { display: flex; gap: 0.65rem; align-items: center; }
 .call-button:disabled { cursor: not-allowed; opacity: 0.52; }
-.text-button, .secondary-button { border: 1px solid #bbb4a6; border-radius: 999px; color: #4c5d50; background: transparent; font-weight: 700; }
+.text-button, .secondary-button { border: 1px solid var(--border); border-radius: 999px; color: var(--primary); background: transparent; font-weight: 700; }
+.text-button:hover, .secondary-button:hover { background: color-mix(in srgb, var(--soft-lilac) 35%, transparent); }
 .text-button { padding: 0.7rem 0.9rem; }
 .secondary-button { padding: 0.45rem 0.7rem; font-size: 0.8rem; }
 
 .dashboard-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 1rem; }
-.overview-card { grid-column: span 4; min-height: 14rem; padding: 1.3rem; border: 1px solid #d7d0c1; border-radius: 1rem; background: rgb(255 253 248 / 88%); box-shadow: 0 0.75rem 2rem rgb(73 61 42 / 6%); }
+.overview-card { grid-column: span 4; min-height: 14rem; padding: 1.3rem; border: 1px solid var(--border); border-radius: 1rem; background: color-mix(in srgb, var(--surface) 88%, transparent); box-shadow: 0 0.75rem 2rem color-mix(in srgb, var(--primary-dark) 6%, transparent); }
 .profile-card, .actions-card { grid-column: span 4; }
 .card-heading, .contact-list li { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; }
-.count-pill { padding: 0.3rem 0.55rem; border-radius: 999px; color: #49664e; background: #e6eee2; font-size: 0.75rem; font-weight: 800; }
-.privacy-note, .empty-state, .loading-note, .call-status { color: #68736a; font-size: 0.9rem; line-height: 1.55; }
-.call-status { margin: -1rem 0 1.25rem; color: #49664e; font-weight: 700; }
+.count-pill { padding: 0.3rem 0.55rem; border-radius: 999px; color: var(--primary-dark); background: var(--soft-lilac); font-size: 0.75rem; font-weight: 800; }
+.privacy-note, .empty-state, .loading-note, .call-status { color: var(--muted); font-size: 0.9rem; line-height: 1.55; }
+.call-status { margin: -1rem 0 1.25rem; color: var(--calm); font-weight: 700; }
 .item-list, .contact-list { display: grid; gap: 0.7rem; margin: 1.2rem 0 0; padding: 0; list-style: none; }
-.item-list li { display: grid; gap: 0.2rem; padding: 0.8rem; border-radius: 0.7rem; background: #f0eee7; }
+.item-list li { display: grid; gap: 0.2rem; padding: 0.8rem; border-radius: 0.7rem; background: var(--subtle-surface); }
 .item-list strong, .contact-list strong { font-size: 0.9rem; }
-.item-list span, .contact-list span, .magic-link span { color: #6d766f; font-size: 0.78rem; }
-.item-list .warning-note { color: #8a4f18; font-weight: 700; }
-.contact-list li { padding: 0.75rem 0; border-bottom: 1px solid #e4dfd5; }
+.item-list span, .contact-list span, .magic-link span { color: var(--muted); font-size: 0.78rem; }
+.item-list .warning-note { color: var(--attention); font-weight: 700; }
+.contact-list li { padding: 0.75rem 0; border-bottom: 1px solid var(--border); }
 .contact-list li:last-child { border-bottom: 0; }
 .contact-list li > div { display: grid; gap: 0.15rem; }
-.magic-link { display: grid; gap: 0.5rem; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #e4dfd5; }
+.magic-link { display: grid; gap: 0.5rem; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
 .enrollment-card { display: grid; gap: 0.65rem; }
 .enrollment-card select, .compact-form input {
   width: 100%;
   padding: 0.65rem;
-  border: 1px solid #c9c1b2;
+  border: 1px solid var(--border);
   border-radius: 0.55rem;
-  background: #fffdf8;
+  background: var(--surface);
 }
-.compact-form { display: grid; gap: 0.5rem; margin-top: 0.6rem; padding-top: 0.8rem; border-top: 1px solid #e4dfd5; }
+.compact-form { display: grid; gap: 0.5rem; margin-top: 0.6rem; padding-top: 0.8rem; border-top: 1px solid var(--border); }
 .compact-form strong { font-size: 0.85rem; }
 .contact-actions { display: grid; justify-items: end; gap: 0.4rem; }
-.attestation-check { max-width: 13rem; color: #68736a; font-size: 0.72rem; line-height: 1.3; text-align: right; }
+.attestation-check { max-width: 13rem; color: var(--muted); font-size: 0.72rem; line-height: 1.3; text-align: right; }
 .attestation-check input { margin-right: 0.35rem; }
-.form-error { color: #a33d38; }
-.consent-check { display: flex; gap: 0.55rem; align-items: flex-start; color: #4e5c51; font-size: 0.84rem; line-height: 1.45; }
+.form-error { color: var(--attention); font-weight: 700; }
+.consent-check { display: flex; gap: 0.55rem; align-items: flex-start; color: var(--ink); font-size: 0.84rem; line-height: 1.45; }
 .consent-check input { margin-top: 0.2rem; }
-.legal-note { color: #68736a; font-size: 0.8rem; line-height: 1.45; }
-.legal-note a { color: #375f41; }
-.care-summary { display: grid; gap: 0.55rem; margin-top: 0.55rem; color: #4e5c51; }
+.legal-note { color: var(--muted); font-size: 0.8rem; line-height: 1.45; }
+.legal-note a { color: var(--primary); }
+.care-summary { display: grid; gap: 0.55rem; margin-top: 0.55rem; color: var(--ink); }
 .care-summary strong { display: block; font-size: 0.82rem; }
 .care-summary ul { margin: 0.22rem 0 0; padding-left: 1.1rem; }
 
