@@ -150,7 +150,7 @@ test("allows an admin to view a person overview", async () => {
   }
 });
 
-test("allows an admin to remove a selected person while preserving one enrollment", async () => {
+test("allows an admin to remove every person including the last enrollment", async () => {
   const fixture = await createDashboardServer();
   try {
     const removed = await fetch(`${fixture.url}/api/dashboard/people/person-b`, {
@@ -160,13 +160,13 @@ test("allows an admin to remove a selected person while preserving one enrollmen
     assert.equal(removed.status, 204);
     assert.equal(fixture.repositories.getPerson("person-b"), null);
 
-    const cannotRemoveLast = await fetch(`${fixture.url}/api/dashboard/people/person-a`, {
+    const removedLast = await fetch(`${fixture.url}/api/dashboard/people/person-a`, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${adminToken}` },
     });
-    assert.equal(cannotRemoveLast.status, 409);
-    const body = (await cannotRemoveLast.json()) as { error: string };
-    assert.match(body.error, /add another person/i);
+    assert.equal(removedLast.status, 204);
+    assert.equal(fixture.repositories.getPerson("person-a"), null);
+    assert.equal(fixture.repositories.listPeople().length, 0);
   } finally {
     fixture.close();
   }

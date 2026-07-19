@@ -260,13 +260,27 @@ function DashboardApp() {
         const people = nextPrincipal.role === "admin"
           ? await dashboardJson<{ people: DashboardPersonList }>("/api/dashboard/people", token)
           : null;
+
+        if (nextPrincipal.role === "admin" && (people?.people.length ?? 0) === 0) {
+          if (cancelled || requestId !== overviewRequestId.current) return;
+          setPrincipal(nextPrincipal);
+          setAdminPeople([]);
+          setOverview(null);
+          setSelectedPersonId(null);
+          setIsAddingPerson(true);
+          setError(null);
+          return;
+        }
+
         // Admin /me still names the configured demo id; after removal that row may be gone.
-        // Prefer an explicit selection, then any still-existing people list entry, then /me.
+        // Prefer an explicit selection, then any still-existing people list entry.
         const adminFallbackId = people?.people.find((person) => person.id === selectedPersonId)?.id
           ?? people?.people.find((person) => person.id === nextPrincipal.personId)?.id
           ?? people?.people[0]?.id
-          ?? nextPrincipal.personId;
-        const nextPersonId = nextPrincipal.role === "admin" ? adminFallbackId : nextPrincipal.personId;
+          ?? null;
+        const nextPersonId = nextPrincipal.role === "admin"
+          ? adminFallbackId
+          : nextPrincipal.personId;
         if (!nextPersonId) {
           throw new DashboardError("Add a person to start using the dashboard.", 404);
         }
@@ -279,7 +293,7 @@ function DashboardApp() {
         setOverview(nextOverview);
         if (people) {
           setAdminPeople(people.people);
-          if (nextPrincipal.role === "admin" && selectedPersonId !== nextPersonId) {
+          if (selectedPersonId !== nextPersonId) {
             setSelectedPersonId(nextPersonId);
           }
         }
@@ -467,15 +481,11 @@ function DashboardApp() {
 
   const removeSelectedPerson = async () => {
     if (!personId || !overview) return;
-    const nextPerson = adminPeople.find((person) => person.id !== personId);
-    if (!nextPerson) {
-      setError("Add another person before removing this one.");
-      return;
-    }
     if (!window.confirm(`Remove ${overview.person.displayName}? This removes their trusted contacts, calls, and saved information.`)) {
       return;
     }
 
+    const remaining = adminPeople.filter((person) => person.id !== personId);
     setIsRemovingPerson(true);
     setError(null);
     try {
@@ -486,14 +496,21 @@ function DashboardApp() {
         }
       });
       setOverview(null);
-      setAdminPeople((people) => people.filter((person) => person.id !== personId));
-      setSelectedPersonId(nextPerson.id);
+      setAdminPeople(remaining);
       setSelectedTrustedContactId("");
       setAttestedContactIds({});
       setContactAttestationErrorId(null);
       setMagicLink(null);
       setOptInLink(null);
       setOptInInvitation(null);
+      setIsEditingPhone(false);
+      if (remaining[0]) {
+        setIsAddingPerson(false);
+        setSelectedPersonId(remaining[0].id);
+      } else {
+        setSelectedPersonId(null);
+        setIsAddingPerson(true);
+      }
       setRefreshVersion((current) => current + 1);
     } catch (removeError) {
       setError(removeError instanceof Error ? removeError.message : "Unable to remove this person.");
@@ -615,7 +632,7 @@ function DashboardApp() {
       <header className="dashboard-header">
         <div>
           <p className="eyebrow">Iris companion</p>
-          <h1>{overview?.person.displayName ?? "Loading Iris…"}</h1>
+          <h1>{overview?.person.displayName ?? (principal?.role === "admin" ? "Iris" : "Loading Iris…")}</h1>
           <p className="header-subtitle">
             {principal?.role === "admin"
               ? "Operator view"
@@ -647,7 +664,7 @@ function DashboardApp() {
         </p>
       )}
 
-      {overview && (
+      {(overview || (principal?.role === "admin" && (isAddingPerson || adminPeople.length === 0))) && (
         <div className="dashboard-grid">
           {principal?.role === "admin" && (
             <section className="overview-card enrollment-card">
@@ -662,7 +679,7 @@ function DashboardApp() {
                 <label className="sr-only" htmlFor="person-select">Person</label>
                 <select
                   id="person-select"
-                  value={isAddingPerson ? ADD_PERSON_OPTION : personId}
+                  value={isAddingPerson || adminPeople.length === 0 ? ADD_PERSON_OPTION : personId}
                   onChange={(event) => {
                     const value = event.target.value;
                     if (value === ADD_PERSON_OPTION) {
@@ -681,11 +698,11 @@ function DashboardApp() {
                   {adminPeople.map((person) => <option key={person.id} value={person.id}>{person.displayName}</option>)}
                   <option value={ADD_PERSON_OPTION}>Add a person…</option>
                 </select>
-                {!isAddingPerson && (
+                {!isAddingPerson && overview && (
                   <button
                     className="remove-person-button"
                     type="button"
-                    disabled={adminPeople.length <= 1 || isRemovingPerson}
+                    disabled={isRemovingPerson}
                     onClick={() => void removeSelectedPerson()}
                   >
                     {isRemovingPerson ? "Removing…" : "Remove person"}
@@ -719,6 +736,8 @@ function DashboardApp() {
               )}
             </section>
           )}
+          {overview && (
+            <>
           <section className="overview-card profile-card">
             <div className="card-header">
               <p className="card-kicker">Person</p>
@@ -1108,6 +1127,8 @@ function DashboardApp() {
               <p className="empty-state">Approved actions will appear here before anything is sent.</p>
             )}
           </section>
+            </>
+          )}
         </div>
       )}
     </main>

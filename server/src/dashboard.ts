@@ -263,10 +263,6 @@ export function createDashboardRouter(context: DashboardContext) {
       response.status(404).json({ error: "Person not found." });
       return;
     }
-    if (context.repositories.listPeople().length <= 1) {
-      response.status(409).json({ error: "Add another person before removing this one." });
-      return;
-    }
     if (context.repositories.findActiveCall(person.id)) {
       response.status(409).json({ error: "This person has an active call and cannot be removed yet." });
       return;
