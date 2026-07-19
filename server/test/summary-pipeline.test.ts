@@ -118,6 +118,31 @@ test("retains no care section without sharing consent and discards recognizable 
     assert.equal(card.careSummary, null);
     assert.equal(JSON.stringify(card).includes("4111 1111 1111 1111"), false);
 
+    const discardedIdentifiers = [
+      { id: "call-email", marker: "avery@example.com", care: { recap: "Avery shared contact info.", moodAndConcerns: ["Avery said avery@example.com."], irisSuggestedNextSteps: [] } },
+      { id: "call-phone", marker: "+15551234567", care: { recap: "Avery shared a phone number.", moodAndConcerns: ["Avery said +15551234567."], irisSuggestedNextSteps: [] } },
+      { id: "call-address", marker: "123 Main Street", care: { recap: "Avery shared where they were.", moodAndConcerns: ["Avery said 123 Main Street."], irisSuggestedNextSteps: [] } },
+      { id: "call-dob", marker: "03/14/1948", care: { recap: "Avery shared a birthday.", moodAndConcerns: ["Avery said date of birth 03/14/1948."], irisSuggestedNextSteps: [] } },
+    ] as const;
+    for (const fixtureCase of discardedIdentifiers) {
+      repositories.createCall({ id: fixtureCase.id, personId: "person-a", status: "completed" });
+      await new CallSummaryPipeline(repositories, "key", "safe-id", responseFor(fixtureCase.care)).process({
+        callId: fixtureCase.id, personId: "person-a", transcript: [{ speaker: "user", text: "I garden." }],
+      });
+      const stored = JSON.parse(repositories.listCalls("person-a").find((call) => call.id === fixtureCase.id)!.summaryJson!) as { careSummary: unknown };
+      assert.equal(stored.careSummary, null);
+      assert.equal(JSON.stringify(stored).includes(fixtureCase.marker), false);
+    }
+
+    repositories.createCall({ id: "call-street-name", personId: "person-a", status: "completed" });
+    await new CallSummaryPipeline(repositories, "key", "safe-id", responseFor({
+      recap: "Avery walked near Main Street.",
+      moodAndConcerns: ["Avery felt unsettled near Main Street."],
+      irisSuggestedNextSteps: ["Iris suggested resting at home."],
+    })).process({ callId: "call-street-name", personId: "person-a", transcript: [{ speaker: "user", text: "I garden." }] });
+    const streetName = JSON.parse(repositories.listCalls("person-a").find((call) => call.id === "call-street-name")!.summaryJson!) as { careSummary: { recap: string } | null };
+    assert.equal(streetName.careSummary?.recap, "Avery walked near Main Street.");
+
     repositories.createCall({ id: "call-malformed-care", personId: "person-a", status: "completed" });
     await new CallSummaryPipeline(repositories, "key", "safe-id", responseFor({
       recap: "", moodAndConcerns: "not an array", irisSuggestedNextSteps: [],
@@ -125,7 +150,7 @@ test("retains no care section without sharing consent and discards recognizable 
     const malformedCare = repositories.listCalls("person-a").find((call) => call.id === "call-malformed-care");
     assert.equal(malformedCare?.summaryState, "ready");
     assert.equal((JSON.parse(malformedCare!.summaryJson!) as { careSummary: unknown }).careSummary, null);
-    assert.equal(requests, 4);
+    assert.equal(requests, 9);
   } finally { closeDatabase(database); }
 });
 

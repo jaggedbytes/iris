@@ -108,6 +108,14 @@ function valid(value: unknown): value is CallSummary {
 
 const SSN_PATTERN = /\b\d{3}-?\d{2}-?\d{4}\b/;
 const PAYMENT_CARD_PATTERN = /\b(?:\d[ -]?){13,19}\b/g;
+// High-confidence only: labeled DOB phrases plus a numeric date, not bare
+// calendar mentions like "on Tuesday" or "in July."
+const DATE_OF_BIRTH_PATTERN = /\b(?:dob|date of birth|born on)\b[:\s-]*\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}/i;
+const EMAIL_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i;
+// E.164 and common North American formatted numbers. Prefer 3-3-4 over SSN's 3-2-4.
+const PHONE_PATTERN = /(?:\+[1-9]\d{7,14}\b|\b(?:\+?1[-.\s]?)?(?:\([2-9]\d{2}\)|[2-9]\d{2})[-.\s]?\d{3}[-.\s]?\d{4}\b)/;
+// House number plus an explicit street-type token; unnumbered street names stay allowed.
+const PHYSICAL_ADDRESS_PATTERN = /\b\d{1,5}\s+(?:[A-Za-z0-9.'-]+\s+){0,4}(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|Lane|Ln\.?|Drive|Dr\.?|Court|Ct\.?|Way)\b/i;
 
 function isLuhnPaymentCard(value: string) {
   const digits = value.replace(/\D/g, "");
@@ -123,7 +131,12 @@ function isLuhnPaymentCard(value: string) {
 
 function hasRecognizableIdentifier(careSummary: CareSummary) {
   const text = [careSummary.recap, ...careSummary.moodAndConcerns, ...careSummary.irisSuggestedNextSteps].join("\n");
-  return SSN_PATTERN.test(text) || [...text.matchAll(PAYMENT_CARD_PATTERN)].some((match) => isLuhnPaymentCard(match[0]));
+  return SSN_PATTERN.test(text)
+    || EMAIL_PATTERN.test(text)
+    || PHONE_PATTERN.test(text)
+    || PHYSICAL_ADDRESS_PATTERN.test(text)
+    || DATE_OF_BIRTH_PATTERN.test(text)
+    || [...text.matchAll(PAYMENT_CARD_PATTERN)].some((match) => isLuhnPaymentCard(match[0]));
 }
 
 function withoutMalformedCareSummary(value: unknown): unknown {
