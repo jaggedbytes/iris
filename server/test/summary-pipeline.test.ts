@@ -35,6 +35,7 @@ test("persists only validated user-stated summary memory", async () => {
       status: "complete", recap: "Avery talked about visiting Ruth.", facts: ["Avery has a friend named Ruth."],
       people: [{ name: "Ruth", relationshipOrContext: "Avery's friend" }], unresolvedTopics: ["Plan a visit with Ruth."],
       recallAnchor: "  your plans to visit Ruth  ",
+      careSummary: null,
     }) }), { status: 200 }));
     await processing;
     const summary = JSON.parse(repositories.listCalls("person-a")[0].summaryJson!) as { facts: string[]; recallAnchor: string | null };
@@ -47,6 +48,84 @@ test("persists only validated user-stated summary memory", async () => {
     assert.equal(JSON.stringify(repositories.listEvents("person-a")).includes("My friend Ruth lives nearby."), false);
     const tables = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND sql LIKE '%transcript%'").all();
     assert.deepEqual(tables, []);
+  } finally { closeDatabase(database); }
+});
+
+test("uses one extraction for a care-only summary when both consents are active", async () => {
+  const { database, repositories } = fixture();
+  repositories.recordConsent({ id: "care-consent", personId: "person-a", kind: "care_summary_sharing", status: "granted", source: "test" });
+  let requests = 0;
+  let requestBody: Record<string, unknown> | undefined;
+  try {
+    await new CallSummaryPipeline(repositories, "key", "safe-id", async (_input, init) => {
+      requests += 1;
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({ output_text: JSON.stringify({
+        status: "complete", recap: "", facts: [], people: [], unresolvedTopics: [], recallAnchor: null,
+        careSummary: {
+          recap: "Avery described a difficult night.",
+          moodAndConcerns: ["Avery said they had a nightmare."],
+          irisSuggestedNextSteps: ["Iris suggested having some breakfast."],
+        },
+      }) }), { status: 200 });
+    }).process({
+      callId: "call-a", personId: "person-a", transcript: [{ speaker: "user", text: "I had a nightmare." }],
+    });
+
+    assert.equal(requests, 1);
+    assert.equal(requestBody?.model, "gpt-5.6-terra");
+    assert.equal(requestBody?.store, false);
+    assert.match(JSON.stringify(requestBody), /dashboard-only/);
+    const summary = JSON.parse(repositories.listCalls("person-a")[0].summaryJson!) as { careSummary: { recap: string }; facts: unknown[] };
+    assert.equal(summary.careSummary.recap, "Avery described a difficult night.");
+    assert.deepEqual(summary.facts, []);
+    assert.equal(repositories.listCalls("person-a")[0].summaryState, "ready");
+    assert.deepEqual(repositories.listMemories("person-a"), []);
+  } finally { closeDatabase(database); }
+});
+
+test("retains no care section without sharing consent and discards recognizable identifiers", async () => {
+  const { database, repositories } = fixture();
+  let requests = 0;
+  const responseFor = (careSummary: unknown) => async () => {
+    requests += 1;
+    return new Response(JSON.stringify({ output_text: JSON.stringify({
+      status: "complete", recap: "Avery talked about gardening.", facts: ["Avery gardens."], people: [], unresolvedTopics: [], recallAnchor: "your garden",
+      careSummary,
+    }) }), { status: 200 });
+  };
+  try {
+    await new CallSummaryPipeline(repositories, "key", "safe-id", responseFor({
+      recap: "Avery felt worried.", moodAndConcerns: ["Avery felt worried."], irisSuggestedNextSteps: ["Iris suggested a break."],
+    })).process({ callId: "call-a", personId: "person-a", transcript: [{ speaker: "user", text: "I garden." }] });
+    assert.equal(requests, 1);
+    assert.equal((JSON.parse(repositories.listCalls("person-a")[0].summaryJson!) as { careSummary: unknown }).careSummary, null);
+
+    repositories.recordConsent({ id: "care-consent", personId: "person-a", kind: "care_summary_sharing", status: "granted", source: "test" });
+    repositories.createCall({ id: "call-sensitive", personId: "person-a", status: "completed" });
+    await new CallSummaryPipeline(repositories, "key", "safe-id", responseFor({
+      recap: "Avery mentioned a number.", moodAndConcerns: ["Avery said 123-45-6789."], irisSuggestedNextSteps: [],
+    })).process({ callId: "call-sensitive", personId: "person-a", transcript: [{ speaker: "user", text: "I garden." }] });
+    const sensitive = JSON.parse(repositories.listCalls("person-a").find((call) => call.id === "call-sensitive")!.summaryJson!) as { careSummary: unknown };
+    assert.equal(sensitive.careSummary, null);
+    assert.equal(JSON.stringify(sensitive).includes("123-45-6789"), false);
+
+    repositories.createCall({ id: "call-card", personId: "person-a", status: "completed" });
+    await new CallSummaryPipeline(repositories, "key", "safe-id", responseFor({
+      recap: "Avery mentioned a number.", moodAndConcerns: ["Avery said 4111 1111 1111 1111."], irisSuggestedNextSteps: [],
+    })).process({ callId: "call-card", personId: "person-a", transcript: [{ speaker: "user", text: "I garden." }] });
+    const card = JSON.parse(repositories.listCalls("person-a").find((call) => call.id === "call-card")!.summaryJson!) as { careSummary: unknown };
+    assert.equal(card.careSummary, null);
+    assert.equal(JSON.stringify(card).includes("4111 1111 1111 1111"), false);
+
+    repositories.createCall({ id: "call-malformed-care", personId: "person-a", status: "completed" });
+    await new CallSummaryPipeline(repositories, "key", "safe-id", responseFor({
+      recap: "", moodAndConcerns: "not an array", irisSuggestedNextSteps: [],
+    })).process({ callId: "call-malformed-care", personId: "person-a", transcript: [{ speaker: "user", text: "I garden." }] });
+    const malformedCare = repositories.listCalls("person-a").find((call) => call.id === "call-malformed-care");
+    assert.equal(malformedCare?.summaryState, "ready");
+    assert.equal((JSON.parse(malformedCare!.summaryJson!) as { careSummary: unknown }).careSummary, null);
+    assert.equal(requests, 4);
   } finally { closeDatabase(database); }
 });
 
@@ -80,16 +159,23 @@ test("leaves an empty transcript not_requested without contacting extraction", a
 test("does not save refused, malformed, or insufficient extraction", async () => {
   const { database, repositories } = fixture();
   try {
-    await new CallSummaryPipeline(repositories, "key", "safe-id", async () => new Response(JSON.stringify({ output_text: '{"status":"insufficient_signal","recap":"","facts":[],"people":[],"unresolvedTopics":[],"recallAnchor":null}' }), { status: 200 })).process({
+    await new CallSummaryPipeline(repositories, "key", "safe-id", async () => new Response(JSON.stringify({ output_text: '{"status":"insufficient_signal","recap":"","facts":[],"people":[],"unresolvedTopics":[],"recallAnchor":null,"careSummary":null}' }), { status: 200 })).process({
       callId: "call-a", personId: "person-a", transcript: [{ speaker: "user", text: "um" }],
     });
     assert.equal(repositories.listCalls("person-a")[0].summaryJson, null);
     assert.equal(repositories.listCalls("person-a")[0].summaryState, "unavailable");
     assert.deepEqual(repositories.listEvents("person-a").find((event) => event.type === "call.summary_unavailable")?.payload, {});
 
+    repositories.createCall({ id: "call-refused", personId: "person-a", status: "completed" });
+    await new CallSummaryPipeline(repositories, "key", "safe-id", async () => new Response(JSON.stringify({ output: [{ content: [{ refusal: "Cannot summarize." }] }] }), { status: 200 })).process({
+      callId: "call-refused", personId: "person-a", transcript: [{ speaker: "user", text: "private words" }],
+    });
+    assert.equal(repositories.listCalls("person-a").find((call) => call.id === "call-refused")?.summaryState, "unavailable");
+    assert.equal(repositories.listCalls("person-a").find((call) => call.id === "call-refused")?.summaryJson, null);
+
     repositories.createCall({ id: "call-malformed", personId: "person-a", status: "completed" });
     await new CallSummaryPipeline(repositories, "key", "safe-id", async () => new Response(JSON.stringify({ output_text: JSON.stringify({
-      status: "complete", recap: "Avery talked about a garden.", facts: [], people: [], unresolvedTopics: [], recallAnchor: 42,
+      status: "complete", recap: "Avery talked about a garden.", facts: [], people: [], unresolvedTopics: [], recallAnchor: 42, careSummary: null,
     }) }), { status: 200 })).process({
       callId: "call-malformed", personId: "person-a", transcript: [{ speaker: "user", text: "I garden." }],
     });
@@ -154,7 +240,7 @@ test("a null recall anchor does not remove an earlier valid anchor", async () =>
 
     await new CallSummaryPipeline(repositories, "key", "safe-id", async () => new Response(JSON.stringify({
       output_text: JSON.stringify({
-        status: "complete", recap: "Avery shared a short update.", facts: [], people: [], unresolvedTopics: [], recallAnchor: null,
+        status: "complete", recap: "Avery shared a short update.", facts: [], people: [], unresolvedTopics: [], recallAnchor: null, careSummary: null,
       }),
     }), { status: 200 })).process({
       callId: "call-b", personId: "person-a", transcript: [{ speaker: "user", text: "Nothing much today." }],
