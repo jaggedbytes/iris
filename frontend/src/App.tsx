@@ -11,6 +11,7 @@ import type { DashboardOverview, DashboardPersonList, DashboardPrincipal } from 
 
 const SESSION_TOKEN_KEY = "iris-dashboard-access-token";
 const DASHBOARD_POLL_INTERVAL_MS = 2_500;
+const ADD_PERSON_OPTION = "__add_person__";
 let capturedOptInToken: string | null | undefined;
 
 function readMagicLinkToken() {
@@ -125,6 +126,7 @@ function DashboardApp() {
   const [copiedLink, setCopiedLink] = useState<"dashboard" | "sms" | null>(null);
   const [adminPeople, setAdminPeople] = useState<DashboardPersonList>([]);
   const [selectedPersonId, setSelectedPersonId] = useState<string | null>(null);
+  const [isAddingPerson, setIsAddingPerson] = useState(false);
   const [newPersonName, setNewPersonName] = useState("");
   const [newPersonPhone, setNewPersonPhone] = useState("");
   const [contactName, setContactName] = useState("");
@@ -255,12 +257,19 @@ function DashboardApp() {
     void (async () => {
       try {
         const nextPrincipal = await dashboardJson<DashboardPrincipal>("/api/dashboard/me", token);
-        const nextPersonId = nextPrincipal.role === "admin"
-          ? selectedPersonId ?? nextPrincipal.personId
-          : nextPrincipal.personId;
         const people = nextPrincipal.role === "admin"
           ? await dashboardJson<{ people: DashboardPersonList }>("/api/dashboard/people", token)
           : null;
+        // Admin /me still names the configured demo id; after removal that row may be gone.
+        // Prefer an explicit selection, then any still-existing people list entry, then /me.
+        const adminFallbackId = people?.people.find((person) => person.id === selectedPersonId)?.id
+          ?? people?.people.find((person) => person.id === nextPrincipal.personId)?.id
+          ?? people?.people[0]?.id
+          ?? nextPrincipal.personId;
+        const nextPersonId = nextPrincipal.role === "admin" ? adminFallbackId : nextPrincipal.personId;
+        if (!nextPersonId) {
+          throw new DashboardError("Add a person to start using the dashboard.", 404);
+        }
         const nextOverview = await dashboardJson<DashboardOverview>(
           `/api/dashboard/people/${nextPersonId}/overview`,
           token,
@@ -268,7 +277,12 @@ function DashboardApp() {
         if (cancelled || requestId !== overviewRequestId.current) return;
         setPrincipal(nextPrincipal);
         setOverview(nextOverview);
-        if (people) setAdminPeople(people.people);
+        if (people) {
+          setAdminPeople(people.people);
+          if (nextPrincipal.role === "admin" && selectedPersonId !== nextPersonId) {
+            setSelectedPersonId(nextPersonId);
+          }
+        }
         setError(null);
       } catch (loadError) {
         if (cancelled || requestId !== overviewRequestId.current) return;
@@ -328,6 +342,7 @@ function DashboardApp() {
     setMagicLink(null);
     setOptInLink(null);
     setSelectedPersonId(null);
+    setIsAddingPerson(false);
     setAdminPeople([]);
   };
 
@@ -404,6 +419,8 @@ function DashboardApp() {
       });
       setNewPersonName("");
       setNewPersonPhone("");
+      setNewPersonFormError(null);
+      setIsAddingPerson(false);
       setOverview(null);
       setSelectedPersonId(result.person.id);
       setSelectedTrustedContactId("");
@@ -641,52 +658,65 @@ function DashboardApp() {
               </div>
               <div className="person-picker">
                 <strong>Person</strong>
-                <span>Select who will receive calls, invitations, and other actions.</span>
+                <span>{isAddingPerson ? "Fill in the form below, then save to add them to Iris." : "Select who will receive calls, invitations, and other actions."}</span>
                 <label className="sr-only" htmlFor="person-select">Person</label>
                 <select
                   id="person-select"
-                  value={personId}
+                  value={isAddingPerson ? ADD_PERSON_OPTION : personId}
                   onChange={(event) => {
-                    setSelectedPersonId(event.target.value);
+                    const value = event.target.value;
+                    if (value === ADD_PERSON_OPTION) {
+                      setIsAddingPerson(true);
+                      setNewPersonFormError(null);
+                      return;
+                    }
+                    setIsAddingPerson(false);
+                    setNewPersonFormError(null);
+                    setSelectedPersonId(value);
                     setOptInLink(null);
                     setOptInInvitation(null);
                     setMagicLink(null);
                   }}
                 >
                   {adminPeople.map((person) => <option key={person.id} value={person.id}>{person.displayName}</option>)}
+                  <option value={ADD_PERSON_OPTION}>Add a person…</option>
                 </select>
-                <button
-                  className="remove-person-button"
-                  type="button"
-                  disabled={adminPeople.length <= 1 || isRemovingPerson}
-                  onClick={() => void removeSelectedPerson()}
-                >
-                  {isRemovingPerson ? "Removing…" : "Remove person"}
-                </button>
+                {!isAddingPerson && (
+                  <button
+                    className="remove-person-button"
+                    type="button"
+                    disabled={adminPeople.length <= 1 || isRemovingPerson}
+                    onClick={() => void removeSelectedPerson()}
+                  >
+                    {isRemovingPerson ? "Removing…" : "Remove person"}
+                  </button>
+                )}
               </div>
-              <form className="compact-form" onSubmit={createPerson}>
-                <strong>Add a person</strong>
-                <label className="form-field">
-                  Name
-                  <input required placeholder="e.g. Avery Morgan" value={newPersonName} onChange={(event) => {
-                    setNewPersonName(event.target.value);
-                    if (newPersonErrorField === "name") setNewPersonFormError(null);
-                  }} />
-                  {newPersonFormError && newPersonErrorField === "name" && <p className="form-validation-error" role="alert">{newPersonFormError}</p>}
-                </label>
-                <label className="form-field">
-                  Phone number
-                  <span>Optional for a dashboard-only profile. Add a number before Iris can call this person.</span>
-                  <input placeholder="E.164, e.g. +15551234567" value={newPersonPhone} onChange={(event) => {
-                    setNewPersonPhone(event.target.value);
-                    if (newPersonErrorField === "phone") setNewPersonFormError(null);
-                  }} />
-                  {newPersonFormError && newPersonErrorField === "phone" && <p className="form-validation-error" role="alert">{newPersonFormError}</p>}
-                </label>
-                <button className="secondary-button create-person-button" type="submit" disabled={isCreatingPerson}>
-                  {isCreatingPerson ? "Adding…" : "Add person"}
-                </button>
-              </form>
+              {isAddingPerson && (
+                <form className="compact-form" onSubmit={createPerson}>
+                  <strong>Add a person</strong>
+                  <label className="form-field">
+                    Name
+                    <input required placeholder="e.g. Avery Morgan" value={newPersonName} onChange={(event) => {
+                      setNewPersonName(event.target.value);
+                      if (newPersonErrorField === "name") setNewPersonFormError(null);
+                    }} />
+                    {newPersonFormError && newPersonErrorField === "name" && <p className="form-validation-error" role="alert">{newPersonFormError}</p>}
+                  </label>
+                  <label className="form-field">
+                    Phone number
+                    <span>Optional for a dashboard-only profile. Add a number before Iris can call this person.</span>
+                    <input placeholder="E.164, e.g. +15551234567" value={newPersonPhone} onChange={(event) => {
+                      setNewPersonPhone(event.target.value);
+                      if (newPersonErrorField === "phone") setNewPersonFormError(null);
+                    }} />
+                    {newPersonFormError && newPersonErrorField === "phone" && <p className="form-validation-error" role="alert">{newPersonFormError}</p>}
+                  </label>
+                  <button className="secondary-button create-person-button" type="submit" disabled={isCreatingPerson}>
+                    {isCreatingPerson ? "Adding…" : "Add person"}
+                  </button>
+                </form>
+              )}
             </section>
           )}
           <section className="overview-card profile-card">
