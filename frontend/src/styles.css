@@ -119,6 +119,46 @@ h2 { margin: 0; font-size: 1.35rem; }
 .form-error { color: var(--attention); font-weight: 700; }
 .consent-check { display: flex; gap: 0.55rem; align-items: flex-start; color: var(--ink); font-size: 0.84rem; line-height: 1.45; }
 .consent-check input { margin-top: 0.2rem; }
+.consent-choices { justify-items: stretch; gap: 1.1rem; }
+.consent-choices .consent-check { align-items: flex-start; gap: 0.75rem; color: var(--muted); }
+.consent-choices .consent-toggle {
+  appearance: none;
+  position: relative;
+  flex: 0 0 auto;
+  width: 2.5rem;
+  height: 1.4rem;
+  margin: 0.1rem 0 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--soft-lilac) 42%, var(--surface));
+  cursor: pointer;
+  transition: background 160ms ease, border-color 160ms ease;
+}
+.consent-choices .consent-toggle::after {
+  position: absolute;
+  top: 50%;
+  left: 0.15rem;
+  display: block;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--primary-dark) 25%, transparent);
+  content: "";
+  transform: translateY(-50%);
+  transition: left 160ms ease, right 160ms ease, transform 160ms ease;
+}
+.consent-choices .consent-toggle:checked { border-color: var(--primary); background: var(--primary); }
+.consent-choices .consent-toggle:checked::after { left: auto; right: 0.15rem; transform: translateY(-50%); }
+.consent-choices .consent-option { display: grid; gap: 0.28rem; min-width: 0; }
+.consent-choices .consent-option-heading { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; color: var(--ink); }
+.consent-choices .consent-option-heading strong { font-size: 0.85rem; }
+.consent-choices .consent-status { flex: 0 0 auto; padding: 0.12rem 0.42rem; border-radius: 999px; color: var(--primary-dark); background: var(--soft-lilac); font-size: 0.7rem; font-weight: 800; line-height: 1.2; }
+.consent-attestation { display: grid; gap: 0.32rem; margin-top: 0.55rem; padding-top: 0.85rem; border-top: 1px solid var(--border); }
+.consent-form-error { margin: 0 0 0 2.9rem; color: var(--attention); font-size: 0.75rem; font-weight: 700; line-height: 1.35; }
+.consent-choices .secondary-button { justify-self: start; }
+.consent-choices .save-consent-button { width: 100%; justify-self: stretch; }
 .legal-note { color: var(--muted); font-size: 0.8rem; line-height: 1.45; }
 .legal-note a { color: var(--primary); }
 .care-summary { display: grid; gap: 0.55rem; margin-top: 0.55rem; color: var(--ink); }

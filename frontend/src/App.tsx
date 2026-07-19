@@ -131,7 +131,10 @@ function DashboardApp() {
   const [isCreatingContact, setIsCreatingContact] = useState(false);
   const [attestedContactIds, setAttestedContactIds] = useState<Record<string, boolean>>({});
   const [consentAttested, setConsentAttested] = useState(false);
-  const [updatingConsent, setUpdatingConsent] = useState<"summary_retention" | "care_summary_sharing" | null>(null);
+  const [draftPrivateMemory, setDraftPrivateMemory] = useState(false);
+  const [draftSharedCare, setDraftSharedCare] = useState(false);
+  const [savingConsents, setSavingConsents] = useState(false);
+  const [consentFormError, setConsentFormError] = useState<string | null>(null);
   const [isCallRequesting, setIsCallRequesting] = useState(false);
   const [dispatchingActionId, setDispatchingActionId] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
@@ -147,23 +150,55 @@ function DashboardApp() {
     return "";
   }, [overview, principal]);
   const careConsents = overview?.consents;
+  const consentDirty = Boolean(
+    careConsents
+    && (draftPrivateMemory !== careConsents.summaryRetention
+      || draftSharedCare !== careConsents.careSummarySharing),
+  );
 
-  const updateConsent = async (kind: "summary_retention" | "care_summary_sharing", status: "granted" | "revoked") => {
-    if (!personId || !consentAttested) return;
-    setUpdatingConsent(kind);
+  useEffect(() => {
+    if (!careConsents) return;
+    setDraftPrivateMemory(careConsents.summaryRetention);
+    setDraftSharedCare(careConsents.careSummarySharing);
+    setConsentAttested(false);
+    setConsentFormError(null);
+  }, [personId, careConsents?.summaryRetention, careConsents?.careSummarySharing]);
+
+  const saveConsents = async () => {
+    if (!personId || !careConsents || !consentDirty) return;
+    if (!consentAttested) {
+      setConsentFormError(`Confirm that ${overview?.person.displayName ?? "this person"} agreed to these choices before saving.`);
+      return;
+    }
+    const wantPrivateMemory = draftPrivateMemory;
+    const wantSharedCare = draftSharedCare && draftPrivateMemory;
+    setSavingConsents(true);
+    setConsentFormError(null);
     setError(null);
     try {
-      await dashboardJson(`/api/dashboard/people/${personId}/consents/${kind}`, token, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status, operatorAttested: true }),
-      });
+      const postConsent = (kind: "summary_retention" | "care_summary_sharing", status: "granted" | "revoked") =>
+        dashboardJson(`/api/dashboard/people/${personId}/consents/${kind}`, token, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status, operatorAttested: true }),
+        });
+
+      if (careConsents.careSummarySharing && !wantSharedCare) {
+        await postConsent("care_summary_sharing", "revoked");
+      }
+      if (careConsents.summaryRetention !== wantPrivateMemory) {
+        await postConsent("summary_retention", wantPrivateMemory ? "granted" : "revoked");
+      }
+      if (!careConsents.careSummarySharing && wantSharedCare) {
+        await postConsent("care_summary_sharing", "granted");
+      }
+
       setConsentAttested(false);
       setRefreshVersion((version) => version + 1);
     } catch (consentError) {
       setError(consentError instanceof Error ? consentError.message : "Unable to update consent.");
     } finally {
-      setUpdatingConsent(null);
+      setSavingConsents(false);
     }
   };
 
@@ -489,41 +524,71 @@ function DashboardApp() {
             <p className="card-kicker">Person</p>
             <h2>{overview.person.displayName}</h2>
             <p>{phoneNumberLabel(overview.person)}</p>
-            <p className="privacy-note">Only consented summaries are retained. Call audio and raw transcripts are not saved.</p>
+            <p className="privacy-note">Choose what Iris remembers and what your care circle can see. Iris never saves raw audio or full transcripts.</p>
             {principal?.role === "admin" && careConsents && (
-              <div className="compact-form">
-                <strong>Care recap consent</strong>
-                <span>Summary retention: {careConsents.summaryRetention ? "active" : "not active"}</span>
-                <span>Care sharing: {careConsents.careSummarySharing ? "active" : "not active"}</span>
-                <label className="attestation-check">
-                  <input type="checkbox" checked={consentAttested} onChange={(event) => setConsentAttested(event.target.checked)} />
-                  I confirm {overview.person.displayName} agreed to this consent change.
+              <div className="compact-form consent-choices">
+                <strong>Conversation preferences</strong>
+                <label className="consent-check">
+                  <input
+                    className="consent-toggle"
+                    type="checkbox"
+                    checked={draftPrivateMemory}
+                    onChange={(event) => {
+                      const enabled = event.target.checked;
+                      setDraftPrivateMemory(enabled);
+                      if (!enabled) setDraftSharedCare(false);
+                    }}
+                  />
+                  <span className="consent-option">
+                    <span className="consent-option-heading">
+                      <strong>Private memory</strong>
+                      <span className="consent-status" aria-label={careConsents.summaryRetention ? "Currently on" : "Currently off"}>{careConsents.summaryRetention ? "On" : "Off"}</span>
+                    </span>
+                    <span>Helps Iris remember helpful details between calls. Only Iris uses this.</span>
+                  </span>
                 </label>
-                <div className="contact-actions">
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    disabled={!consentAttested || updatingConsent !== null || careConsents.careSummarySharing}
-                    onClick={() => void updateConsent("summary_retention", careConsents.summaryRetention ? "revoked" : "granted")}
-                  >
-                    {updatingConsent === "summary_retention"
-                      ? "Saving…"
-                      : careConsents.careSummarySharing
-                        ? "Revoke care sharing first"
-                        : careConsents.summaryRetention
-                          ? "Revoke summary retention"
-                          : "Grant summary retention"}
-                  </button>
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    disabled={!consentAttested || updatingConsent !== null || (!careConsents.summaryRetention && !careConsents.careSummarySharing)}
-                    onClick={() => void updateConsent("care_summary_sharing", careConsents.careSummarySharing ? "revoked" : "granted")}
-                  >
-                    {updatingConsent === "care_summary_sharing" ? "Saving…" : careConsents.careSummarySharing ? "Revoke care sharing" : "Grant care sharing"}
-                  </button>
+                <label className="consent-check">
+                  <input
+                    className="consent-toggle"
+                    type="checkbox"
+                    checked={draftSharedCare}
+                    onChange={(event) => {
+                      const enabled = event.target.checked;
+                      setDraftSharedCare(enabled);
+                      if (enabled) setDraftPrivateMemory(true);
+                    }}
+                  />
+                  <span className="consent-option">
+                    <span className="consent-option-heading">
+                      <strong>Shared care recaps</strong>
+                      <span className="consent-status" aria-label={careConsents.careSummarySharing ? "Currently on" : "Currently off"}>{careConsents.careSummarySharing ? "On" : "Off"}</span>
+                    </span>
+                    <span>Lets you and trusted contacts see gentle updates from Iris. Requires private memory.</span>
+                  </span>
+                </label>
+                <div className="consent-attestation">
+                  <label className="consent-check">
+                    <input
+                      className="consent-toggle"
+                      type="checkbox"
+                      checked={consentAttested}
+                      onChange={(event) => {
+                        setConsentAttested(event.target.checked);
+                        if (event.target.checked) setConsentFormError(null);
+                      }}
+                    />
+                    <span>I confirm {overview.person.displayName} agreed to these choices.</span>
+                  </label>
+                  {consentFormError && <p className="consent-form-error" role="alert">{consentFormError}</p>}
                 </div>
-                <span className="privacy-note">Shared care recaps require summary retention.</span>
+                <button
+                  className="secondary-button save-consent-button"
+                  type="button"
+                  disabled={!consentDirty || savingConsents}
+                  onClick={() => void saveConsents()}
+                >
+                  {savingConsents ? "Saving…" : "Save"}
+                </button>
               </div>
             )}
           </section>
