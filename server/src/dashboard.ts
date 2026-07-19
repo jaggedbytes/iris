@@ -252,7 +252,7 @@ export function createDashboardRouter(context: DashboardContext) {
       response.status(201).json({ person });
     } catch (error) {
       if (isPeoplePhoneUniqueViolation(error)) {
-        response.status(409).json({ error: "That phone number is already assigned." });
+        response.status(409).json({ error: "This phone number is already used by an enrolled person." });
         return;
       }
       throw error;
@@ -303,7 +303,7 @@ export function createDashboardRouter(context: DashboardContext) {
       response.json({ person });
     } catch (error) {
       if (isPeoplePhoneUniqueViolation(error)) {
-        response.status(409).json({ error: "That phone number is already assigned." });
+        response.status(409).json({ error: "This phone number is already used by an enrolled person." });
         return;
       }
       throw error;

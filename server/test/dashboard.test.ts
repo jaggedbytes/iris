@@ -175,6 +175,14 @@ test("allows an admin to remove every person including the last enrollment", asy
 test("allows an admin to add or correct a person's phone number", async () => {
   const fixture = await createDashboardServer();
   try {
+    const duplicateCreate = await fetch(`${fixture.url}/api/dashboard/people`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ displayName: "Casey", phoneE164: "+15550009999" }),
+    });
+    assert.equal(duplicateCreate.status, 409);
+    assert.match(((await duplicateCreate.json()) as { error: string }).error, /already used by an enrolled person/i);
+
     const added = await fetch(`${fixture.url}/api/dashboard/people/person-b/phone`, {
       method: "PATCH",
       headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" },
@@ -197,6 +205,7 @@ test("allows an admin to add or correct a person's phone number", async () => {
       body: JSON.stringify({ phoneE164: "+15550009999" }),
     });
     assert.equal(duplicate.status, 409);
+    assert.match(((await duplicate.json()) as { error: string }).error, /already used by an enrolled person/i);
   } finally {
     fixture.close();
   }
@@ -213,6 +222,13 @@ test("keeps trusted-contact phone numbers unique and reports conflicts", async (
     });
     assert.equal(created.status, 201);
 
+    const sameAsEnrolledPerson = await fetch(`${fixture.url}/api/dashboard/people/person-a/trusted-contacts`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ displayName: "Drew", relationship: "friend", phoneE164: "+15550009999" }),
+    });
+    assert.equal(sameAsEnrolledPerson.status, 201);
+
     const duplicate = await fetch(`${fixture.url}/api/dashboard/people/person-a/trusted-contacts`, {
       method: "POST",
       headers,
@@ -227,6 +243,20 @@ test("keeps trusted-contact phone numbers unique and reports conflicts", async (
       body: JSON.stringify({ phoneE164: "+15550008888" }),
     });
     assert.equal(duplicateEdit.status, 409);
+
+    const personSharingTrustedContactPhone = await fetch(`${fixture.url}/api/dashboard/people`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ displayName: "Jordan", phoneE164: "+15550008888" }),
+    });
+    assert.equal(personSharingTrustedContactPhone.status, 201);
+
+    const duplicatePersonEdit = await fetch(`${fixture.url}/api/dashboard/people/person-b/phone`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ phoneE164: "+15550008888" }),
+    });
+    assert.equal(duplicatePersonEdit.status, 409);
   } finally {
     fixture.close();
   }
@@ -309,7 +339,7 @@ test("limits enrollment drafting and opt-in invitations to operators", async () 
     });
     assert.equal(duplicatePhone.status, 409);
     const duplicateBody = (await duplicatePhone.json()) as { error: string };
-    assert.match(duplicateBody.error, /already assigned/i);
+    assert.match(duplicateBody.error, /already used by an enrolled person/i);
 
     const badContact = await fetch(`${fixture.url}/api/dashboard/people/${person.person.id}/trusted-contacts`, {
       method: "POST",
