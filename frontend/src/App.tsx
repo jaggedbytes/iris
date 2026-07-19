@@ -866,7 +866,7 @@ function OptInPage() {
 
   return (
     <main className="access-shell">
-      <section className="access-card opt-in-card" aria-labelledby="opt-in-title">
+      <section className="access-card" aria-labelledby="opt-in-title">
         <p className="eyebrow">Iris companion</p>
         <h1 id="opt-in-title">Care text opt-in</h1>
         {status === "loading" && <p>Checking your invitation…</p>}

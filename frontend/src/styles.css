@@ -19,18 +19,6 @@
 
 @layer base {
   :root {
-    --ink: var(--color-ink);
-    --primary: var(--color-primary);
-    --primary-dark: var(--color-primary-dark);
-    --surface: var(--color-surface);
-    --page-bg: var(--color-page);
-    --soft-lilac: var(--color-lilac);
-    --accent: var(--color-accent);
-    --calm: var(--color-calm);
-    --attention: var(--color-attention);
-    --border: var(--color-border);
-    --muted: var(--color-muted);
-    --subtle-surface: var(--color-subtle);
     color: var(--color-ink);
     background: var(--color-page);
     font-family: ui-sans-serif, system-ui, sans-serif;
@@ -158,11 +146,6 @@
     background: color-mix(in srgb, var(--color-surface) 88%, transparent);
   }
 
-  .profile-card,
-  .actions-card {
-    @apply col-span-4 max-[820px]:col-span-6 max-[560px]:col-span-12;
-  }
-
   .eyebrow,
   .card-kicker {
     @apply mb-2 text-[0.72rem] font-extrabold tracking-[0.12em] text-calm uppercase;
@@ -249,7 +232,7 @@
 
   /* Person */
   .profile-card {
-    @apply order-2 grid content-start gap-[0.55rem];
+    @apply order-2 col-span-4 grid content-start gap-[0.55rem] max-[820px]:col-span-6 max-[560px]:col-span-12;
   }
 
   .person-phone {
@@ -300,8 +283,46 @@
     @apply ml-[2.9rem] text-[0.75rem] leading-snug font-bold text-attention;
   }
 
-  .consent-choices .secondary-button {
-    @apply justify-self-start;
+  /* Consent toggle: pseudo-element knob stays custom. */
+  input.consent-toggle {
+    appearance: none;
+    position: relative;
+    flex: 0 0 auto;
+    width: 2.5rem;
+    height: 1.4rem;
+    margin: 0.05rem 0 0;
+    padding: 0;
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--color-lilac) 42%, var(--color-surface));
+    cursor: pointer;
+    transition: background 160ms ease, border-color 160ms ease;
+  }
+
+  .consent-toggle::after {
+    position: absolute;
+    top: 50%;
+    left: 0.15rem;
+    display: block;
+    width: 1rem;
+    height: 1rem;
+    border-radius: 50%;
+    background: var(--color-surface);
+    box-shadow: 0 1px 2px color-mix(in srgb, var(--color-primary-dark) 25%, transparent);
+    content: "";
+    transform: translateY(-50%);
+    transition: left 160ms ease, right 160ms ease, transform 160ms ease;
+  }
+
+  .consent-toggle:checked {
+    border-color: var(--color-primary);
+    background: var(--color-primary);
+  }
+
+  .consent-toggle:checked::after {
+    left: auto;
+    right: 0.15rem;
+    transform: translateY(-50%);
   }
 
   /* Trusted contacts */
@@ -368,7 +389,7 @@
 
   /* Actions */
   .actions-card {
-    @apply order-4;
+    @apply order-4 col-span-4 max-[820px]:col-span-6 max-[560px]:col-span-12;
   }
 
   /* Recent calls + timeline lists */
@@ -420,51 +441,4 @@
   .legal-note a {
     @apply text-primary;
   }
-
-  .sr-only {
-    @apply absolute m-[-1px] h-px w-px overflow-hidden border-0 p-0 whitespace-nowrap;
-    clip: rect(0, 0, 0, 0);
-  }
-}
-
-/* Consent toggle: pseudo-element knob stays custom (not expressible cleanly via utilities). */
-input.consent-toggle {
-  appearance: none;
-  position: relative;
-  flex: 0 0 auto;
-  width: 2.5rem;
-  height: 1.4rem;
-  margin: 0.05rem 0 0;
-  padding: 0;
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--color-lilac) 42%, var(--color-surface));
-  cursor: pointer;
-  transition: background 160ms ease, border-color 160ms ease;
-}
-
-.consent-toggle::after {
-  position: absolute;
-  top: 50%;
-  left: 0.15rem;
-  display: block;
-  width: 1rem;
-  height: 1rem;
-  border-radius: 50%;
-  background: var(--color-surface);
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--color-primary-dark) 25%, transparent);
-  content: "";
-  transform: translateY(-50%);
-  transition: left 160ms ease, right 160ms ease, transform 160ms ease;
-}
-
-.consent-toggle:checked {
-  border-color: var(--color-primary);
-  background: var(--color-primary);
-}
-
-.consent-toggle:checked::after {
-  left: auto;
-  right: 0.15rem;
-  transform: translateY(-50%);
 }
