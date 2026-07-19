@@ -226,8 +226,12 @@ export function createDashboardRouter(context: DashboardContext) {
     const phoneE164 = rawPhone === undefined || rawPhone === null || rawPhone === ""
       ? null
       : e164Field(rawPhone);
-    if (!displayName || (rawPhone && !phoneE164)) {
-      response.status(400).json({ error: "A display name and, when supplied, an E.164 phone number are required." });
+    if (!displayName) {
+      response.status(400).json({ error: "Enter a name to add this person." });
+      return;
+    }
+    if (rawPhone && !phoneE164) {
+      response.status(400).json({ error: "Use a E.164 format phone number (e.g. +15551234567)." });
       return;
     }
     try {

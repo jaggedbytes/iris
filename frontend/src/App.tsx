@@ -131,11 +131,14 @@ function DashboardApp() {
   const [contactRelationship, setContactRelationship] = useState("");
   const [contactPhone, setContactPhone] = useState("");
   const [isCreatingPerson, setIsCreatingPerson] = useState(false);
+  const [newPersonFormError, setNewPersonFormError] = useState<string | null>(null);
+  const [newPersonErrorField, setNewPersonErrorField] = useState<"name" | "phone">("name");
   const [isCreatingContact, setIsCreatingContact] = useState(false);
   const [isRemovingPerson, setIsRemovingPerson] = useState(false);
   const [isEditingPhone, setIsEditingPhone] = useState(false);
   const [phoneDraft, setPhoneDraft] = useState("");
   const [isSavingPhone, setIsSavingPhone] = useState(false);
+  const [phoneFormError, setPhoneFormError] = useState<string | null>(null);
   const [selectedTrustedContactId, setSelectedTrustedContactId] = useState("");
   const [attestedContactIds, setAttestedContactIds] = useState<Record<string, boolean>>({});
   const [contactAttestationErrorId, setContactAttestationErrorId] = useState<string | null>(null);
@@ -391,6 +394,7 @@ function DashboardApp() {
   const createPerson = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setIsCreatingPerson(true);
+    setNewPersonFormError(null);
     setError(null);
     try {
       const result = await dashboardJson<{ person: { id: string } }>("/api/dashboard/people", token, {
@@ -410,7 +414,9 @@ function DashboardApp() {
       setOptInInvitation(null);
       setRefreshVersion((current) => current + 1);
     } catch (createError) {
-      setError(createError instanceof Error ? createError.message : "Unable to create the person.");
+      const message = createError instanceof Error ? createError.message : "Unable to create the person.";
+      setNewPersonErrorField(/display name|enter a name/i.test(message) ? "name" : "phone");
+      setNewPersonFormError(message);
     } finally {
       setIsCreatingPerson(false);
     }
@@ -483,6 +489,7 @@ function DashboardApp() {
     event.preventDefault();
     if (!personId) return;
     setIsSavingPhone(true);
+    setPhoneFormError(null);
     setError(null);
     try {
       const result = await dashboardJson<{ person: { phoneE164: string } }>(
@@ -505,7 +512,7 @@ function DashboardApp() {
         : person));
       setIsEditingPhone(false);
     } catch (phoneError) {
-      setError(phoneError instanceof Error ? phoneError.message : "Unable to save the phone number.");
+      setPhoneFormError(phoneError instanceof Error ? phoneError.message : "Unable to save the phone number.");
     } finally {
       setIsSavingPhone(false);
     }
@@ -661,12 +668,20 @@ function DashboardApp() {
                 <strong>Add a person</strong>
                 <label className="form-field">
                   Name
-                  <input required placeholder="e.g. Avery Morgan" value={newPersonName} onChange={(event) => setNewPersonName(event.target.value)} />
+                  <input required placeholder="e.g. Avery Morgan" value={newPersonName} onChange={(event) => {
+                    setNewPersonName(event.target.value);
+                    if (newPersonErrorField === "name") setNewPersonFormError(null);
+                  }} />
+                  {newPersonFormError && newPersonErrorField === "name" && <p className="form-validation-error" role="alert">{newPersonFormError}</p>}
                 </label>
                 <label className="form-field">
-                  Phone number <span>(optional)</span>
-                  <input placeholder="E.164, e.g. +15551234567" value={newPersonPhone} onChange={(event) => setNewPersonPhone(event.target.value)} />
+                  Phone number
                   <span>Optional for a dashboard-only profile. Add a number before Iris can call this person.</span>
+                  <input placeholder="E.164, e.g. +15551234567" value={newPersonPhone} onChange={(event) => {
+                    setNewPersonPhone(event.target.value);
+                    if (newPersonErrorField === "phone") setNewPersonFormError(null);
+                  }} />
+                  {newPersonFormError && newPersonErrorField === "phone" && <p className="form-validation-error" role="alert">{newPersonFormError}</p>}
                 </label>
                 <button className="secondary-button create-person-button" type="submit" disabled={isCreatingPerson}>
                   {isCreatingPerson ? "Adding…" : "Add person"}
@@ -686,6 +701,7 @@ function DashboardApp() {
                     type="button"
                     onClick={() => {
                       setPhoneDraft(overview.person.phoneE164 ?? "");
+                      setPhoneFormError(null);
                       setIsEditingPhone(true);
                     }}
                   >
@@ -697,11 +713,18 @@ function DashboardApp() {
                 <form className="phone-editor" onSubmit={savePersonPhone}>
                   <label className="form-field">
                     Phone number
-                    <input required placeholder="E.164, e.g. +15551234567" value={phoneDraft} onChange={(event) => setPhoneDraft(event.target.value)} />
+                    <input required placeholder="E.164, e.g. +15551234567" value={phoneDraft} onChange={(event) => {
+                      setPhoneDraft(event.target.value);
+                      setPhoneFormError(null);
+                    }} />
+                    {phoneFormError && <p className="form-validation-error" role="alert">{phoneFormError}</p>}
                   </label>
                   <div className="phone-editor-actions">
                     <button className="secondary-button" type="submit" disabled={isSavingPhone}>{isSavingPhone ? "Saving…" : "Save"}</button>
-                    <button className="secondary-button" type="button" disabled={isSavingPhone} onClick={() => setIsEditingPhone(false)}>Cancel</button>
+                    <button className="secondary-button" type="button" disabled={isSavingPhone} onClick={() => {
+                      setPhoneFormError(null);
+                      setIsEditingPhone(false);
+                    }}>Cancel</button>
                   </div>
                 </form>
               )}
@@ -952,10 +975,10 @@ function DashboardApp() {
                     <p className="privacy-note">This link is only viewable once. Please copy and send it to the trusted contact before leaving this page.</p>
                     <div className="link-field">
                       <input readOnly value={magicLink} aria-label="New trusted contact link" />
-                      <button className="secondary-button" type="button" onClick={() => void copyLink(magicLink, "dashboard")}>
-                        {copiedLink === "dashboard" ? "Copied" : "Copy"}
-                      </button>
                     </div>
+                    <button className="person-phone-edit link-copy-button" type="button" onClick={() => void copyLink(magicLink, "dashboard")}>
+                      {copiedLink === "dashboard" ? "Copied" : "Copy"}
+                    </button>
                   </>
                 ) : (
                   <p className="privacy-note">An active link is still valid, but the URL can’t be shown again. Create a new link if you need another copy.</p>
@@ -987,10 +1010,10 @@ function DashboardApp() {
                     <p className="privacy-note">Share within 24 hours. The contact must separately agree before Iris can send SMS. This link is only viewable once. Please copy and send it to the trusted contact before leaving this page.</p>
                     <div className="link-field">
                       <input id="sms-opt-in-link" readOnly value={optInLink} aria-label="Trusted contact SMS opt-in link" />
-                      <button className="secondary-button" type="button" onClick={() => void copyLink(optInLink, "sms")}>
-                        {copiedLink === "sms" ? "Copied" : "Copy"}
-                      </button>
                     </div>
+                    <button className="person-phone-edit link-copy-button" type="button" onClick={() => void copyLink(optInLink, "sms")}>
+                      {copiedLink === "sms" ? "Copied" : "Copy"}
+                    </button>
                   </>
                 ) : (
                   <p className="privacy-note">An active link is still valid, but the URL can’t be shown again. Create a new link if you need another copy.</p>

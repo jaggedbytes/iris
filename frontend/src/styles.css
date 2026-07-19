@@ -252,6 +252,10 @@
     @apply shrink-0 border-0 bg-transparent p-0 text-[0.78rem] font-bold text-primary underline underline-offset-2 hover:bg-transparent;
   }
 
+  .link-copy-button {
+    @apply justify-self-end;
+  }
+
   .phone-editor {
     @apply mt-2 grid gap-2 rounded-[0.7rem] bg-subtle p-3;
   }
@@ -306,6 +310,10 @@
 
   .consent-form-error {
     @apply ml-[2.9rem] text-[0.75rem] leading-snug font-bold text-attention;
+  }
+
+  .form-validation-error {
+    @apply m-0 text-[0.75rem] leading-snug font-bold text-attention;
   }
 
   /* Consent toggle: pseudo-element knob stays custom. */
