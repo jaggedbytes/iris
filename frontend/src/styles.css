@@ -1,13 +1,28 @@
+@import "tailwindcss";
+
+/* Iris palette: theme tokens are the source of truth for utilities and legacy CSS vars. */
+@theme {
+  --color-ink: #241B33;
+  --color-primary: #6A4C93;
+  --color-primary-dark: #3E2C63;
+  --color-surface: #FAF8FC;
+  --color-page: #F3EFF9;
+  --color-lilac: #C9B6E4;
+  --color-accent: #E0A458;
+  --color-calm: #5B8A72;
+  --color-attention: #D8973C;
+}
+
 :root {
-  --ink: #241B33;
-  --primary: #6A4C93;
-  --primary-dark: #3E2C63;
-  --surface: #FAF8FC;
-  --page-bg: #F3EFF9;
-  --soft-lilac: #C9B6E4;
-  --accent: #E0A458;
-  --calm: #5B8A72;
-  --attention: #D8973C;
+  --ink: var(--color-ink);
+  --primary: var(--color-primary);
+  --primary-dark: var(--color-primary-dark);
+  --surface: var(--color-surface);
+  --page-bg: var(--color-page);
+  --soft-lilac: var(--color-lilac);
+  --accent: var(--color-accent);
+  --calm: var(--color-calm);
+  --attention: var(--color-attention);
   --border: color-mix(in srgb, var(--primary) 26%, var(--surface));
   --muted: color-mix(in srgb, var(--ink) 68%, var(--surface));
   --subtle-surface: color-mix(in srgb, var(--soft-lilac) 22%, var(--surface));
