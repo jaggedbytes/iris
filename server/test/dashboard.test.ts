@@ -449,7 +449,7 @@ test("limits enrollment drafting and opt-in invitations to operators", async () 
   }
 });
 
-test("distinguishes an unconfigured operator number from a trusted-contact redaction", async () => {
+test("shares person phone status with trusted contacts the same way as operators", async () => {
   const fixture = await createDashboardServer();
   try {
     fixture.repositories.grantAccess({
@@ -467,7 +467,47 @@ test("distinguishes an unconfigured operator number from a trusted-contact redac
     const operatorBody = (await operatorResponse.json()) as { person: { phoneE164: string | null; phoneNumberStatus: string } };
     const trustedBody = (await trustedResponse.json()) as { person: { phoneE164: string | null; phoneNumberStatus: string } };
     assert.deepEqual(operatorBody.person, { id: "person-b", displayName: "Blair", phoneE164: null, phoneNumberStatus: "not_configured" });
-    assert.deepEqual(trustedBody.person, { id: "person-a", displayName: "Avery", phoneE164: null, phoneNumberStatus: "private" });
+    assert.deepEqual(trustedBody.person, { id: "person-a", displayName: "Avery", phoneE164: "+15550009999", phoneNumberStatus: "configured" });
+  } finally { fixture.close(); }
+});
+
+test("projects the trusted contact viewer and read-only person consents", async () => {
+  const fixture = await createDashboardServer();
+  try {
+    fixture.repositories.updateTrustedContactPhone("contact-a", "+15550002222");
+    fixture.repositories.recordConsent({
+      id: "retention", personId: "person-a", kind: "summary_retention", status: "granted", source: "test",
+    });
+    fixture.repositories.grantAccess({
+      id: "grant-summaries", personId: "person-a", trustedContactId: "contact-a",
+      scopes: ["view_summaries"], tokenHash: hash("summaries-token"), expiresAt: futureExpiry(),
+    });
+    const response = await fetch(`${fixture.url}/api/dashboard/people/person-a/overview`, {
+      headers: { Authorization: "Bearer summaries-token" },
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json() as {
+      contacts: unknown[];
+      viewer: {
+        id: string;
+        displayName: string;
+        relationship: string;
+        phoneE164: string | null;
+        smsOptInStatus: string;
+        confirmationState: string;
+      } | null;
+      consents: { summaryRetention: boolean; careSummarySharing: boolean };
+    };
+    assert.deepEqual(body.contacts, []);
+    assert.deepEqual(body.viewer, {
+      id: "contact-a",
+      displayName: "Robin",
+      relationship: "daughter",
+      phoneE164: "+15550002222",
+      smsOptInStatus: "not_opted_in",
+      confirmationState: "not_requested",
+    });
+    assert.deepEqual(body.consents, { summaryRetention: true, careSummarySharing: false });
   } finally { fixture.close(); }
 });
 
@@ -585,7 +625,7 @@ test("shares care recaps only while both consents are active and the link has vi
     assert.equal(admin.calls[0]?.privateSummarySaved, true);
     assert.deepEqual(trusted.calls[0]?.careSummary, careSummary);
     assert.equal("privateSummarySaved" in trusted.calls[0]!, false);
-    assert.equal(trusted.consents, null);
+    assert.deepEqual(trusted.consents, { summaryRetention: true, careSummarySharing: true });
     assert.deepEqual(unscoped.calls, []);
 
     fixture.repositories.recordCareSummarySharingConsent({ id: "care-revoked", personId: "person-a", status: "revoked", source: "test" });
@@ -691,7 +731,7 @@ test("limits a trusted contact link to its person and granted scopes", async () 
       actions: unknown[];
     };
     assert.equal(permittedBody.person.id, "person-a");
-    assert.equal(permittedBody.person.phoneE164, null);
+    assert.equal(permittedBody.person.phoneE164, "+15550009999");
     assert.deepEqual(permittedBody.calls.map((call) => call.id), ["call-a"]);
     assert.equal((permittedBody.calls[0] as { careSummary?: unknown } | undefined)?.careSummary, null);
     assert.deepEqual(permittedBody.contacts, []);
