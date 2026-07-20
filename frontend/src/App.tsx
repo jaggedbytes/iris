@@ -48,9 +48,21 @@ function formatDate(value: string) {
   }).format(new Date(value));
 }
 
-function summaryLabel(careSummary: DashboardOverview["calls"][number]["careSummary"], summaryState: DashboardOverview["calls"][number]["summaryState"]) {
+function summaryLabel(
+  careSummary: DashboardOverview["calls"][number]["careSummary"],
+  summaryState: DashboardOverview["calls"][number]["summaryState"],
+  careSharingActive: boolean | null,
+  privateSummarySaved?: boolean,
+) {
   if (summaryState === "processing") return "Preparing shared care recap…";
-  return careSummary?.recap ?? "No shared care recap";
+  if (summaryState === "unavailable") return "Shared care recap unavailable";
+  if (careSummary) return careSummary.recap;
+  if (careSharingActive === false) {
+    return privateSummarySaved
+      ? "Private memory saved; shared care recaps are off"
+      : "Shared care recaps are off";
+  }
+  return privateSummarySaved ? "Private memory saved; no shared care recap" : "No shared care recap";
 }
 
 function phoneNumberLabel(person: DashboardOverview["person"]) {
@@ -80,7 +92,7 @@ function timelineCopy(event: DashboardOverview["events"][number], personName: st
     case "call.failed": return "Call could not be completed";
     case "call.interrupted": return "Call was interrupted";
     case "call.summary_ready": return "Call summary is ready";
-    case "call.summary_unavailable": return "No shared care recap was saved";
+    case "call.summary_unavailable": return "Shared care recap unavailable";
     case "bridge.sms_sent": return `Iris sent a Bridge message to ${contact}`;
     case "shield.pause_offered": return "Iris offered a safety pause";
     case "shield.alert_sent": return `Iris asked ${contact} to check in`;
@@ -1006,7 +1018,12 @@ function DashboardApp() {
               <ol className="item-list">
                 {overview.calls.map((call) => (
                   <li key={call.id}>
-                    <strong>{summaryLabel(call.careSummary, call.summaryState)}</strong>
+                    <strong>{summaryLabel(
+                      call.careSummary,
+                      call.summaryState,
+                      careConsents?.careSummarySharing ?? null,
+                      call.privateSummarySaved,
+                    )}</strong>
                     <span>{formatDate(call.startedAt)} · {call.status}</span>
                     {call.careSummary && (
                       <div className="care-summary">

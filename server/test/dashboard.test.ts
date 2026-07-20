@@ -538,6 +538,7 @@ test("projects dashboard data without SMS, provider, transcript, or audit fields
     }
     assert.equal("providerCallId" in body.calls[0], false);
     assert.equal("summaryJson" in body.calls[0], false);
+    assert.equal(body.calls[0].privateSummarySaved, true);
     assert.deepEqual(body.calls[0].careSummary, safeCareSummary);
     assert.equal("payload" in body.actions[0], false);
     assert.deepEqual(body.events.find((event) => event.type === "call.completed")?.payload, {});
@@ -577,11 +578,13 @@ test("shares care recaps only while both consents are active and the link has vi
       fetch(`${fixture.url}/api/dashboard/people/person-a/overview`, { headers: { Authorization: "Bearer summaries-token" } }),
       fetch(`${fixture.url}/api/dashboard/people/person-a/overview`, { headers: { Authorization: "Bearer events-token" } }),
     ]);
-    const admin = await adminResponse.json() as { calls: Array<{ careSummary: unknown }> };
-    const trusted = await trustedResponse.json() as { calls: Array<{ careSummary: unknown }>; consents: unknown };
+    const admin = await adminResponse.json() as { calls: Array<Record<string, unknown>> };
+    const trusted = await trustedResponse.json() as { calls: Array<Record<string, unknown>>; consents: unknown };
     const unscoped = await unscopedResponse.json() as { calls: unknown[] };
     assert.deepEqual(admin.calls[0]?.careSummary, careSummary);
+    assert.equal(admin.calls[0]?.privateSummarySaved, true);
     assert.deepEqual(trusted.calls[0]?.careSummary, careSummary);
+    assert.equal("privateSummarySaved" in trusted.calls[0]!, false);
     assert.equal(trusted.consents, null);
     assert.deepEqual(unscoped.calls, []);
 

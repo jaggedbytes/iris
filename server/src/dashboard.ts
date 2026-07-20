@@ -201,8 +201,24 @@ function sharedCareSummary(summaryJson: string | null): SharedCareSummary | null
   }
 }
 
-function callOverview(call: CallRecord, includeSharedCareSummary: boolean) {
-  return {
+function hasPrivateSummary(summaryJson: string | null) {
+  if (!summaryJson) return false;
+  try {
+    const summary = JSON.parse(summaryJson) as unknown;
+    if (!summary || typeof summary !== "object" || Array.isArray(summary)) return false;
+    const fields = summary as Record<string, unknown>;
+    return !!stringField(fields.recap, 500)
+      || (Array.isArray(fields.facts) && fields.facts.length > 0)
+      || (Array.isArray(fields.people) && fields.people.length > 0)
+      || (Array.isArray(fields.unresolvedTopics) && fields.unresolvedTopics.length > 0)
+      || !!stringField(fields.recallAnchor, 160);
+  } catch {
+    return false;
+  }
+}
+
+function callOverview(call: CallRecord, includeSharedCareSummary: boolean, includePrivateSummaryPresence: boolean) {
+  const overview = {
     id: call.id,
     status: call.status,
     startedAt: call.startedAt,
@@ -212,6 +228,11 @@ function callOverview(call: CallRecord, includeSharedCareSummary: boolean) {
     careSummary: includeSharedCareSummary ? sharedCareSummary(call.summaryJson) : null,
     summaryState: call.summaryState,
   };
+  // This is an operator-only boolean: it confirms that private continuity was
+  // retained without exposing any private summary field or its contents.
+  return includePrivateSummaryPresence
+    ? { ...overview, privateSummarySaved: hasPrivateSummary(call.summaryJson) }
+    : overview;
 }
 
 export function createDashboardRouter(context: DashboardContext) {
@@ -393,7 +414,7 @@ export function createDashboardRouter(context: DashboardContext) {
               phoneNumberStatus: "private",
             },
       calls: hasScope(principal, "view_summaries")
-        ? context.repositories.listCalls(personId).map((call) => callOverview(call, careSummarySharingActive))
+        ? context.repositories.listCalls(personId).map((call) => callOverview(call, careSummarySharingActive, principal.role === "admin"))
         : [],
       activeCall: activeCall
         ? { id: activeCall.id, status: activeCall.status, startedAt: activeCall.startedAt }

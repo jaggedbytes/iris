@@ -51,7 +51,7 @@ test("persists only validated user-stated summary memory", async () => {
   } finally { closeDatabase(database); }
 });
 
-test("uses one extraction for a care-only summary when both consents are active", async () => {
+test("uses one extraction for a meaningful everyday care recap when both consents are active", async () => {
   const { database, repositories } = fixture();
   repositories.recordConsent({ id: "care-consent", personId: "person-a", kind: "care_summary_sharing", status: "granted", source: "test" });
   let requests = 0;
@@ -63,21 +63,22 @@ test("uses one extraction for a care-only summary when both consents are active"
       return new Response(JSON.stringify({ output_text: JSON.stringify({
         status: "complete", recap: "", facts: [], people: [], unresolvedTopics: [], recallAnchor: null,
         careSummary: {
-          recap: "Avery described a difficult night.",
-          moodAndConcerns: ["Avery said they had a nightmare."],
-          irisSuggestedNextSteps: ["Iris suggested having some breakfast."],
+          recap: "Avery enjoyed family videos of their granddaughter's dance recital.",
+          moodAndConcerns: [],
+          irisSuggestedNextSteps: [],
         },
       }) }), { status: 200 });
     }).process({
-      callId: "call-a", personId: "person-a", transcript: [{ speaker: "user", text: "I had a nightmare." }],
+      callId: "call-a", personId: "person-a", transcript: [{ speaker: "user", text: "I watched family videos of my granddaughter's dance recital and adore her." }],
     });
 
     assert.equal(requests, 1);
     assert.equal(requestBody?.model, "gpt-5.6-terra");
     assert.equal(requestBody?.store, false);
     assert.match(JSON.stringify(requestBody), /dashboard-only/);
+    assert.match(JSON.stringify(requestBody), /meaningful, everyday, safe update/);
     const summary = JSON.parse(repositories.listCalls("person-a")[0].summaryJson!) as { careSummary: { recap: string }; facts: unknown[] };
-    assert.equal(summary.careSummary.recap, "Avery described a difficult night.");
+    assert.equal(summary.careSummary.recap, "Avery enjoyed family videos of their granddaughter's dance recital.");
     assert.deepEqual(summary.facts, []);
     assert.equal(repositories.listCalls("person-a")[0].summaryState, "ready");
     assert.deepEqual(repositories.listMemories("person-a"), []);

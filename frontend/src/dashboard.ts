@@ -24,6 +24,8 @@ export type DashboardOverview = {
       irisSuggestedNextSteps: string[];
     } | null;
     summaryState: "not_requested" | "processing" | "ready" | "unavailable";
+    /** Operator-only presence signal; never includes private summary content. */
+    privateSummarySaved?: boolean;
   }>;
   activeCall: { id: string; status: "attempted" | "answered"; startedAt: string } | null;
   events: Array<{
