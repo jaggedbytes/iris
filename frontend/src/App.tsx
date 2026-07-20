@@ -1855,7 +1855,9 @@ function OptInPage() {
         <p className="eyebrow">Iris companion</p>
         <h1 id="opt-in-title">Care text opt-in</h1>
         {status === "loading" && <p>Checking your invitation…</p>}
-        {status === "unavailable" && <p className="form-error" role="alert">{error ?? "This opt-in link is unavailable."}</p>}
+        {status === "unavailable" && (
+          <p className="form-validation-error" role="alert">{error ?? "This opt-in link is unavailable."}</p>
+        )}
         {invitation && status !== "unavailable" && (
           <>
             {status === "complete" ? (
@@ -1879,6 +1881,7 @@ function OptInPage() {
                     onChange={(event) => {
                       setPhoneE164(event.target.value);
                       setPhoneFormError(null);
+                      setError(null);
                     }}
                   />
                   {phoneFormError && <p className="form-validation-error" role="alert">{phoneFormError}</p>}
@@ -1886,6 +1889,7 @@ function OptInPage() {
                     <input className="consent-toggle" type="checkbox" checked={accepted} onChange={(event) => {
                       setAccepted(event.target.checked);
                       setConsentFormError(null);
+                      setError(null);
                     }} />
                     I agree to receive Iris care check-in and Shield alert texts for {invitation.personDisplayName}. Message frequency varies. Msg & data rates may apply. Reply HELP for help. Reply STOP to opt out.
                   </label>
@@ -1896,13 +1900,13 @@ function OptInPage() {
                   <p className="legal-note">
                     By subscribing, you agree to the <a href={invitation.termsUrl} target="_blank" rel="noreferrer">Terms</a> and acknowledge the <a href={invitation.privacyUrl} target="_blank" rel="noreferrer">Privacy Policy</a>.
                   </p>
+                  {error && <p className="form-validation-error" role="alert">{error}</p>}
                   <button type="submit" disabled={status === "submitting"}>{status === "submitting" ? "Saving…" : "Subscribe"}</button>
                 </form>
               </>
             )}
           </>
         )}
-        {error && status !== "unavailable" && <p className="form-error" role="alert">{error}</p>}
       </section>
     </main>
   );
