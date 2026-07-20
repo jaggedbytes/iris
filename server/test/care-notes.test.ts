@@ -134,6 +134,20 @@ test("care-note scope authorizes posting and controls last-check-in visibility",
     });
     assert.equal(legacy.status, 403);
 
+    const whitespaceOnly = await fetch(`${fixture.url}/api/dashboard/people/person-a/notes`, {
+      method: "POST",
+      headers: { Authorization: "Bearer notes-token", "Content-Type": "application/json" },
+      body: JSON.stringify({ body: "   \n\t  " }),
+    });
+    assert.equal(whitespaceOnly.status, 400);
+
+    const tooLong = await fetch(`${fixture.url}/api/dashboard/people/person-a/notes`, {
+      method: "POST",
+      headers: { Authorization: "Bearer notes-token", "Content-Type": "application/json" },
+      body: JSON.stringify({ body: "a".repeat(1001) }),
+    });
+    assert.equal(tooLong.status, 400);
+
     const notesOnlyBefore = await fetch(`${fixture.url}/api/dashboard/people/person-a/overview`, {
       headers: { Authorization: "Bearer notes-token" },
     });

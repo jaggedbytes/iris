@@ -57,6 +57,16 @@ function formatDate(value: string) {
   }).format(new Date(value));
 }
 
+function IrisSuggestions({ idPrefix, items }: { idPrefix: string; items: string[] }) {
+  if (items.length === 0) return null;
+  return (
+    <div className="care-summary">
+      <strong>Iris suggested</strong>
+      <ul>{items.map((item, index) => <li key={`${idPrefix}-suggestion-${index}`}>{item}</li>)}</ul>
+    </div>
+  );
+}
+
 function summaryLabel(
   careSummary: DashboardOverview["calls"][number]["careSummary"],
   summaryState: DashboardOverview["calls"][number]["summaryState"],
@@ -995,20 +1005,15 @@ function DashboardApp() {
               )}</strong>
               <span>{formatDate(call.startedAt)} · {call.status}</span>
               {call.careSummary && (
-                <div className="care-summary">
+                <>
                   {call.careSummary.moodAndConcerns.length > 0 && (
-                    <div>
+                    <div className="care-summary">
                       <strong>{givenName(overview.person.displayName)} shared</strong>
                       <ul>{call.careSummary.moodAndConcerns.map((item, index) => <li key={`${call.id}-mood-${index}`}>{item}</li>)}</ul>
                     </div>
                   )}
-                  {call.careSummary.irisSuggestedNextSteps.length > 0 && (
-                    <div>
-                      <strong>Iris suggested</strong>
-                      <ul>{call.careSummary.irisSuggestedNextSteps.map((item, index) => <li key={`${call.id}-suggestion-${index}`}>{item}</li>)}</ul>
-                    </div>
-                  )}
-                </div>
+                  <IrisSuggestions idPrefix={call.id} items={call.careSummary.irisSuggestedNextSteps} />
+                </>
               )}
             </li>
           ))}
@@ -1063,12 +1068,7 @@ function DashboardApp() {
                 <strong>Iris call</strong>
                 <span>{formatDate(item.occurredAt)}</span>
                 <p className="care-note-body">{item.recap}</p>
-                {item.suggestions.length > 0 && (
-                  <div className="care-summary">
-                    <strong>Iris suggested</strong>
-                    <ul>{item.suggestions.map((suggestion, index) => <li key={`${item.id}-suggestion-${index}`}>{suggestion}</li>)}</ul>
-                  </div>
-                )}
+                <IrisSuggestions idPrefix={item.id} items={item.suggestions} />
               </li>
             ) : (
               <li key={item.id}>

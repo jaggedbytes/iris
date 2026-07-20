@@ -3,7 +3,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { Router, type Request, type Response } from "express";
 
 import type { IrisRepositories } from "./db/repositories.js";
-import type { AccessScope, CallRecord, TimelineEvent } from "./db/types.js";
+import type { AccessScope, CallRecord, CareNote, TimelineEvent } from "./db/types.js";
 import type { ActionDispatcher } from "./actions.js";
 import { e164Field } from "./phone.js";
 import { ActiveCallConflictError, type TrustedCheckInRequester } from "./telephony/outbound.js";
@@ -264,6 +264,17 @@ function callOverview(call: CallRecord, includeSharedCareSummary: boolean, inclu
     : overview;
 }
 
+function noteOverview(note: CareNote) {
+  return {
+    id: note.id,
+    authorRole: note.authorRole,
+    authorDisplayName: note.authorDisplayName,
+    authorRelationship: note.authorRelationship,
+    body: note.body,
+    createdAt: note.createdAt,
+  };
+}
+
 export function createDashboardRouter(context: DashboardContext) {
   const router = Router();
 
@@ -442,14 +453,7 @@ export function createDashboardRouter(context: DashboardContext) {
         : null,
       ...(canUseCareNotes
         ? {
-          notes: context.repositories.listCareNotes(personId).map((note) => ({
-            id: note.id,
-            authorRole: note.authorRole,
-            authorDisplayName: note.authorDisplayName,
-            authorRelationship: note.authorRelationship,
-            body: note.body,
-            createdAt: note.createdAt,
-          })),
+          notes: context.repositories.listCareNotes(personId).map(noteOverview),
           lastCheckInAt: context.repositories.lastCheckInAt(personId, canSeeCompletedCallsForCheckIn),
         }
         : {}),
@@ -538,16 +542,7 @@ export function createDashboardRouter(context: DashboardContext) {
       authorRelationship: contact?.relationship ?? null,
       body,
     });
-    response.status(201).json({
-      note: {
-        id: note.id,
-        authorRole: note.authorRole,
-        authorDisplayName: note.authorDisplayName,
-        authorRelationship: note.authorRelationship,
-        body: note.body,
-        createdAt: note.createdAt,
-      },
-    });
+    response.status(201).json({ note: noteOverview(note) });
   });
 
   router.post("/people/:personId/consents/:kind", (request, response) => {
