@@ -262,13 +262,17 @@ function DashboardApp() {
     setNoteFormError(null);
   }, [personId]);
 
-  const clearCallThread = (historyMode: "push" | "replace" = "replace") => {
+  const resetOpenCallThread = () => {
     callThreadRequestId.current += 1;
     setSelectedCallId(null);
     setCallThread(null);
     setCallThreadError(null);
     setCallNoteDraft("");
     setCallNoteFormError(null);
+  };
+
+  const clearCallThread = (historyMode: "push" | "replace" = "replace") => {
+    resetOpenCallThread();
     const location = new URL(window.location.href);
     location.searchParams.delete("call");
     window.history[`${historyMode}State`]({}, "", `${location.pathname}${location.search}${location.hash}`);
@@ -978,12 +982,7 @@ function DashboardApp() {
     setDashboardNavOpen(false);
     const nextPath = pathForDashboardPage(page);
     if (page === "home") {
-      callThreadRequestId.current += 1;
-      setSelectedCallId(null);
-      setCallThread(null);
-      setCallThreadError(null);
-      setCallNoteDraft("");
-      setCallNoteFormError(null);
+      resetOpenCallThread();
     }
     if (window.location.pathname !== nextPath || window.location.search) {
       window.history.pushState({}, "", nextPath);
@@ -994,11 +993,8 @@ function DashboardApp() {
     const onPopState = () => {
       const nextPage = dashboardPageFromPath(window.location.pathname);
       setDashboardPage(nextPage);
+      resetOpenCallThread();
       setSelectedCallId(nextPage === "activity" ? callIdFromLocation() : null);
-      setCallThread(null);
-      setCallThreadError(null);
-      setCallNoteDraft("");
-      setCallNoteFormError(null);
       setDashboardNavOpen(false);
     };
     window.addEventListener("popstate", onPopState);
