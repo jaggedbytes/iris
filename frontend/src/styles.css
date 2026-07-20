@@ -126,19 +126,76 @@
   }
 
   .dashboard-header {
-    @apply mb-8 flex items-start justify-between gap-4 max-[820px]:flex-col;
+    @apply relative mb-8 flex items-start justify-between gap-4;
+  }
+
+  .dashboard-nav {
+    @apply mb-6 border-b border-border pb-3 max-[820px]:hidden;
+  }
+
+  .dashboard-nav-links {
+    @apply flex items-center gap-2;
+  }
+
+  .nav-link {
+    @apply rounded-full border border-transparent bg-transparent px-[0.9rem] py-[0.55rem] text-[0.84rem] font-bold text-primary hover:bg-lilac/35;
+  }
+
+  .nav-link.is-active {
+    @apply bg-lilac/35 text-primary-dark;
+  }
+
+  .header-menu {
+    @apply relative hidden max-[820px]:block;
+  }
+
+  .nav-menu-button {
+    @apply inline-flex items-center justify-center border-0 bg-transparent p-[0.35rem] text-primary hover:bg-transparent;
+  }
+
+  .nav-menu-icon {
+    @apply grid w-[1.15rem] gap-[0.22rem];
+  }
+
+  .nav-menu-icon > span {
+    @apply block h-[0.12rem] rounded-full bg-primary;
+  }
+
+  .dashboard-nav-panel {
+    @apply absolute top-[calc(100%+0.35rem)] right-0 z-10 grid min-w-[11rem] gap-1 rounded-2xl border border-border bg-surface p-2 shadow-[0_0.75rem_2rem_color-mix(in_srgb,var(--color-primary-dark)_10%,transparent)];
+  }
+
+  .dashboard-nav-panel .nav-link {
+    @apply w-full justify-self-stretch text-left;
+  }
+
+  .header-sign-out-desktop {
+    @apply max-[820px]:hidden;
   }
 
   .header-subtitle {
     @apply mt-[0.6rem] text-muted;
   }
 
-  .header-actions {
-    @apply flex items-center gap-[0.65rem] max-[560px]:w-full;
+  .header-call-mobile {
+    @apply mt-3 max-[820px]:inline-flex min-[821px]:hidden;
   }
 
-  .header-actions button {
+  .header-call-desktop {
+    @apply max-[820px]:hidden;
+  }
+
+  .header-actions {
+    @apply flex shrink-0 items-center gap-[0.65rem];
+  }
+
+  .header-actions .call-button,
+  .header-actions .text-button {
     @apply max-[560px]:flex-1;
+  }
+
+  .header-actions .nav-menu-button {
+    @apply flex-none;
   }
 
   .text-button,
@@ -156,6 +213,27 @@
 
   .dashboard-grid {
     @apply grid grid-cols-12 items-start gap-4;
+  }
+
+  /* Operator Home / Activity: left column stack beside a right-column card (tablet+). */
+  .operator-column-stack {
+    @apply col-span-4 contents max-[820px]:col-span-6 max-[560px]:col-span-12;
+  }
+
+  .dashboard-grid.is-operator-split {
+    @apply max-[820px]:flex max-[820px]:items-stretch max-[820px]:gap-4 max-[560px]:flex-col;
+  }
+
+  .dashboard-grid.is-operator-split .operator-column-stack {
+    @apply max-[820px]:flex max-[820px]:min-w-0 max-[820px]:flex-1 max-[820px]:flex-col max-[820px]:gap-4;
+  }
+
+  .dashboard-grid.is-operator-split .operator-column-stack .overview-card {
+    @apply max-[820px]:col-span-full max-[820px]:w-full max-[820px]:min-h-0;
+  }
+
+  .dashboard-grid.is-operator-split .operator-split-aside {
+    @apply max-[820px]:col-span-full max-[820px]:min-w-0 max-[820px]:flex-1 max-[820px]:self-stretch;
   }
 
   .overview-card {
