@@ -1310,10 +1310,10 @@ function DashboardApp() {
                                         onChange={(event) => setEditingNoteDraft(event.target.value)}
                                       />
                                       <div className="note-controls">
-                                        <button className="secondary-button" type="button" disabled={!editingNoteDraft.trim() || savingEditedNoteId === item.note.id} onClick={() => void saveEditedNote(item.note.id)}>
+                                        <button className="person-phone-edit" type="button" disabled={!editingNoteDraft.trim() || savingEditedNoteId === item.note.id} onClick={() => void saveEditedNote(item.note.id)}>
                                           {savingEditedNoteId === item.note.id ? "Saving…" : "Save"}
                                         </button>
-                                        <button className="text-button" type="button" disabled={savingEditedNoteId === item.note.id} onClick={() => { setEditingNoteId(null); setEditingNoteDraft(""); }}>
+                                        <button className="remove-person-button" type="button" disabled={savingEditedNoteId === item.note.id} onClick={() => { setEditingNoteId(null); setEditingNoteDraft(""); }}>
                                           Cancel
                                         </button>
                                       </div>
@@ -1321,8 +1321,8 @@ function DashboardApp() {
                                   ) : <p className="care-note-body">{item.note.body}</p>}
                                   {item.note.canEdit && editingNoteId !== item.note.id && (
                                     <div className="note-controls">
-                                      <button className="text-button" type="button" onClick={() => beginEditingNote(item.note)}>Edit</button>
-                                      <button className="text-button" type="button" disabled={savingEditedNoteId === item.note.id} onClick={() => void deleteNote(item.note.id)}>Delete</button>
+                                      <button className="person-phone-edit" type="button" onClick={() => beginEditingNote(item.note)}>Edit</button>
+                                      <button className="remove-person-button" type="button" disabled={savingEditedNoteId === item.note.id} onClick={() => void deleteNote(item.note.id)}>Delete</button>
                                     </div>
                                   )}
                                 </li>
@@ -1430,10 +1430,10 @@ function DashboardApp() {
                       onChange={(event) => setEditingNoteDraft(event.target.value)}
                     />
                     <div className="note-controls">
-                      <button className="secondary-button" type="button" disabled={!editingNoteDraft.trim() || savingEditedNoteId === item.noteId} onClick={() => void saveEditedNote(item.noteId)}>
+                      <button className="person-phone-edit" type="button" disabled={!editingNoteDraft.trim() || savingEditedNoteId === item.noteId} onClick={() => void saveEditedNote(item.noteId)}>
                         {savingEditedNoteId === item.noteId ? "Saving…" : "Save"}
                       </button>
-                      <button className="text-button" type="button" disabled={savingEditedNoteId === item.noteId} onClick={() => { setEditingNoteId(null); setEditingNoteDraft(""); }}>
+                      <button className="remove-person-button" type="button" disabled={savingEditedNoteId === item.noteId} onClick={() => { setEditingNoteId(null); setEditingNoteDraft(""); }}>
                         Cancel
                       </button>
                     </div>
@@ -1441,8 +1441,8 @@ function DashboardApp() {
                 ) : <p className="care-note-body">{item.body}</p>}
                 {item.canEdit && editingNoteId !== item.noteId && (
                   <div className="note-controls">
-                    <button className="text-button" type="button" onClick={() => beginEditingNote({ id: item.noteId, body: item.body })}>Edit</button>
-                    <button className="text-button" type="button" disabled={savingEditedNoteId === item.noteId} onClick={() => void deleteNote(item.noteId)}>Delete</button>
+                    <button className="person-phone-edit" type="button" onClick={() => beginEditingNote({ id: item.noteId, body: item.body })}>Edit</button>
+                    <button className="remove-person-button" type="button" disabled={savingEditedNoteId === item.noteId} onClick={() => void deleteNote(item.noteId)}>Delete</button>
                   </div>
                 )}
               </li>
