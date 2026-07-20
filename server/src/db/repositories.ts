@@ -9,6 +9,7 @@ import type {
   CallRecord,
   CallSummaryState,
   CallStatus,
+  CareNote,
   ConsentKind,
   ConsentStatus,
   CreateActionRequest,
@@ -68,6 +69,17 @@ type EventRow = {
   type: string;
   payload_json: string;
   occurred_at: string;
+};
+
+type CareNoteRow = {
+  id: string;
+  person_id: string;
+  author_role: "operator" | "trusted_contact";
+  author_trusted_contact_id: string | null;
+  author_display_name: string;
+  author_relationship: string | null;
+  body: string;
+  created_at: string;
 };
 
 type ActionRequestRow = {
@@ -156,6 +168,17 @@ const toEvent = (row: EventRow): TimelineEvent => ({
   type: row.type,
   payload: JSON.parse(row.payload_json) as unknown,
   occurredAt: row.occurred_at,
+});
+
+const toCareNote = (row: CareNoteRow): CareNote => ({
+  id: row.id,
+  personId: row.person_id,
+  authorRole: row.author_role,
+  authorTrustedContactId: row.author_trusted_contact_id,
+  authorDisplayName: row.author_display_name,
+  authorRelationship: row.author_relationship,
+  body: row.body,
+  createdAt: row.created_at,
 });
 
 const toActionRequest = (row: ActionRequestRow): ActionRequestRecord => ({
@@ -956,6 +979,61 @@ export function createRepositories(database: IrisDatabase) {
       return rows.map(toCall);
     },
 
+    createCareNote(input: {
+      id: string;
+      personId: string;
+      authorRole: CareNote["authorRole"];
+      authorTrustedContactId?: string | null;
+      authorDisplayName: string;
+      authorRelationship?: string | null;
+      body: string;
+    }) {
+      const createdAt = now();
+      database.prepare(
+        `INSERT INTO care_notes
+           (id, person_id, author_role, author_trusted_contact_id, author_display_name, author_relationship, body, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        input.id,
+        input.personId,
+        input.authorRole,
+        input.authorTrustedContactId ?? null,
+        input.authorDisplayName,
+        input.authorRelationship ?? null,
+        input.body,
+        createdAt,
+      );
+      return this.getCareNote(input.id)!;
+    },
+
+    getCareNote(id: string) {
+      const row = database.prepare("SELECT * FROM care_notes WHERE id = ?").get(id) as CareNoteRow | undefined;
+      return row ? toCareNote(row) : null;
+    },
+
+    listCareNotes(personId: string) {
+      const rows = database.prepare(
+        "SELECT * FROM care_notes WHERE person_id = ? ORDER BY created_at DESC, rowid DESC",
+      ).all(personId) as CareNoteRow[];
+      return rows.map(toCareNote);
+    },
+
+    lastCheckInAt(personId: string, includeCompletedCalls: boolean) {
+      const row = includeCompletedCalls
+        ? database.prepare(
+          `SELECT MAX(occurred_at) AS occurred_at FROM (
+             SELECT created_at AS occurred_at FROM care_notes WHERE person_id = ?
+             UNION ALL
+             SELECT COALESCE(ended_at, started_at) AS occurred_at
+               FROM calls WHERE person_id = ? AND status = 'completed'
+           )`,
+        ).get(personId, personId) as { occurred_at: string | null }
+        : database.prepare(
+          "SELECT MAX(created_at) AS occurred_at FROM care_notes WHERE person_id = ?",
+        ).get(personId) as { occurred_at: string | null };
+      return row.occurred_at;
+    },
+
     createMemory(input: { id: string; personId: string; sourceCallId: string; category: MemoryCategory; payload: unknown }) {
       database.prepare(
         `INSERT INTO memories (id, person_id, source_call_id, category, payload_json, created_at)
@@ -1187,6 +1265,7 @@ export function createRepositories(database: IrisDatabase) {
         DELETE FROM messages;
         DELETE FROM action_requests;
         DELETE FROM events;
+        DELETE FROM care_notes;
         DELETE FROM memories;
         DELETE FROM documents;
         DELETE FROM calls;

@@ -37,6 +37,17 @@ export type DashboardOverview = {
     privateSummarySaved?: boolean;
   }>;
   activeCall: { id: string; status: "attempted" | "answered"; startedAt: string } | null;
+  /** Present only for viewers with the care_notes scope. */
+  notes?: Array<{
+    id: string;
+    authorRole: "operator" | "trusted_contact";
+    authorDisplayName: string;
+    authorRelationship: string | null;
+    body: string;
+    createdAt: string;
+  }>;
+  /** Present only for viewers with the care_notes scope. */
+  lastCheckInAt?: string | null;
   events: Array<{
     id: string;
     type: string;

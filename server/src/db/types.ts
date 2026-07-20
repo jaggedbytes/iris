@@ -1,4 +1,5 @@
 export type AccessScope =
+  | "care_notes"
   | "request_check_in"
   | "view_events"
   | "view_summaries";
@@ -87,6 +88,18 @@ export type TimelineEvent = {
   type: string;
   payload: unknown;
   occurredAt: string;
+};
+
+export type CareNote = {
+  id: string;
+  personId: string;
+  authorRole: "operator" | "trusted_contact";
+  /** Null after a trusted contact is deleted; snapshots preserve attribution. */
+  authorTrustedContactId: string | null;
+  authorDisplayName: string;
+  authorRelationship: string | null;
+  body: string;
+  createdAt: string;
 };
 
 export type ActionRequestRecord = {

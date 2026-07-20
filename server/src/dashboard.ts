@@ -3,13 +3,14 @@ import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { Router, type Request, type Response } from "express";
 
 import type { IrisRepositories } from "./db/repositories.js";
-import type { AccessScope, CallRecord, TimelineEvent } from "./db/types.js";
+import type { AccessScope, CallRecord, CareNote, TimelineEvent } from "./db/types.js";
 import type { ActionDispatcher } from "./actions.js";
 import { e164Field } from "./phone.js";
 import { ActiveCallConflictError, type TrustedCheckInRequester } from "./telephony/outbound.js";
 import { hashToken } from "./tokens.js";
 
 const ALL_SCOPES: AccessScope[] = [
+  "care_notes",
   "view_summaries",
   "view_events",
   "request_check_in",
@@ -263,6 +264,17 @@ function callOverview(call: CallRecord, includeSharedCareSummary: boolean, inclu
     : overview;
 }
 
+function noteOverview(note: CareNote) {
+  return {
+    id: note.id,
+    authorRole: note.authorRole,
+    authorDisplayName: note.authorDisplayName,
+    authorRelationship: note.authorRelationship,
+    body: note.body,
+    createdAt: note.createdAt,
+  };
+}
+
 export function createDashboardRouter(context: DashboardContext) {
   const router = Router();
 
@@ -423,6 +435,8 @@ export function createDashboardRouter(context: DashboardContext) {
       : null;
     const careSummarySharingActive = context.repositories.hasActiveConsent(personId, "summary_retention")
       && context.repositories.hasActiveConsent(personId, "care_summary_sharing");
+    const canUseCareNotes = hasScope(principal, "care_notes");
+    const canSeeCompletedCallsForCheckIn = canUseCareNotes && hasScope(principal, "view_summaries");
 
     response.json({
       person: {
@@ -437,6 +451,12 @@ export function createDashboardRouter(context: DashboardContext) {
       activeCall: activeCall
         ? { id: activeCall.id, status: activeCall.status, startedAt: activeCall.startedAt }
         : null,
+      ...(canUseCareNotes
+        ? {
+          notes: context.repositories.listCareNotes(personId).map(noteOverview),
+          lastCheckInAt: context.repositories.lastCheckInAt(personId, canSeeCompletedCallsForCheckIn),
+        }
+        : {}),
       events: hasScope(principal, "view_events")
         ? context.repositories.listEvents(personId).map(timelineEvent)
         : [],
@@ -482,6 +502,47 @@ export function createDashboardRouter(context: DashboardContext) {
       permissions:
         principal.role === "admin" ? ALL_SCOPES : principal.scopes,
     });
+  });
+
+  router.post("/people/:personId/notes", (request, response) => {
+    const principal = requirePrincipal(request, response, context);
+    if (!principal) return;
+    const { personId } = request.params;
+    if (!canAccessPerson(principal, personId)) {
+      response.status(403).json({ error: "This link cannot access that person." });
+      return;
+    }
+    if (!hasScope(principal, "care_notes")) {
+      response.status(403).json({ error: "This link cannot add care-circle notes." });
+      return;
+    }
+    const person = context.repositories.getPerson(personId);
+    if (!person) {
+      response.status(404).json({ error: "Person not found." });
+      return;
+    }
+    const body = stringField(request.body?.body, 1000);
+    if (!body) {
+      response.status(400).json({ error: "Enter a note up to 1,000 characters." });
+      return;
+    }
+    const contact = principal.role === "trusted_contact"
+      ? context.repositories.getTrustedContact(principal.trustedContactId)
+      : null;
+    if (principal.role === "trusted_contact" && (!contact || contact.personId !== personId)) {
+      response.status(403).json({ error: "This link cannot add care-circle notes." });
+      return;
+    }
+    const note = context.repositories.createCareNote({
+      id: randomUUID(),
+      personId,
+      authorRole: principal.role === "admin" ? "operator" : "trusted_contact",
+      authorTrustedContactId: contact?.id ?? null,
+      authorDisplayName: contact?.displayName ?? "Operator",
+      authorRelationship: contact?.relationship ?? null,
+      body,
+    });
+    response.status(201).json({ note: noteOverview(note) });
   });
 
   router.post("/people/:personId/consents/:kind", (request, response) => {

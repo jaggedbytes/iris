@@ -384,4 +384,30 @@ export const migrations = [
         ON access_grants(trusted_contact_id);
     `,
   },
+  {
+    id: "014_care_notes",
+    sql: `
+      CREATE TABLE care_notes (
+        id TEXT PRIMARY KEY,
+        person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+        author_role TEXT NOT NULL CHECK(author_role IN ('operator', 'trusted_contact')),
+        author_trusted_contact_id TEXT REFERENCES trusted_contacts(id) ON DELETE SET NULL,
+        author_display_name TEXT NOT NULL,
+        author_relationship TEXT,
+        body TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        CHECK(
+          (author_role = 'operator'
+            AND author_trusted_contact_id IS NULL
+            AND author_relationship IS NULL)
+          OR
+          (author_role = 'trusted_contact'
+            AND author_relationship IS NOT NULL)
+        )
+      );
+
+      CREATE INDEX idx_care_notes_person_created
+        ON care_notes(person_id, created_at DESC);
+    `,
+  },
 ] as const;
