@@ -7,12 +7,21 @@ export type DashboardPrincipal =
       scopes: string[];
     };
 
+export type DashboardTrustedContactViewer = {
+  id: string;
+  displayName: string;
+  relationship: string;
+  phoneE164: string | null;
+  smsOptInStatus: "opted_in" | "not_opted_in" | "opted_out";
+  confirmationState: "not_requested" | "queued" | "sent" | "failed" | "retryable" | "needs_review";
+};
+
 export type DashboardOverview = {
   person: {
     id: string;
     displayName: string;
     phoneE164: string | null;
-    phoneNumberStatus: "configured" | "not_configured" | "private";
+    phoneNumberStatus: "configured" | "not_configured";
   };
   calls: Array<{
     id: string;
@@ -54,10 +63,11 @@ export type DashboardOverview = {
     updatedAt: string;
     dispatchState: "pending" | "dispatching" | "dispatched" | "failed" | "retryable" | "needs_review" | null;
   }>;
+  viewer: DashboardTrustedContactViewer | null;
   consents: {
     summaryRetention: boolean;
     careSummarySharing: boolean;
-  } | null;
+  };
   permissions: string[];
 };
 

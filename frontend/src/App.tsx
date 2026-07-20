@@ -66,7 +66,6 @@ function summaryLabel(
 }
 
 function phoneNumberLabel(person: DashboardOverview["person"]) {
-  if (person.phoneNumberStatus === "private") return "Phone number is private in this view.";
   if (person.phoneNumberStatus === "not_configured") return "Phone number not configured";
   return person.phoneE164 ?? "Phone number unavailable";
 }
