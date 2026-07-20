@@ -76,12 +76,48 @@ test("uses one extraction for a meaningful everyday care recap when both consent
     assert.equal(requestBody?.model, "gpt-5.6-terra");
     assert.equal(requestBody?.store, false);
     assert.match(JSON.stringify(requestBody), /dashboard-only/);
-    assert.match(JSON.stringify(requestBody), /meaningful, everyday, safe update/);
+    assert.match(JSON.stringify(requestBody), /meaningful update/);
     const summary = JSON.parse(repositories.listCalls("person-a")[0].summaryJson!) as { careSummary: { recap: string }; facts: unknown[] };
     assert.equal(summary.careSummary.recap, "Avery enjoyed family videos of their granddaughter's dance recital.");
     assert.deepEqual(summary.facts, []);
     assert.equal(repositories.listCalls("person-a")[0].summaryState, "ready");
     assert.deepEqual(repositories.listMemories("person-a"), []);
+  } finally { closeDatabase(database); }
+});
+
+test("includes explicitly discussed health concerns and Iris guidance in a consented care recap", async () => {
+  const { database, repositories } = fixture();
+  repositories.recordConsent({ id: "care-consent", personId: "person-a", kind: "care_summary_sharing", status: "granted", source: "test" });
+  let requestBody: Record<string, unknown> | undefined;
+  try {
+    await new CallSummaryPipeline(repositories, "key", "safe-id", async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({ output_text: JSON.stringify({
+        status: "complete", recap: "Avery said they were tired, planned to drink water and check back in. Iris suggested sitting up, taking slow breaths, and calling a medical provider.", facts: [], people: [], unresolvedTopics: [], recallAnchor: null,
+        careSummary: {
+          recap: "Avery said they were tired, planned to drink water and check back in. Iris suggested sitting up, taking slow breaths, and calling a medical provider.",
+          moodAndConcerns: ["Avery said they were tired."],
+          irisSuggestedNextSteps: ["Iris suggested sitting up, taking slow breaths, and calling a medical provider."],
+        },
+      }) }), { status: 200 });
+    }).process({
+      callId: "call-a", personId: "person-a", transcript: [
+        { speaker: "user", text: "I am tired. I will drink some water and report back." },
+        { speaker: "assistant", text: "Sit up, take slow breaths, and call your medical provider." },
+      ],
+    });
+
+    assert.match(JSON.stringify(requestBody), /health-related feelings, symptoms, concerns, or plans/);
+    assert.match(JSON.stringify(requestBody), /guidance to contact a medical provider/);
+    const summary = JSON.parse(repositories.listCalls("person-a")[0].summaryJson!) as {
+      careSummary: { recap: string; moodAndConcerns: string[]; irisSuggestedNextSteps: string[] };
+    };
+    assert.deepEqual(summary.careSummary, {
+      recap: "Avery said they were tired, planned to drink water and check back in. Iris suggested sitting up, taking slow breaths, and calling a medical provider.",
+      moodAndConcerns: ["Avery said they were tired."],
+      irisSuggestedNextSteps: ["Iris suggested sitting up, taking slow breaths, and calling a medical provider."],
+    });
+    assert.equal(repositories.listCalls("person-a")[0].summaryState, "ready");
   } finally { closeDatabase(database); }
 });
 

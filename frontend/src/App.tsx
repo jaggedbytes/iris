@@ -975,7 +975,7 @@ function DashboardApp() {
                       <strong>Shared care recaps</strong>
                       <span className={`consent-status${careConsents.careSummarySharing ? "" : " is-off"}`} aria-label={careConsents.careSummarySharing ? "Currently on" : "Currently off"}>{careConsents.careSummarySharing ? "On" : "Off"}</span>
                     </span>
-                    <span>Lets you and trusted contacts see gentle updates from Iris. Requires private memory.</span>
+                    <span>Shares a concise recap with you and trusted contacts, including health-related concerns and Iris’s guidance. Never raw audio or a full transcript. Requires private memory.</span>
                   </span>
                 </label>
                 <div className="consent-attestation">
