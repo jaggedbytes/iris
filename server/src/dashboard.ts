@@ -441,7 +441,17 @@ export function createDashboardRouter(context: DashboardContext) {
         ? { id: activeCall.id, status: activeCall.status, startedAt: activeCall.startedAt }
         : null,
       ...(canUseCareNotes
-        ? { lastCheckInAt: context.repositories.lastCheckInAt(personId, canSeeCompletedCallsForCheckIn) }
+        ? {
+          notes: context.repositories.listCareNotes(personId).map((note) => ({
+            id: note.id,
+            authorRole: note.authorRole,
+            authorDisplayName: note.authorDisplayName,
+            authorRelationship: note.authorRelationship,
+            body: note.body,
+            createdAt: note.createdAt,
+          })),
+          lastCheckInAt: context.repositories.lastCheckInAt(personId, canSeeCompletedCallsForCheckIn),
+        }
         : {}),
       events: hasScope(principal, "view_events")
         ? context.repositories.listEvents(personId).map(timelineEvent)

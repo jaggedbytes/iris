@@ -232,6 +232,89 @@
     @apply max-[820px]:col-span-full max-[820px]:w-full max-[820px]:min-h-0;
   }
 
+  /* Operator home: a primary stack, then Notes, then Trusted contacts on desktop.
+     On tablet, the latter two become the right-hand stack. */
+  .operator-home-primary {
+    @apply order-1 col-span-4 grid content-start gap-4 max-[820px]:flex max-[820px]:min-w-0 max-[820px]:flex-1 max-[820px]:flex-col;
+  }
+
+  .operator-home-secondary {
+    @apply order-2 contents max-[820px]:flex max-[820px]:min-w-0 max-[820px]:flex-1 max-[820px]:flex-col max-[820px]:gap-4;
+  }
+
+  .operator-home-primary .overview-card,
+  .operator-home-secondary .overview-card {
+    @apply w-full min-h-0;
+  }
+
+  .operator-home-primary .profile-card {
+    @apply order-2;
+  }
+
+  .operator-home-secondary .notes-card {
+    @apply order-2;
+  }
+
+  .trusted-home-notes {
+    @apply contents;
+  }
+
+  @media (min-width: 561px) and (max-width: 820px) {
+    .dashboard-grid.is-dashboard-split .trusted-home-primary,
+    .dashboard-grid.is-dashboard-split .trusted-home-notes {
+      display: flex;
+      flex: 1 1 0%;
+      flex-direction: column;
+      min-width: 0;
+      gap: 1rem;
+    }
+
+    .trusted-home-notes .notes-card {
+      width: 100%;
+      min-height: 0;
+    }
+  }
+
+  @media (max-width: 560px) {
+    .operator-home-primary,
+    .operator-home-secondary {
+      display: contents;
+    }
+
+    .operator-home-primary .enrollment-card {
+      order: 1;
+    }
+
+    .operator-home-secondary .notes-card {
+      order: 2;
+    }
+
+    .operator-home-primary .profile-card {
+      order: 3;
+    }
+
+    .operator-home-secondary .trusted-contacts-card {
+      order: 4;
+    }
+
+    .dashboard-grid.is-dashboard-split .trusted-home-primary,
+    .dashboard-grid.is-dashboard-split .trusted-home-notes {
+      display: contents;
+    }
+
+    .trusted-home-primary .profile-card {
+      order: 1;
+    }
+
+    .dashboard-grid.is-dashboard-split .trusted-home-notes .notes-card {
+      order: 2;
+    }
+
+    .trusted-home-primary .trusted-self-card {
+      order: 3;
+    }
+  }
+
   .dashboard-grid.is-dashboard-split > .overview-card,
   .dashboard-grid.is-dashboard-split .dashboard-split-aside {
     @apply max-[820px]:col-span-full max-[820px]:min-w-0 max-[820px]:flex-1 max-[820px]:self-stretch;
@@ -462,6 +545,43 @@
 
   .trusted-self-card {
     @apply order-3 col-span-4 grid content-start gap-[0.55rem] max-[820px]:col-span-6 max-[560px]:col-span-12;
+  }
+
+  /* Care-circle notes */
+  .notes-card {
+    @apply order-4 grid content-start gap-[0.8rem];
+  }
+
+  .last-check-in {
+    @apply grid gap-[0.15rem] rounded-[0.7rem] bg-subtle p-[0.8rem];
+  }
+
+  .last-check-in strong {
+    @apply text-[0.82rem];
+  }
+
+  .last-check-in span {
+    @apply text-[0.78rem] text-muted;
+  }
+
+  .notes-feed {
+    @apply grid gap-[0.55rem];
+  }
+
+  .notes-feed .item-list {
+    @apply mt-0;
+  }
+
+  .care-note-body {
+    @apply m-0 text-[0.85rem] leading-[1.5] text-ink;
+  }
+
+  .notes-form {
+    @apply mt-0;
+  }
+
+  .notes-form textarea {
+    @apply min-h-24 w-full resize-y rounded-[0.55rem] border border-border bg-surface p-[0.65rem] font-normal;
   }
 
   .trusted-self-card .contact-status-list {

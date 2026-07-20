@@ -190,6 +190,9 @@ function DashboardApp() {
   const [consentFormError, setConsentFormError] = useState<string | null>(null);
   const [isCallRequesting, setIsCallRequesting] = useState(false);
   const [dispatchingActionId, setDispatchingActionId] = useState<string | null>(null);
+  const [noteDraft, setNoteDraft] = useState("");
+  const [isSavingNote, setIsSavingNote] = useState(false);
+  const [noteFormError, setNoteFormError] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [dashboardPage, setDashboardPage] = useState<DashboardPage>(() =>
     dashboardPageFromPath(window.location.pathname),
@@ -225,6 +228,11 @@ function DashboardApp() {
     setConsentAttested(false);
     setConsentFormError(null);
   }, [personId, careConsents?.summaryRetention, careConsents?.careSummarySharing]);
+
+  useEffect(() => {
+    setNoteDraft("");
+    setNoteFormError(null);
+  }, [personId]);
 
   const trustedContactIds = overview?.contacts.map((contact) => contact.id).join("|") ?? "";
 
@@ -488,6 +496,32 @@ function DashboardApp() {
       setError(callError instanceof Error ? callError.message : "Iris could not place the call.");
     } finally {
       setIsCallRequesting(false);
+    }
+  };
+
+  const addCareNote = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!personId) return;
+    const body = noteDraft.trim();
+    if (!body) {
+      setNoteFormError("Enter a note before saving.");
+      return;
+    }
+    setIsSavingNote(true);
+    setNoteFormError(null);
+    setError(null);
+    try {
+      await dashboardJson(`/api/dashboard/people/${personId}/notes`, token, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ body }),
+      });
+      setNoteDraft("");
+      setRefreshVersion((current) => current + 1);
+    } catch (noteError) {
+      setNoteFormError(noteError instanceof Error ? noteError.message : "Unable to save this note.");
+    } finally {
+      setIsSavingNote(false);
     }
   };
 
@@ -987,6 +1021,92 @@ function DashboardApp() {
     </section>
   ) : null;
 
+  const canUseCareNotes = overview?.permissions.includes("care_notes") ?? false;
+  const visibleIrisNotes = overview?.calls.filter((call) => call.careSummary) ?? [];
+  const careNotes = overview?.notes ?? [];
+  const notesFeed = [
+    ...visibleIrisNotes.map((call) => ({
+      id: `iris-${call.id}`,
+      kind: "iris" as const,
+      occurredAt: call.startedAt,
+      recap: call.careSummary!.recap,
+      suggestions: call.careSummary!.irisSuggestedNextSteps,
+    })),
+    ...careNotes.map((note) => ({
+      id: `note-${note.id}`,
+      kind: "note" as const,
+      occurredAt: note.createdAt,
+      authorDisplayName: note.authorDisplayName,
+      authorRelationship: note.authorRelationship,
+      body: note.body,
+    })),
+  ].sort((left, right) => right.occurredAt.localeCompare(left.occurredAt) || right.id.localeCompare(left.id));
+  const notesCard = overview && canUseCareNotes ? (
+    <section className="overview-card notes-card">
+      <div className="card-heading">
+        <div className="card-header">
+          <p className="card-kicker">Notes</p>
+          <h2>Care-circle updates</h2>
+          <p className="privacy-note">Keep track of recent Iris calls and the ways your care circle has connected.</p>
+        </div>
+        <span className="count-pill">{notesFeed.length}</span>
+      </div>
+      <div className="last-check-in">
+        <strong>Last check-in</strong>
+        <span>{overview.lastCheckInAt ? formatDate(overview.lastCheckInAt) : "No check-in yet"}</span>
+      </div>
+      {notesFeed.length > 0 ? (
+        <div className="notes-feed">
+          <ol className="item-list">
+            {notesFeed.map((item) => item.kind === "iris" ? (
+              <li key={item.id}>
+                <strong>Iris call</strong>
+                <span>{formatDate(item.occurredAt)}</span>
+                <p className="care-note-body">{item.recap}</p>
+                {item.suggestions.length > 0 && (
+                  <div className="care-summary">
+                    <strong>Iris suggested</strong>
+                    <ul>{item.suggestions.map((suggestion, index) => <li key={`${item.id}-suggestion-${index}`}>{suggestion}</li>)}</ul>
+                  </div>
+                )}
+              </li>
+            ) : (
+              <li key={item.id}>
+                <strong>{item.authorDisplayName}{item.authorRelationship ? ` · ${item.authorRelationship}` : ""}</strong>
+                <span>{formatDate(item.occurredAt)}</span>
+                <p className="care-note-body">{item.body}</p>
+              </li>
+            ))}
+          </ol>
+        </div>
+      ) : (
+        <div className="empty-state-card">
+          <p className="empty-state">Care-circle updates will appear here.</p>
+        </div>
+      )}
+      <form className="compact-form notes-form" noValidate onSubmit={addCareNote}>
+        <label className="form-field" htmlFor="care-note">
+          Add a note
+          <span>Share a quick update with this person’s care circle.</span>
+          <textarea
+            id="care-note"
+            value={noteDraft}
+            maxLength={1000}
+            placeholder="e.g. I called after dinner and they sounded in good spirits."
+            onChange={(event) => {
+              setNoteDraft(event.target.value);
+              setNoteFormError(null);
+            }}
+          />
+          {noteFormError && <p className="form-validation-error" role="alert">{noteFormError}</p>}
+        </label>
+        <button className="secondary-button full-width-action" type="submit" disabled={isSavingNote}>
+          {isSavingNote ? "Saving…" : "Save note"}
+        </button>
+      </form>
+    </section>
+  ) : null;
+
   const timelineCard = overview ? (
     <section className="overview-card timeline-card dashboard-split-aside">
       <div className="card-heading">
@@ -1298,7 +1418,7 @@ function DashboardApp() {
       {(overview || (principal?.role === "admin" && (isAddingPerson || adminPeople.length === 0))) && (
         <div className="dashboard-grid is-dashboard-split">
           {isOperator && showHomeCards && (
-            <div className="dashboard-column-stack">
+            <div className="operator-home-primary">
             <section className="overview-card enrollment-card">
               <div className="enrollment-header">
                 <p className="card-kicker">Enrollment</p>
@@ -1372,10 +1492,10 @@ function DashboardApp() {
             </div>
           )}
           {isTrusted && showHomeCards && (
-            <>
+            <div className="dashboard-column-stack trusted-home-primary">
               {personCard}
               {trustedSelfCard}
-            </>
+            </div>
           )}
 
           {showActivityCards && overview && (
@@ -1398,12 +1518,13 @@ function DashboardApp() {
           )}
 
           {isOperator && showHomeCards && overview && (
-          <section className="overview-card trusted-contacts-card dashboard-split-aside">
-            <div className="card-header">
-              <p className="card-kicker">Trusted contacts</p>
-              <h2>People in the circle</h2>
-              <p className="privacy-note">Add the people who can stay connected with {overview.person.displayName}. They can receive a dashboard link, request an Iris check-in, and choose whether to receive text messages.</p>
-            </div>
+          <div className="operator-home-secondary">
+            <section className="overview-card trusted-contacts-card dashboard-split-aside">
+              <div className="card-header">
+                <p className="card-kicker">Trusted contacts</p>
+                <h2>People in the circle</h2>
+                <p className="privacy-note">Add the people who can stay connected with {overview.person.displayName}. They can receive a dashboard link, request an Iris check-in, and choose whether to receive text messages.</p>
+              </div>
                 <div className="trusted-contact-picker">
                   <strong>Trusted contact</strong>
                   <span>{isAddingContact ? "Fill in the form below, then save to add them to the care circle." : "Choose who the dashboard and SMS actions below apply to."}</span>
@@ -1646,8 +1767,11 @@ function DashboardApp() {
                 <button className="secondary-button create-person-button" type="submit" disabled={isCreatingContact}>{isCreatingContact ? "Saving…" : "Add contact"}</button>
               </form>
             )}
-          </section>
+            </section>
+            {notesCard}
+          </div>
           )}
+          {isTrusted && showHomeCards && <div className="trusted-home-notes">{notesCard}</div>}
         </div>
       )}
     </main>

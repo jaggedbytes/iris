@@ -103,7 +103,17 @@ test("care-note scope authorizes posting and controls last-check-in visibility",
   const fixture = await createDashboardServer();
   try {
     fixture.repositories.createCall({ id: "call-a", personId: "person-a", status: "completed" });
-    fixture.repositories.completeCall({ id: "call-a", status: "completed" });
+    fixture.repositories.recordConsent({ id: "retention", personId: "person-a", kind: "summary_retention", status: "granted", source: "test" });
+    fixture.repositories.recordConsent({ id: "care-sharing", personId: "person-a", kind: "care_summary_sharing", status: "granted", source: "test" });
+    fixture.repositories.completeCall({
+      id: "call-a", status: "completed", summaryJson: JSON.stringify({
+        recap: "Private memory.", facts: [], people: [], unresolvedTopics: [], recallAnchor: null,
+        careSummary: {
+          recap: "Avery enjoyed a family call.", moodAndConcerns: [],
+          irisSuggestedNextSteps: ["Iris suggested making time for a favorite show."],
+        },
+      }),
+    });
     fixture.repositories.grantAccess({
       id: "grant-notes", personId: "person-a", trustedContactId: "contact-a",
       scopes: ["care_notes"], tokenHash: hash("notes-token"), expiresAt: futureExpiry(),
@@ -132,7 +142,14 @@ test("care-note scope authorizes posting and controls last-check-in visibility",
     const notesAndSummaries = await fetch(`${fixture.url}/api/dashboard/people/person-a/overview`, {
       headers: { Authorization: "Bearer notes-and-summaries-token" },
     });
-    assert.ok((await notesAndSummaries.json() as { lastCheckInAt: string | null }).lastCheckInAt);
+    const notesAndSummariesBody = await notesAndSummaries.json() as {
+      lastCheckInAt: string | null;
+      notes: unknown[];
+      calls: Array<{ careSummary: { recap: string } | null }>;
+    };
+    assert.ok(notesAndSummariesBody.lastCheckInAt);
+    assert.deepEqual(notesAndSummariesBody.notes, []);
+    assert.equal(notesAndSummariesBody.calls[0]?.careSummary?.recap, "Avery enjoyed a family call.");
 
     const adminCreated = await fetch(`${fixture.url}/api/dashboard/people/person-a/notes`, {
       method: "POST",
@@ -165,12 +182,26 @@ test("care-note scope authorizes posting and controls last-check-in visibility",
     const notesOnlyAfter = await fetch(`${fixture.url}/api/dashboard/people/person-a/overview`, {
       headers: { Authorization: "Bearer notes-token" },
     });
-    assert.ok((await notesOnlyAfter.json() as { lastCheckInAt: string | null }).lastCheckInAt);
+    const notesOnlyAfterBody = await notesOnlyAfter.json() as {
+      lastCheckInAt: string | null;
+      notes: Array<{ authorDisplayName: string; body: string }>;
+      calls: unknown[];
+    };
+    assert.ok(notesOnlyAfterBody.lastCheckInAt);
+    assert.deepEqual(notesOnlyAfterBody.calls, []);
+    assert.deepEqual(notesOnlyAfterBody.notes.map((note) => ({ authorDisplayName: note.authorDisplayName, body: note.body })), [
+      { authorDisplayName: "Robin", body: "I checked in after dinner." },
+      { authorDisplayName: "Operator", body: "Operator checked in too." },
+    ]);
+    assert.equal(JSON.stringify(notesOnlyAfterBody).includes("authorTrustedContactId"), false);
 
     const summariesOnly = await fetch(`${fixture.url}/api/dashboard/people/person-a/overview`, {
       headers: { Authorization: "Bearer summaries-token" },
     });
-    assert.equal("lastCheckInAt" in (await summariesOnly.json() as Record<string, unknown>), false);
+    const summariesOnlyBody = await summariesOnly.json() as { calls: Array<{ careSummary: { recap: string } | null }> } & Record<string, unknown>;
+    assert.equal("lastCheckInAt" in summariesOnlyBody, false);
+    assert.equal("notes" in summariesOnlyBody, false);
+    assert.equal(summariesOnlyBody.calls[0]?.careSummary?.recap, "Avery enjoyed a family call.");
 
     const crossPerson = await fetch(`${fixture.url}/api/dashboard/people/person-b/notes`, {
       method: "POST",
