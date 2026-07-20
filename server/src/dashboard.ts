@@ -264,7 +264,14 @@ function callOverview(call: CallRecord, includeSharedCareSummary: boolean, inclu
     : overview;
 }
 
-function noteOverview(note: CareNote) {
+function canEditCareNote(principal: DashboardPrincipal, note: CareNote) {
+  if (principal.role === "admin") return note.authorRole === "operator";
+  // A deleted contact leaves behind its attribution snapshot but loses its
+  // live identity, so the note intentionally becomes non-editable.
+  return note.authorRole === "trusted_contact" && note.authorTrustedContactId === principal.trustedContactId;
+}
+
+function noteOverview(note: CareNote, canEdit: boolean) {
   return {
     id: note.id,
     authorRole: note.authorRole,
@@ -272,6 +279,8 @@ function noteOverview(note: CareNote) {
     authorRelationship: note.authorRelationship,
     body: note.body,
     createdAt: note.createdAt,
+    updatedAt: note.updatedAt,
+    canEdit,
   };
 }
 
@@ -453,7 +462,7 @@ export function createDashboardRouter(context: DashboardContext) {
         : null,
       ...(canUseCareNotes
         ? {
-          notes: context.repositories.listUnthreadedCareNotes(personId).map(noteOverview),
+          notes: context.repositories.listUnthreadedCareNotes(personId).map((note) => noteOverview(note, canEditCareNote(principal, note))),
           lastCheckInAt: context.repositories.lastCheckInAt(personId, canSeeCompletedCallsForCheckIn),
         }
         : {}),
@@ -529,7 +538,7 @@ export function createDashboardRouter(context: DashboardContext) {
         ? context.repositories.listEventsForCall(personId, callId).map(timelineEvent)
         : [],
       notes: hasScope(principal, "care_notes")
-        ? context.repositories.listCareNotesForCall(personId, callId).map(noteOverview)
+        ? context.repositories.listCareNotesForCall(personId, callId).map((note) => noteOverview(note, canEditCareNote(principal, note)))
         : [],
     });
   });
@@ -572,7 +581,7 @@ export function createDashboardRouter(context: DashboardContext) {
       authorRelationship: contact?.relationship ?? null,
       body,
     });
-    response.status(201).json({ note: noteOverview(note) });
+    response.status(201).json({ note: noteOverview(note, canEditCareNote(principal, note)) });
   });
 
   router.post("/people/:personId/calls/:callId/notes", (request, response) => {
@@ -613,7 +622,69 @@ export function createDashboardRouter(context: DashboardContext) {
       authorRelationship: contact?.relationship ?? null,
       body,
     });
-    response.status(201).json({ note: noteOverview(note) });
+    response.status(201).json({ note: noteOverview(note, canEditCareNote(principal, note)) });
+  });
+
+  router.patch("/people/:personId/notes/:noteId", (request, response) => {
+    const principal = requirePrincipal(request, response, context);
+    if (!principal) return;
+    const { personId, noteId } = request.params;
+    if (!canAccessPerson(principal, personId)) {
+      response.status(403).json({ error: "This link cannot access that person." });
+      return;
+    }
+    if (!hasScope(principal, "care_notes")) {
+      response.status(403).json({ error: "This link cannot edit care-circle notes." });
+      return;
+    }
+    const note = context.repositories.getCareNote(noteId);
+    if (!note || note.personId !== personId || note.deletedAt) {
+      response.status(404).json({ error: "Note not found." });
+      return;
+    }
+    if (!canEditCareNote(principal, note)) {
+      response.status(403).json({ error: "You can only edit notes you wrote." });
+      return;
+    }
+    const body = stringField(request.body?.body, 1000);
+    if (!body) {
+      response.status(400).json({ error: "Enter a note up to 1,000 characters." });
+      return;
+    }
+    const updated = context.repositories.updateCareNote({ id: noteId, body });
+    if (!updated) {
+      response.status(404).json({ error: "Note not found." });
+      return;
+    }
+    response.json({ note: noteOverview(updated, true) });
+  });
+
+  router.delete("/people/:personId/notes/:noteId", (request, response) => {
+    const principal = requirePrincipal(request, response, context);
+    if (!principal) return;
+    const { personId, noteId } = request.params;
+    if (!canAccessPerson(principal, personId)) {
+      response.status(403).json({ error: "This link cannot access that person." });
+      return;
+    }
+    if (!hasScope(principal, "care_notes")) {
+      response.status(403).json({ error: "This link cannot delete care-circle notes." });
+      return;
+    }
+    const note = context.repositories.getCareNote(noteId);
+    if (!note || note.personId !== personId || note.deletedAt) {
+      response.status(404).json({ error: "Note not found." });
+      return;
+    }
+    if (!canEditCareNote(principal, note)) {
+      response.status(403).json({ error: "You can only delete notes you wrote." });
+      return;
+    }
+    if (!context.repositories.deleteCareNote(noteId)) {
+      response.status(404).json({ error: "Note not found." });
+      return;
+    }
+    response.status(204).end();
   });
 
   router.post("/people/:personId/consents/:kind", (request, response) => {

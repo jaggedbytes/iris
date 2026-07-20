@@ -102,6 +102,9 @@ export type CareNote = {
   authorRelationship: string | null;
   body: string;
   createdAt: string;
+  updatedAt: string;
+  /** Internal retention marker. Dashboard projections must never expose it. */
+  deletedAt: string | null;
 };
 
 export type ActionRequestRecord = {

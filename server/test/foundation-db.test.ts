@@ -384,7 +384,7 @@ test("008 enrollment migration preserves action dispatch records and adds append
   }
 });
 
-test("015 call thread links preserve legacy rows and null links when a call is deleted", () => {
+test("015 call thread links and 016 note mutability preserve legacy rows and null links when a call is deleted", () => {
   const database = new Database(":memory:");
   database.pragma("foreign_keys = ON");
   try {
@@ -416,6 +416,10 @@ test("015 call thread links preserve legacy rows and null links when a call is d
     assert.deepEqual(
       database.prepare("SELECT call_id FROM care_notes WHERE id = ?").get("legacy-note"),
       { call_id: null },
+    );
+    assert.deepEqual(
+      database.prepare("SELECT updated_at, deleted_at FROM care_notes WHERE id = ?").get("legacy-note"),
+      { updated_at: "2026-07-20T00:00:00.000Z", deleted_at: null },
     );
     const repositories = createRepositories(database);
     repositories.createCall({ id: "call-a", personId: "person-a", status: "answered" });

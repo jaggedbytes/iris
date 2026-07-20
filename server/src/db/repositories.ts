@@ -81,6 +81,8 @@ type CareNoteRow = {
   author_relationship: string | null;
   body: string;
   created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
 };
 
 type ActionRequestRow = {
@@ -182,6 +184,8 @@ const toCareNote = (row: CareNoteRow): CareNote => ({
   authorRelationship: row.author_relationship,
   body: row.body,
   createdAt: row.created_at,
+  updatedAt: row.updated_at,
+  deletedAt: row.deleted_at,
 });
 
 const toActionRequest = (row: ActionRequestRow): ActionRequestRecord => ({
@@ -1003,8 +1007,8 @@ export function createRepositories(database: IrisDatabase) {
       const createdAt = now();
       database.prepare(
         `INSERT INTO care_notes
-           (id, person_id, call_id, author_role, author_trusted_contact_id, author_display_name, author_relationship, body, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, person_id, call_id, author_role, author_trusted_contact_id, author_display_name, author_relationship, body, created_at, updated_at, deleted_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
       ).run(
         input.id,
         input.personId,
@@ -1015,6 +1019,7 @@ export function createRepositories(database: IrisDatabase) {
         input.authorRelationship ?? null,
         input.body,
         createdAt,
+        createdAt,
       );
       return this.getCareNote(input.id)!;
     },
@@ -1024,23 +1029,39 @@ export function createRepositories(database: IrisDatabase) {
       return row ? toCareNote(row) : null;
     },
 
+    updateCareNote(input: { id: string; body: string }) {
+      const updatedAt = now();
+      const result = database.prepare(
+        "UPDATE care_notes SET body = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
+      ).run(input.body, updatedAt, input.id);
+      return result.changes === 1 ? this.getCareNote(input.id) : null;
+    },
+
+    deleteCareNote(id: string) {
+      const deletedAt = now();
+      const result = database.prepare(
+        "UPDATE care_notes SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
+      ).run(deletedAt, deletedAt, id);
+      return result.changes === 1;
+    },
+
     listCareNotes(personId: string) {
       const rows = database.prepare(
-        "SELECT * FROM care_notes WHERE person_id = ? ORDER BY created_at DESC, rowid DESC",
+        "SELECT * FROM care_notes WHERE person_id = ? AND deleted_at IS NULL ORDER BY created_at DESC, rowid DESC",
       ).all(personId) as CareNoteRow[];
       return rows.map(toCareNote);
     },
 
     listUnthreadedCareNotes(personId: string) {
       const rows = database.prepare(
-        "SELECT * FROM care_notes WHERE person_id = ? AND call_id IS NULL ORDER BY created_at DESC, rowid DESC",
+        "SELECT * FROM care_notes WHERE person_id = ? AND call_id IS NULL AND deleted_at IS NULL ORDER BY created_at DESC, rowid DESC",
       ).all(personId) as CareNoteRow[];
       return rows.map(toCareNote);
     },
 
     listCareNotesForCall(personId: string, callId: string) {
       const rows = database.prepare(
-        "SELECT * FROM care_notes WHERE person_id = ? AND call_id = ? ORDER BY created_at ASC, rowid ASC",
+        "SELECT * FROM care_notes WHERE person_id = ? AND call_id = ? AND deleted_at IS NULL ORDER BY created_at ASC, rowid ASC",
       ).all(personId, callId) as CareNoteRow[];
       return rows.map(toCareNote);
     },
@@ -1049,14 +1070,14 @@ export function createRepositories(database: IrisDatabase) {
       const row = includeCompletedCalls
         ? database.prepare(
           `SELECT MAX(occurred_at) AS occurred_at FROM (
-             SELECT created_at AS occurred_at FROM care_notes WHERE person_id = ?
+             SELECT created_at AS occurred_at FROM care_notes WHERE person_id = ? AND deleted_at IS NULL
              UNION ALL
              SELECT COALESCE(ended_at, started_at) AS occurred_at
                FROM calls WHERE person_id = ? AND status = 'completed'
            )`,
         ).get(personId, personId) as { occurred_at: string | null }
         : database.prepare(
-          "SELECT MAX(created_at) AS occurred_at FROM care_notes WHERE person_id = ?",
+          "SELECT MAX(created_at) AS occurred_at FROM care_notes WHERE person_id = ? AND deleted_at IS NULL",
         ).get(personId) as { occurred_at: string | null };
       return row.occurred_at;
     },
