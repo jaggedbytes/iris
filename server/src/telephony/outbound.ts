@@ -296,7 +296,7 @@ export class OutboundCallManager {
         this.bridge && bridgeContext ? {
           context: JSON.stringify({ memories: bridgeContext.memories, contacts: bridgeContext.contacts }),
           recallAnchor: bridgeContext.recallAnchor,
-          dispatch: (contactId, message, approvalId) => this.bridge!.sendApprovedSms({ personId: active.personId, trustedContactId: contactId, message, approvalId }),
+          dispatch: (contactId, message, approvalId) => this.bridge!.sendApprovedSms({ callId, personId: active.personId, trustedContactId: contactId, message, approvalId }),
         } : undefined,
         active.checkInRequester?.displayName,
         this.scheduler,

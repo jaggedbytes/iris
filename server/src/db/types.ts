@@ -93,6 +93,8 @@ export type TimelineEvent = {
 export type CareNote = {
   id: string;
   personId: string;
+  /** Null for a general care-circle update, or after its call is deleted. */
+  callId: string | null;
   authorRole: "operator" | "trusted_contact";
   /** Null after a trusted contact is deleted; snapshots preserve attribution. */
   authorTrustedContactId: string | null;
@@ -105,6 +107,8 @@ export type CareNote = {
 export type ActionRequestRecord = {
   id: string;
   personId: string;
+  /** The live call that originated this action, when applicable. */
+  sourceCallId: string | null;
   feature: "bridge" | "shield" | "translator" | "enrollment";
   actionType: string;
   payload: unknown;
@@ -117,6 +121,7 @@ export type ActionRequestRecord = {
 export type CreateActionRequest = {
   id: string;
   personId: string;
+  sourceCallId?: string | null;
   feature: "bridge" | "shield" | "translator" | "enrollment";
   actionType: string;
   payload: unknown;

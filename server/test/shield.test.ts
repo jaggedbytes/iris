@@ -132,6 +132,7 @@ test("Shield alert is fixed, approval-gated, idempotent, and exposes only the co
     assert.deepEqual(messages, [{ to: "+15550002222", body: "Iris: Iris is speaking with Avery about something that feels urgent or suspicious. Please check in with them when you can. Reply HELP for help. Reply STOP to opt out." }]);
     const action = repositories.listActionRequests("person-a")[0];
     assert.equal(action.feature, "shield");
+    assert.equal(action.sourceCallId, "call-a");
     assert.equal(action.status, "dispatched");
     assert.equal(repositories.getActionDispatch(action.id)?.state, "dispatched");
     const events = repositories.listEvents("person-a").filter((event) => event.type === "shield.alert_sent");
@@ -139,6 +140,7 @@ test("Shield alert is fixed, approval-gated, idempotent, and exposes only the co
     assert.equal(JSON.stringify(events).includes(messages[0].body), false);
     assert.equal(JSON.stringify(events).includes(messages[0].to), false);
     assert.equal(JSON.stringify(events).includes("SMshield"), false);
+    assert.equal(repositories.listEvents("person-a").every((event) => event.callId === "call-a"), true);
   } finally {
     closeDatabase(database);
   }

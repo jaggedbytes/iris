@@ -384,6 +384,62 @@ test("008 enrollment migration preserves action dispatch records and adds append
   }
 });
 
+test("015 call thread links preserve legacy rows and null links when a call is deleted", () => {
+  const database = new Database(":memory:");
+  database.pragma("foreign_keys = ON");
+  try {
+    database.exec("CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL)");
+    const record = database.prepare("INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)");
+    for (const migration of migrations) {
+      if (migration.id === "015_call_thread_links") break;
+      database.exec(migration.sql);
+      record.run(migration.id, "2026-07-20T00:00:00.000Z");
+    }
+    database.prepare("INSERT INTO people (id, display_name, created_at) VALUES (?, ?, ?)").run("person-a", "Avery", "2026-07-20T00:00:00.000Z");
+    database.prepare(
+      `INSERT INTO action_requests
+       (id, person_id, feature, action_type, payload_json, status, idempotency_key, created_at, updated_at)
+       VALUES (?, ?, 'bridge', 'sms', '{}', 'approved', ?, ?, ?)`,
+    ).run("legacy-action", "person-a", "legacy-action-key", "2026-07-20T00:00:00.000Z", "2026-07-20T00:00:00.000Z");
+    database.prepare(
+      `INSERT INTO care_notes
+       (id, person_id, author_role, author_trusted_contact_id, author_display_name, author_relationship, body, created_at)
+       VALUES (?, ?, 'operator', NULL, 'Operator', NULL, 'Legacy note', ?)`,
+    ).run("legacy-note", "person-a", "2026-07-20T00:00:00.000Z");
+
+    migrate(database);
+
+    assert.deepEqual(
+      database.prepare("SELECT source_call_id FROM action_requests WHERE id = ?").get("legacy-action"),
+      { source_call_id: null },
+    );
+    assert.deepEqual(
+      database.prepare("SELECT call_id FROM care_notes WHERE id = ?").get("legacy-note"),
+      { call_id: null },
+    );
+    const repositories = createRepositories(database);
+    repositories.createCall({ id: "call-a", personId: "person-a", status: "answered" });
+    repositories.createCareNote({
+      id: "thread-note", personId: "person-a", callId: "call-a", authorRole: "operator",
+      authorDisplayName: "Operator", body: "Call-specific note",
+    });
+    repositories.createActionRequest({
+      id: "thread-action", personId: "person-a", sourceCallId: "call-a", feature: "bridge",
+      actionType: "sms", idempotencyKey: "thread-action-key", payload: {},
+    });
+    repositories.createEvent({ id: "thread-event", personId: "person-a", callId: "call-a", type: "call.completed", payload: {} });
+    assert.equal(repositories.listCareNotesForCall("person-a", "call-a").map((note) => note.id)[0], "thread-note");
+    assert.equal(repositories.listEventsForCall("person-a", "call-a").map((event) => event.id)[0], "thread-event");
+
+    database.prepare("DELETE FROM calls WHERE id = ?").run("call-a");
+    assert.equal(repositories.getCareNote("thread-note")?.callId, null);
+    assert.equal(repositories.getActionRequest("thread-action")?.sourceCallId, null);
+    assert.equal(repositories.listEvents("person-a").find((event) => event.id === "thread-event")?.callId, null);
+  } finally {
+    database.close();
+  }
+});
+
 test("tracks trusted-contact SMS consent and one-time invitations without crossing people", () => {
   const { database, repositories } = createTestRepositories();
   try {

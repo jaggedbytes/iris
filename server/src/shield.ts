@@ -163,6 +163,7 @@ export class ShieldService {
       this.repositories.createActionRequest({
         id: actionId,
         personId: input.personId,
+        sourceCallId: input.callId,
         feature: "shield",
         actionType: "sms",
         approvalSource: "spoken_call",

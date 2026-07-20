@@ -74,6 +74,7 @@ type EventRow = {
 type CareNoteRow = {
   id: string;
   person_id: string;
+  call_id: string | null;
   author_role: "operator" | "trusted_contact";
   author_trusted_contact_id: string | null;
   author_display_name: string;
@@ -85,6 +86,7 @@ type CareNoteRow = {
 type ActionRequestRow = {
   id: string;
   person_id: string;
+  source_call_id: string | null;
   feature: "bridge" | "shield" | "translator" | "enrollment";
   action_type: string;
   payload_json: string;
@@ -173,6 +175,7 @@ const toEvent = (row: EventRow): TimelineEvent => ({
 const toCareNote = (row: CareNoteRow): CareNote => ({
   id: row.id,
   personId: row.person_id,
+  callId: row.call_id,
   authorRole: row.author_role,
   authorTrustedContactId: row.author_trusted_contact_id,
   authorDisplayName: row.author_display_name,
@@ -184,6 +187,7 @@ const toCareNote = (row: CareNoteRow): CareNote => ({
 const toActionRequest = (row: ActionRequestRow): ActionRequestRecord => ({
   id: row.id,
   personId: row.person_id,
+  sourceCallId: row.source_call_id,
   feature: row.feature,
   actionType: row.action_type,
   payload: JSON.parse(row.payload_json) as unknown,
@@ -982,6 +986,7 @@ export function createRepositories(database: IrisDatabase) {
     createCareNote(input: {
       id: string;
       personId: string;
+      callId?: string | null;
       authorRole: CareNote["authorRole"];
       authorTrustedContactId?: string | null;
       authorDisplayName: string;
@@ -991,11 +996,12 @@ export function createRepositories(database: IrisDatabase) {
       const createdAt = now();
       database.prepare(
         `INSERT INTO care_notes
-           (id, person_id, author_role, author_trusted_contact_id, author_display_name, author_relationship, body, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, person_id, call_id, author_role, author_trusted_contact_id, author_display_name, author_relationship, body, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         input.id,
         input.personId,
+        input.callId ?? null,
         input.authorRole,
         input.authorTrustedContactId ?? null,
         input.authorDisplayName,
@@ -1015,6 +1021,13 @@ export function createRepositories(database: IrisDatabase) {
       const rows = database.prepare(
         "SELECT * FROM care_notes WHERE person_id = ? ORDER BY created_at DESC, rowid DESC",
       ).all(personId) as CareNoteRow[];
+      return rows.map(toCareNote);
+    },
+
+    listCareNotesForCall(personId: string, callId: string) {
+      const rows = database.prepare(
+        "SELECT * FROM care_notes WHERE person_id = ? AND call_id = ? ORDER BY created_at ASC, rowid ASC",
+      ).all(personId, callId) as CareNoteRow[];
       return rows.map(toCareNote);
     },
 
@@ -1105,12 +1118,13 @@ export function createRepositories(database: IrisDatabase) {
       database
         .prepare(
           `INSERT INTO action_requests
-             (id, person_id, feature, action_type, payload_json, status, approval_source, idempotency_key, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, 'pending_approval', ?, ?, ?, ?)`,
+             (id, person_id, source_call_id, feature, action_type, payload_json, status, approval_source, idempotency_key, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'pending_approval', ?, ?, ?, ?)`,
         )
         .run(
           input.id,
           input.personId,
+          input.sourceCallId ?? null,
           input.feature,
           input.actionType,
           JSON.stringify(input.payload),
@@ -1182,11 +1196,11 @@ export function createRepositories(database: IrisDatabase) {
       // still have been accepted by Twilio, so automatic re-send is unsafe.
       return database.transaction(() => {
         const rows = database.prepare(
-          `SELECT o.action_request_id AS actionRequestId, a.person_id AS personId
+          `SELECT o.action_request_id AS actionRequestId, a.person_id AS personId, a.source_call_id AS sourceCallId
              FROM action_dispatch_outbox o
              JOIN action_requests a ON a.id = o.action_request_id
             WHERE o.state = 'dispatching' AND o.updated_at < ? AND a.status = 'approved'`,
-        ).all(cutoffIso) as Array<{ actionRequestId: string; personId: string }>;
+        ).all(cutoffIso) as Array<{ actionRequestId: string; personId: string; sourceCallId: string | null }>;
         const promote = database.prepare(
           "UPDATE action_dispatch_outbox SET state = 'needs_review', updated_at = ? WHERE action_request_id = ? AND state = 'dispatching'",
         );
@@ -1247,6 +1261,15 @@ export function createRepositories(database: IrisDatabase) {
           "SELECT * FROM events WHERE person_id = ? ORDER BY occurred_at DESC",
         )
         .all(personId) as EventRow[];
+      return rows.map(toEvent);
+    },
+
+    listEventsForCall(personId: string, callId: string) {
+      const rows = database
+        .prepare(
+          "SELECT * FROM events WHERE person_id = ? AND call_id = ? ORDER BY occurred_at ASC, rowid ASC",
+        )
+        .all(personId, callId) as EventRow[];
       return rows.map(toEvent);
     },
 

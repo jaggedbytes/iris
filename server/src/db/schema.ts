@@ -410,4 +410,23 @@ export const migrations = [
         ON care_notes(person_id, created_at DESC);
     `,
   },
+  {
+    id: "015_call_thread_links",
+    sql: `
+      ALTER TABLE care_notes
+        ADD COLUMN call_id TEXT REFERENCES calls(id) ON DELETE SET NULL;
+
+      ALTER TABLE action_requests
+        ADD COLUMN source_call_id TEXT REFERENCES calls(id) ON DELETE SET NULL;
+
+      CREATE INDEX idx_care_notes_call_created
+        ON care_notes(call_id, created_at DESC);
+
+      CREATE INDEX idx_action_requests_source_call
+        ON action_requests(source_call_id, created_at DESC);
+
+      CREATE INDEX idx_events_call_occurred
+        ON events(call_id, occurred_at DESC);
+    `,
+  },
 ] as const;
