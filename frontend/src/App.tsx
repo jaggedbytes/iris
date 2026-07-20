@@ -734,6 +734,19 @@ function DashboardApp() {
       );
       setOptInLink(result.optInLink);
       setOptInInvitation(result.invitation);
+      setOverview((current) => current
+        ? {
+            ...current,
+            contacts: current.contacts.map((contact) => contact.id === trustedContactId
+              ? {
+                  ...contact,
+                  optInLinkState: "active",
+                  smsOptInInvitation: result.invitation,
+                }
+              : contact),
+          }
+        : current);
+      setRefreshVersion((current) => current + 1);
     } catch (inviteError) {
       setError(inviteError instanceof Error ? inviteError.message : "Unable to create an opt-in link.");
     }
