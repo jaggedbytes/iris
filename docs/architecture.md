@@ -41,7 +41,6 @@ An ordinary handset hangup remains a fully supported completion path. Both paths
 
 ## Deliberate deferrals
 
-- Browser WebRTC remains as a separate persona experiment, not the demo transport.
 - Translator is not yet a vertical slice.
 - There is no automatic retry for uncertain SMS dispatches.
 - Call recording, raw transcript storage, and analytics persistence are intentionally out of scope.

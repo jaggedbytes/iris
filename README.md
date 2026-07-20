@@ -16,27 +16,13 @@ Operator or trusted contact dashboard
 
 The timeline is a privacy boundary: it renders only allowlisted, human-readable event data. It never exposes message bodies, phone numbers, provider identifiers, raw transcripts, or audit metadata.
 
-## Browser voice prototype
-
-The browser loop remains from the earlier persona experiment. It is intentionally separate from the phone-first demo:
-
-- `server/` — Express + TypeScript. It mints a short-lived OpenAI Realtime client secret and owns persona configuration.
-- `frontend/` — Vite + React + TypeScript. It contains the dashboard, public SMS opt-in page, and the earlier WebRTC voice experiment.
-
-The browser will never receive `OPENAI_API_KEY`. The intended connection flow is:
-
-```text
-Browser → Iris server (short-lived token) → OpenAI Realtime
-Browser ─────────────── WebRTC audio + events ─────────────→ OpenAI Realtime
-```
-
-The browser WebRTC voice loop and token endpoint are still implemented as the earlier persona experiment. It is not part of the phone-first Bridge demo. The user’s microphone audio and Iris’s returned audio are live-only.
-
 ## Hosted judge demo (Railway)
 
 The judge-facing demo should be a private, hosted instance operated by you; do
 not ask judges to configure Twilio or run a local server. The seeded local
 workflow remains the reproducible fallback.
+
+Open the hosted site (for example your Railway public URL), enter `IRIS_ADMIN_TOKEN` on the access screen, and use the operator dashboard. That is the Bridge + Shield demo—there is no browser microphone voice loop.
 
 This repository includes a single-service Docker deployment. In Railway:
 
@@ -106,11 +92,10 @@ Twilio accepting an SMS is not proof of delivery. US long-code delivery may requ
 ```text
 iris/
 ├── docs/
-│   ├── architecture.md
-│   └── voice-prototype.md
-├── frontend/                 # dashboard, opt-in page, and voice prototype
+│   └── architecture.md
+├── frontend/                 # dashboard and public SMS opt-in page
 │   └── src/
-├── server/                   # API and persona ownership
+├── server/                   # API, telephony, and persona ownership
 │   └── src/
 │       └── personas/
 └── README.md
@@ -118,4 +103,4 @@ iris/
 
 ## Privacy boundary
 
-Raw microphone and phone audio, raw transcripts, message bodies, phone numbers, and provider identifiers are never rendered in the dashboard timeline. Phone transcripts are never persisted; they remain in memory through consent-gated summary extraction after the call, then are discarded. Conversation-derived durable storage is limited to consented structured summaries, user-stated facts, named people/context, unresolved topics, and recall anchors. The dashboard receives only the separately consented shared care recap, including explicitly discussed health-related concerns and clearly attributed Iris suggestions; private memory fields and recall anchors never reach the dashboard. Required operational audit and outbox records may also be retained.
+Raw phone audio, raw transcripts, message bodies, phone numbers, and provider identifiers are never rendered in the dashboard timeline. Phone transcripts are never persisted; they remain in memory through consent-gated summary extraction after the call, then are discarded. Conversation-derived durable storage is limited to consented structured summaries, user-stated facts, named people/context, unresolved topics, and recall anchors. The dashboard receives only the separately consented shared care recap, including explicitly discussed health-related concerns and clearly attributed Iris suggestions; private memory fields and recall anchors never reach the dashboard. Required operational audit and outbox records may also be retained.
