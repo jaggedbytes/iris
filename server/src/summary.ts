@@ -157,10 +157,36 @@ function withoutUnconsentedOrUnsafeCareSummary(summary: CallSummary, careSharing
   return summary;
 }
 
-function extractionInstructions(careSharingActive: boolean) {
+function givenName(displayName: string) {
+  return displayName.trim().split(/\s+/).find(Boolean) ?? displayName.trim();
+}
+
+function isSessionMechanicSuggestion(text: string) {
+  return /\b(?:end(?:ing)?(?:\s+the)?\s+call|hang(?:ing)?\s+up|say\s+[“"']?yes|confirm(?:ation)?\s+to\s+end|on the (?:user|person)'?s side)\b/i.test(text);
+}
+
+function scrubSessionMechanicRecap(recap: string) {
+  const kept = recap
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence.length > 0)
+    .filter((sentence) => !/\b(?:end(?:ing)?(?:\s+the)?\s+call|hang(?:ing)?\s+up|say\s+[“"]?yes|confirm(?:ation)?\s+to\s+end)\b/i.test(sentence));
+  return kept.join(" ").trim();
+}
+
+function withoutSessionMechanics(care: CareSummary): CareSummary | null {
+  const irisSuggestedNextSteps = care.irisSuggestedNextSteps.filter((step) => !isSessionMechanicSuggestion(step));
+  const recap = scrubSessionMechanicRecap(care.recap);
+  if (!recap) return null;
+  return { recap, moodAndConcerns: care.moodAndConcerns, irisSuggestedNextSteps };
+}
+
+function extractionInstructions(careSharingActive: boolean, personDisplayName: string) {
+  const firstName = givenName(personDisplayName);
+  const naming = `In every careSummary string, refer to the person as ${JSON.stringify(personDisplayName)} or ${JSON.stringify(firstName)}. Never write "User", "the user", "You", or a generic stand-in.`;
   const narrow = "Extract narrow, explicitly user-stated memory only: durable facts, named people/context, unresolved topics, and a short non-sensitive recallAnchor suitable for a future gentle opener. Never infer mood, concern/risk, diagnosis, or medical/legal/financial conclusion. Ignore assistant suggestions in the narrow fields. Set recallAnchor to null for health, mood, risk, medical, legal, financial, sensitive, or insufficient signal.";
   const care = careSharingActive
-    ? "careSummary is dashboard-only. Write a concise recap whenever the person shares a meaningful update, including explicitly discussed health-related feelings, symptoms, concerns, or plans. moodAndConcerns and irisSuggestedNextSteps may be empty. Include a mood or concern only when the person explicitly stated it; never infer one. Include every direct Iris suggestion that was actually said, including guidance to contact a medical provider, and clearly attribute it as an Iris suggestion. Do not turn the recap into a diagnosis, prognosis, risk classification, treatment plan, or professional conclusion; do not add advice Iris did not say. Never include legal matters, financial or payment details, account information, credentials, passcodes, SSNs, payment-card numbers, phone numbers, email addresses, physical addresses, dates of birth, or assistant inference. Set careSummary to null only when there is no meaningful shareable update or its content is unsafe to share."
+    ? `careSummary is dashboard-only. ${naming} Write a concise recap whenever the person shares a meaningful update, including explicitly discussed health-related feelings, symptoms, concerns, or plans. moodAndConcerns and irisSuggestedNextSteps may be empty. Include a mood or concern only when the person explicitly stated it; never infer one. Include every direct Iris care suggestion that was actually said, including guidance to contact a medical provider, and clearly attribute it as an Iris suggestion. Never include Iris suggestions about ending the call, hanging up, confirming goodbye, or coaching the person to say a hang-up phrase—those are session mechanics, not care guidance. Do not turn the recap into a diagnosis, prognosis, risk classification, treatment plan, or professional conclusion; do not add advice Iris did not say. Never include legal matters, financial or payment details, account information, credentials, passcodes, SSNs, payment-card numbers, phone numbers, email addresses, physical addresses, dates of birth, or assistant inference. Set careSummary to null only when there is no meaningful shareable update or its content is unsafe to share.`
     : "Set careSummary to null. Do not extract mood, concern, or assistant suggestions.";
   return `${narrow} ${care} Return insufficient_signal only when there is no reliable narrow memory and no valid careSummary.`;
 }
@@ -175,8 +201,10 @@ export class CallSummaryPipeline {
       this.repositories.updateCallSummaryState({ id: input.callId, summaryState: "not_requested" });
       return;
     }
+    const person = this.repositories.getPerson(input.personId);
+    const personDisplayName = person?.displayName?.trim() || "the person";
     this.repositories.updateCallSummaryState({ id: input.callId, summaryState: "processing" });
-    const transcript = input.transcript.map((turn) => `${turn.speaker === "user" ? "User" : "Iris"}: ${turn.text}`).join("\n");
+    const transcript = input.transcript.map((turn) => `${turn.speaker === "user" ? personDisplayName : "Iris"}: ${turn.text}`).join("\n");
     // The care section is requested in the same extraction, never as a second
     // billable call. Recheck this consent again before writing because it is
     // revocable while the model request is in flight.
@@ -190,7 +218,7 @@ export class CallSummaryPipeline {
         body: JSON.stringify({
           model: "gpt-5.6-terra", store: false, safety_identifier: this.safetyIdentifier,
           input: [
-            { role: "developer", content: extractionInstructions(careSharingAtRequest) },
+            { role: "developer", content: extractionInstructions(careSharingAtRequest, personDisplayName) },
             { role: "user", content: transcript },
           ],
           text: { format: { type: "json_schema", name: "iris_call_summary", strict: true, schema } },
@@ -212,10 +240,18 @@ export class CallSummaryPipeline {
         this.markUnavailable(input);
         return;
       }
-      const summary = withoutUnconsentedOrUnsafeCareSummary(
+      let summary = withoutUnconsentedOrUnsafeCareSummary(
         extracted,
         careSharingAtRequest && this.repositories.hasActiveConsent(input.personId, "care_summary_sharing"),
       );
+      if (summary.status === "complete" && summary.careSummary) {
+        const cleaned = withoutSessionMechanics(summary.careSummary);
+        summary = { ...summary, careSummary: cleaned };
+        if (!valid(summary)) {
+          this.markUnavailable(input);
+          return;
+        }
+      }
       if (!valid(summary) || summary.status === "insufficient_signal") {
         this.markUnavailable(input);
         return;

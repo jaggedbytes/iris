@@ -75,6 +75,10 @@ function contactPhoneLabel(phoneE164: string | null) {
   return phoneE164 ?? "Phone number not configured";
 }
 
+function givenName(displayName: string) {
+  return displayName.trim().split(/\s+/).find(Boolean) ?? displayName;
+}
+
 function timelineCopy(event: DashboardOverview["events"][number], personName: string) {
   const payload = event.payload && typeof event.payload === "object"
     ? event.payload as { requesterDisplayName?: unknown; contactName?: unknown; status?: unknown }
@@ -1029,7 +1033,7 @@ function DashboardApp() {
                       <div className="care-summary">
                         {call.careSummary.moodAndConcerns.length > 0 && (
                           <div>
-                            <strong>You shared</strong>
+                            <strong>{givenName(overview.person.displayName)} shared</strong>
                             <ul>{call.careSummary.moodAndConcerns.map((item, index) => <li key={`${call.id}-mood-${index}`}>{item}</li>)}</ul>
                           </div>
                         )}

@@ -556,10 +556,11 @@ test("end_call waits for the farewell response, then finalizes through the exist
     })));
     assert.equal(scheduler.scheduled?.delayMs, 10_000);
 
-    // A separate affirmative with a harmless filler is accepted.
-    realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "Actually, yes please hang up." })));
+    // A spoken confirmation Iris asked for—including the common “end the call”
+    // phrasing—should finalize without another confirmation loop.
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "Yes, please end the call." })));
     realtime.emit("message", Buffer.from(JSON.stringify({
-      type: "response.done", response: { id: "response-end-confirmed", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-end-confirmed", arguments: "{\"confirmation\":\"Actually, yes please hang up.\"}" }] },
+      type: "response.done", response: { id: "response-end-confirmed", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-end-confirmed", arguments: "{\"confirmation\":\"Yes, please end the call.\"}" }] },
     })));
     assert.equal(scheduler.scheduled?.delayMs, 77);
     assert.equal(socket.closed, false);
@@ -599,7 +600,7 @@ test("end_call waits for the farewell response, then finalizes through the exist
       { speaker: "user", text: "Goodbye." },
       { speaker: "user", text: "No, let's keep talking." },
       { speaker: "user", text: "Could you end the call?" },
-      { speaker: "user", text: "Actually, yes please hang up." },
+      { speaker: "user", text: "Yes, please end the call." },
     ] }]);
   } finally { closeDatabase(database); }
 });

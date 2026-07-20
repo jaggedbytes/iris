@@ -109,6 +109,8 @@ test("includes explicitly discussed health concerns and Iris guidance in a conse
 
     assert.match(JSON.stringify(requestBody), /health-related feelings, symptoms, concerns, or plans/);
     assert.match(JSON.stringify(requestBody), /guidance to contact a medical provider/);
+    assert.match(JSON.stringify(requestBody), /Never write \\"User\\"/);
+    assert.match(JSON.stringify(requestBody), /Avery: I am tired/);
     const summary = JSON.parse(repositories.listCalls("person-a")[0].summaryJson!) as {
       careSummary: { recap: string; moodAndConcerns: string[]; irisSuggestedNextSteps: string[] };
     };
@@ -118,6 +120,35 @@ test("includes explicitly discussed health concerns and Iris guidance in a conse
       irisSuggestedNextSteps: ["Iris suggested sitting up, taking slow breaths, and calling a medical provider."],
     });
     assert.equal(repositories.listCalls("person-a")[0].summaryState, "ready");
+  } finally { closeDatabase(database); }
+});
+
+test("strips call-ending coaching from consented care recaps", async () => {
+  const { database, repositories } = fixture();
+  repositories.recordConsent({ id: "care-consent", personId: "person-a", kind: "care_summary_sharing", status: "granted", source: "test" });
+  try {
+    await new CallSummaryPipeline(repositories, "key", "safe-id", async () => new Response(JSON.stringify({ output_text: JSON.stringify({
+      status: "complete", recap: "", facts: [], people: [], unresolvedTopics: [], recallAnchor: null,
+      careSummary: {
+        recap: "Avery said they were a little tired after dinner. Iris suggested saying “Yes, end the call” to end the call, and later suggested hanging up on the user's side if desired.",
+        moodAndConcerns: ["Avery said they were a little tired."],
+        irisSuggestedNextSteps: [
+          "Iris suggested saying “Yes, end the call” to end the call.",
+          "Iris suggested hanging up on the user's side if desired.",
+          "Iris suggested drinking some water.",
+        ],
+      },
+    }) }), { status: 200 })).process({
+      callId: "call-a", personId: "person-a",
+      transcript: [{ speaker: "user", text: "I am a little tired after dinner." }],
+    });
+
+    const summary = JSON.parse(repositories.listCalls("person-a")[0].summaryJson!) as {
+      careSummary: { recap: string; moodAndConcerns: string[]; irisSuggestedNextSteps: string[] };
+    };
+    assert.equal(summary.careSummary.recap, "Avery said they were a little tired after dinner.");
+    assert.deepEqual(summary.careSummary.moodAndConcerns, ["Avery said they were a little tired."]);
+    assert.deepEqual(summary.careSummary.irisSuggestedNextSteps, ["Iris suggested drinking some water."]);
   } finally { closeDatabase(database); }
 });
 

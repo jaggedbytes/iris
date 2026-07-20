@@ -52,10 +52,17 @@ function isExplicitEndCallConfirmation(text: string) {
     return false;
   }
   const filler = "(?:(?:um|uh|well|actually)\\s+)*";
-  const affirmative = "(?:yes|yeah|yep|sure|okay|ok|alright|all right)";
-  const affirmativeSuffix = "(?:actually|please|go ahead|you can|you may|end the call|hang up|that's all|that is all|that's it|that is it|nothing else|i'm done|i am done|we're done|we are done)";
-  const completeEnding = "(?:that's all|that is all|that's it|that is it|nothing else|i'm done|i am done|we're done|we are done|all done)";
-  return new RegExp(`^${filler}(?:${affirmative}(?:\\s+${affirmativeSuffix})*|${completeEnding})$`).test(normalized);
+  const affirmative = "(?:yes|yeah|yep|sure|okay|ok|alright|all right|please)";
+  // After Iris asks to confirm, accept short yes-forms or an explicit end request.
+  // Optional trailing "iris" covers common ASR attachments without requiring a
+  // perfect transcript of the confirmation phrase Iris suggested.
+  if (new RegExp(`^${filler}${affirmative}(?:\\s+please)?$`).test(normalized)) return true;
+  if (new RegExp(
+    `^${filler}(?:${affirmative}\\s+)*(?:please\\s+)?(?:go ahead(?:\\s+and)?\\s+)?(?:end(?:ing)?(?:\\s+the)?\\s+call|hang\\s+up)(?:\\s+please)?(?:\\s+iris)?$`,
+  ).test(normalized)) return true;
+  return /^(?:that's|that is) all(?: for now)?$/.test(normalized)
+    || /^(?:that's|that is) it$/.test(normalized)
+    || /^(?:nothing else|i'm done|i am done|we're done|we are done|all done)$/.test(normalized);
 }
 
 function isNaturalEndCallIntent(text: string, userTurns: LiveTranscriptTurn[]) {
@@ -83,6 +90,7 @@ function isNaturalEndCallIntent(text: string, userTurns: LiveTranscriptTurn[]) {
     /^(?:(?:okay|ok|well) )?(?:good night|have a good (?:day|night))(?: iris)?$/,
     /\b(?:i(?:'ll| will) )?(?:talk|speak) to you later$/,
     /\bi (?:should|need to|have to) (?:get going|go)(?: now)?$/,
+    /^(?:please\s+)?(?:end(?:ing)?(?:\s+the)?\s+call|hang\s+up)(?:\s+please)?(?:\s+iris)?$/,
   ].some((pattern) => pattern.test(normalized));
 }
 
