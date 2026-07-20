@@ -264,7 +264,14 @@ function callOverview(call: CallRecord, includeSharedCareSummary: boolean, inclu
     : overview;
 }
 
-function noteOverview(note: CareNote) {
+function canEditCareNote(principal: DashboardPrincipal, note: CareNote) {
+  if (principal.role === "admin") return note.authorRole === "operator";
+  // A deleted contact leaves behind its attribution snapshot but loses its
+  // live identity, so the note intentionally becomes non-editable.
+  return note.authorRole === "trusted_contact" && note.authorTrustedContactId === principal.trustedContactId;
+}
+
+function noteOverview(note: CareNote, canEdit: boolean) {
   return {
     id: note.id,
     authorRole: note.authorRole,
@@ -272,6 +279,8 @@ function noteOverview(note: CareNote) {
     authorRelationship: note.authorRelationship,
     body: note.body,
     createdAt: note.createdAt,
+    updatedAt: note.updatedAt,
+    canEdit,
   };
 }
 
@@ -437,6 +446,17 @@ export function createDashboardRouter(context: DashboardContext) {
       && context.repositories.hasActiveConsent(personId, "care_summary_sharing");
     const canUseCareNotes = hasScope(principal, "care_notes");
     const canSeeCompletedCallsForCheckIn = canUseCareNotes && hasScope(principal, "view_summaries");
+    const visibleCalls = hasScope(principal, "view_summaries")
+      ? context.repositories.listCalls(personId)
+      : [];
+    const homeNotes = canUseCareNotes
+      ? [
+          ...context.repositories.listUnthreadedCareNotes(personId),
+          ...(hasScope(principal, "view_summaries") && visibleCalls[0]
+            ? context.repositories.listCareNotesForCall(personId, visibleCalls[0].id)
+            : []),
+        ]
+      : [];
 
     response.json({
       person: {
@@ -445,20 +465,21 @@ export function createDashboardRouter(context: DashboardContext) {
         phoneE164: person.phoneE164,
         phoneNumberStatus: person.phoneE164 ? "configured" : "not_configured",
       },
-      calls: hasScope(principal, "view_summaries")
-        ? context.repositories.listCalls(personId).map((call) => callOverview(call, careSummarySharingActive, principal.role === "admin"))
-        : [],
+      calls: visibleCalls.map((call) => callOverview(call, careSummarySharingActive, principal.role === "admin")),
       activeCall: activeCall
         ? { id: activeCall.id, status: activeCall.status, startedAt: activeCall.startedAt }
         : null,
       ...(canUseCareNotes
         ? {
-          notes: context.repositories.listCareNotes(personId).map(noteOverview),
+          // Home keeps general notes plus notes from exactly one visible call.
+          // Intentionally omit callId here so this safe feed cannot be used to
+          // reconstruct call-thread associations.
+          notes: homeNotes.map((note) => noteOverview(note, canEditCareNote(principal, note))),
           lastCheckInAt: context.repositories.lastCheckInAt(personId, canSeeCompletedCallsForCheckIn),
         }
         : {}),
       events: hasScope(principal, "view_events")
-        ? context.repositories.listEvents(personId).map(timelineEvent)
+        ? context.repositories.listUnlinkedEvents(personId).map(timelineEvent)
         : [],
       contacts:
         principal.role === "admin"
@@ -504,6 +525,36 @@ export function createDashboardRouter(context: DashboardContext) {
     });
   });
 
+  router.get("/people/:personId/calls/:callId/thread", (request, response) => {
+    const principal = requirePrincipal(request, response, context);
+    if (!principal) return;
+    const { personId, callId } = request.params;
+    if (!canAccessPerson(principal, personId)) {
+      response.status(403).json({ error: "This link cannot access that person." });
+      return;
+    }
+    if (!hasScope(principal, "view_summaries")) {
+      response.status(403).json({ error: "This link cannot view call threads." });
+      return;
+    }
+    const call = context.repositories.getCallForPerson(personId, callId);
+    if (!call) {
+      response.status(404).json({ error: "Call not found." });
+      return;
+    }
+    const careSummarySharingActive = context.repositories.hasActiveConsent(personId, "summary_retention")
+      && context.repositories.hasActiveConsent(personId, "care_summary_sharing");
+    response.json({
+      call: callOverview(call, careSummarySharingActive, principal.role === "admin"),
+      events: hasScope(principal, "view_events")
+        ? context.repositories.listEventsForCall(personId, callId).map(timelineEvent)
+        : [],
+      notes: hasScope(principal, "care_notes")
+        ? context.repositories.listCareNotesForCall(personId, callId).map((note) => noteOverview(note, canEditCareNote(principal, note)))
+        : [],
+    });
+  });
+
   router.post("/people/:personId/notes", (request, response) => {
     const principal = requirePrincipal(request, response, context);
     if (!principal) return;
@@ -542,7 +593,110 @@ export function createDashboardRouter(context: DashboardContext) {
       authorRelationship: contact?.relationship ?? null,
       body,
     });
-    response.status(201).json({ note: noteOverview(note) });
+    response.status(201).json({ note: noteOverview(note, canEditCareNote(principal, note)) });
+  });
+
+  router.post("/people/:personId/calls/:callId/notes", (request, response) => {
+    const principal = requirePrincipal(request, response, context);
+    if (!principal) return;
+    const { personId, callId } = request.params;
+    if (!canAccessPerson(principal, personId)) {
+      response.status(403).json({ error: "This link cannot access that person." });
+      return;
+    }
+    if (!hasScope(principal, "view_summaries") || !hasScope(principal, "care_notes")) {
+      response.status(403).json({ error: "This link cannot add notes to call threads." });
+      return;
+    }
+    if (!context.repositories.getCallForPerson(personId, callId)) {
+      response.status(404).json({ error: "Call not found." });
+      return;
+    }
+    const body = stringField(request.body?.body, 1000);
+    if (!body) {
+      response.status(400).json({ error: "Enter a note up to 1,000 characters." });
+      return;
+    }
+    const contact = principal.role === "trusted_contact"
+      ? context.repositories.getTrustedContact(principal.trustedContactId)
+      : null;
+    if (principal.role === "trusted_contact" && (!contact || contact.personId !== personId)) {
+      response.status(403).json({ error: "This link cannot add notes to call threads." });
+      return;
+    }
+    const note = context.repositories.createCareNote({
+      id: randomUUID(),
+      personId,
+      callId,
+      authorRole: principal.role === "admin" ? "operator" : "trusted_contact",
+      authorTrustedContactId: contact?.id ?? null,
+      authorDisplayName: contact?.displayName ?? "Operator",
+      authorRelationship: contact?.relationship ?? null,
+      body,
+    });
+    response.status(201).json({ note: noteOverview(note, canEditCareNote(principal, note)) });
+  });
+
+  router.patch("/people/:personId/notes/:noteId", (request, response) => {
+    const principal = requirePrincipal(request, response, context);
+    if (!principal) return;
+    const { personId, noteId } = request.params;
+    if (!canAccessPerson(principal, personId)) {
+      response.status(403).json({ error: "This link cannot access that person." });
+      return;
+    }
+    if (!hasScope(principal, "care_notes")) {
+      response.status(403).json({ error: "This link cannot edit care-circle notes." });
+      return;
+    }
+    const note = context.repositories.getCareNote(noteId);
+    if (!note || note.personId !== personId || note.deletedAt) {
+      response.status(404).json({ error: "Note not found." });
+      return;
+    }
+    if (!canEditCareNote(principal, note)) {
+      response.status(403).json({ error: "You can only edit notes you wrote." });
+      return;
+    }
+    const body = stringField(request.body?.body, 1000);
+    if (!body) {
+      response.status(400).json({ error: "Enter a note up to 1,000 characters." });
+      return;
+    }
+    const updated = context.repositories.updateCareNote({ id: noteId, body });
+    if (!updated) {
+      response.status(404).json({ error: "Note not found." });
+      return;
+    }
+    response.json({ note: noteOverview(updated, true) });
+  });
+
+  router.delete("/people/:personId/notes/:noteId", (request, response) => {
+    const principal = requirePrincipal(request, response, context);
+    if (!principal) return;
+    const { personId, noteId } = request.params;
+    if (!canAccessPerson(principal, personId)) {
+      response.status(403).json({ error: "This link cannot access that person." });
+      return;
+    }
+    if (!hasScope(principal, "care_notes")) {
+      response.status(403).json({ error: "This link cannot delete care-circle notes." });
+      return;
+    }
+    const note = context.repositories.getCareNote(noteId);
+    if (!note || note.personId !== personId || note.deletedAt) {
+      response.status(404).json({ error: "Note not found." });
+      return;
+    }
+    if (!canEditCareNote(principal, note)) {
+      response.status(403).json({ error: "You can only delete notes you wrote." });
+      return;
+    }
+    if (!context.repositories.deleteCareNote(noteId)) {
+      response.status(404).json({ error: "Note not found." });
+      return;
+    }
+    response.status(204).end();
   });
 
   router.post("/people/:personId/consents/:kind", (request, response) => {

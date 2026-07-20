@@ -23,6 +23,7 @@ test("Bridge exposes and sends only contacts with a matching active SMS opt-in",
   const database = createDatabase(":memory:");
   const repositories = createRepositories(database);
   repositories.createPerson({ id: "person-a", displayName: "Avery" });
+  repositories.createCall({ id: "call-a", personId: "person-a", status: "answered" });
   repositories.createTrustedContact({ id: "contact-active", personId: "person-a", displayName: "Robin", relationship: "daughter", phoneE164: "+15550002222" });
   repositories.createTrustedContact({ id: "contact-revoked", personId: "person-a", displayName: "Sam", relationship: "son", phoneE164: "+15550003333" });
   repositories.createTrustedContact({ id: "contact-no-consent", personId: "person-a", displayName: "Lee", relationship: "friend", phoneE164: "+15550004444" });
@@ -42,10 +43,10 @@ test("Bridge exposes and sends only contacts with a matching active SMS opt-in",
   const bridge = new BridgeService(repositories, dispatcher);
   try {
     assert.deepEqual(bridge.context("person-a").contacts.map((contact) => contact.id), ["contact-active"]);
-    assert.equal((await bridge.sendApprovedSms({ personId: "person-a", trustedContactId: "contact-revoked", message: "Please call.", approvalId: "revoked" })).ok, false);
-    assert.equal((await bridge.sendApprovedSms({ personId: "person-a", trustedContactId: "contact-no-consent", message: "Please call.", approvalId: "missing" })).ok, false);
-    assert.equal((await bridge.sendApprovedSms({ personId: "person-a", trustedContactId: "contact-changed", message: "Please call.", approvalId: "changed" })).ok, false);
-    assert.equal((await bridge.sendApprovedSms({ personId: "person-a", trustedContactId: "contact-active", message: "a".repeat(MAX_SMS_CONTENT_LENGTH + 10), approvalId: "active" })).ok, true);
+    assert.equal((await bridge.sendApprovedSms({ callId: "call-a", personId: "person-a", trustedContactId: "contact-revoked", message: "Please call.", approvalId: "revoked" })).ok, false);
+    assert.equal((await bridge.sendApprovedSms({ callId: "call-a", personId: "person-a", trustedContactId: "contact-no-consent", message: "Please call.", approvalId: "missing" })).ok, false);
+    assert.equal((await bridge.sendApprovedSms({ callId: "call-a", personId: "person-a", trustedContactId: "contact-changed", message: "Please call.", approvalId: "changed" })).ok, false);
+    assert.equal((await bridge.sendApprovedSms({ callId: "call-a", personId: "person-a", trustedContactId: "contact-active", message: "a".repeat(MAX_SMS_CONTENT_LENGTH + 10), approvalId: "active" })).ok, true);
     assert.equal(sends.length, 1);
     assert.equal(sends[0]?.messagingServiceSid, "MGservice");
     assert.equal(sends[0]?.body.length, MAX_SMS_LENGTH);

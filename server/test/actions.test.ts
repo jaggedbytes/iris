@@ -8,7 +8,8 @@ test("SMS dispatch requires approval and is idempotent", async () => {
   const database = createDatabase(":memory:");
   const repositories = createRepositories(database);
   repositories.createPerson({ id: "person-a", displayName: "Avery" });
-  repositories.createActionRequest({ id: "action-a", personId: "person-a", feature: "bridge", actionType: "sms", idempotencyKey: "same-action", payload: { to: "+15550002222", body: "Please call me." } });
+  repositories.createCall({ id: "call-a", personId: "person-a", status: "answered" });
+  repositories.createActionRequest({ id: "action-a", personId: "person-a", sourceCallId: "call-a", feature: "bridge", actionType: "sms", idempotencyKey: "same-action", payload: { to: "+15550002222", body: "Please call me." } });
   let sends = 0;
   const dispatcher = new ActionDispatcher(repositories, {
     twilioAccountSid: "ACtest", twilioAuthToken: "token", twilioPhoneNumber: "+15550001111", publicBaseUrl: "https://iris.test", openaiApiKey: "key", safetyIdentifier: "safe",
@@ -26,6 +27,29 @@ test("SMS dispatch requires approval and is idempotent", async () => {
     assert.equal(repositories.listEvents("person-a").filter((event) => event.type === "sms.delivery_updated").length, 1);
     const deliveryEvent = repositories.listEvents("person-a").find((event) => event.type === "sms.delivery_updated");
     assert.deepEqual(deliveryEvent?.payload, { channel: "sms", status: "delivered" });
+    assert.deepEqual(
+      repositories.listEvents("person-a").map((event) => event.callId),
+      ["call-a", "call-a", "call-a"],
+    );
+  } finally { closeDatabase(database); }
+});
+
+test("non-call enrollment SMS lifecycle events remain unlinked", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery" });
+  repositories.createActionRequest({
+    id: "enrollment-action", personId: "person-a", feature: "enrollment", actionType: "sms_confirmation",
+    idempotencyKey: "enrollment-confirmation", payload: { to: "+15550002222", body: "Confirmation" },
+  });
+  const dispatcher = new ActionDispatcher(repositories, {
+    twilioAccountSid: "ACtest", twilioAuthToken: "token", twilioPhoneNumber: "+15550001111", publicBaseUrl: "https://iris.test", openaiApiKey: "key", safetyIdentifier: "safe",
+  }, { messages: { create: async () => ({ sid: "SMenrollment", status: "queued" }) } });
+  try {
+    assert.ok(dispatcher.approve("enrollment-action", "web_form"));
+    await dispatcher.dispatchSms("enrollment-action");
+    dispatcher.recordDelivery("enrollment-action", "SMenrollment", "delivered");
+    assert.deepEqual(repositories.listEvents("person-a").map((event) => event.callId), [null, null, null]);
   } finally { closeDatabase(database); }
 });
 

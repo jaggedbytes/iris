@@ -29,7 +29,7 @@ export class ActionDispatcher {
     const action = this.repositories.getActionRequest(actionId);
     if (!action || action.status !== "pending_approval") return null;
     const approved = this.repositories.updateActionRequest({ id: actionId, status: "approved", approvalSource, expectedStatus: "pending_approval" });
-    if (approved) this.audit(approved.personId, actionId, "action.approved", { source: approvalSource });
+    if (approved) this.audit(approved.personId, actionId, approved.sourceCallId, "action.approved", { source: approvalSource });
     return approved;
   }
 
@@ -39,7 +39,7 @@ export class ActionDispatcher {
     const payload = action.payload as { to?: unknown; body?: unknown };
     if (typeof payload.to !== "string" || typeof payload.body !== "string" || !payload.to || !payload.body) {
       this.repositories.updateActionRequest({ id: actionId, status: "failed", expectedStatus: "approved" });
-      this.audit(action.personId, actionId, "action.failed", { channel: "sms", reason: "invalid_payload" });
+      this.audit(action.personId, actionId, action.sourceCallId, "action.failed", { channel: "sms", reason: "invalid_payload" });
       return null;
     }
     // Durable outbox claim: the action remains approved until the Twilio result
@@ -59,6 +59,7 @@ export class ActionDispatcher {
       if (finalized) this.audit(
         action.personId,
         actionId,
+        action.sourceCallId,
         "action.dispatched",
         { channel: "sms", providerMessageId: message.sid, status: message.status },
         { channel: "sms", status: message.status },
@@ -68,16 +69,16 @@ export class ActionDispatcher {
       const providerError = error as TwilioRequestError;
       if (providerError.status === 429) {
         this.repositories.retryActionDispatch(actionId);
-        this.audit(action.personId, actionId, "action.dispatch_retryable", { channel: "sms", status: providerError.status, code: typeof providerError.code === "number" ? providerError.code : undefined });
+        this.audit(action.personId, actionId, action.sourceCallId, "action.dispatch_retryable", { channel: "sms", status: providerError.status, code: typeof providerError.code === "number" ? providerError.code : undefined });
         throw new Error("Unable to dispatch message.");
       }
       if (typeof providerError.status === "number" && providerError.status >= 400 && providerError.status < 500) {
         this.repositories.failActionDispatch(actionId);
         this.repositories.updateActionRequest({ id: actionId, status: "failed", expectedStatus: "approved" });
-        this.audit(action.personId, actionId, "action.failed", { channel: "sms", reason: "provider_rejected", status: providerError.status, code: typeof providerError.code === "number" ? providerError.code : undefined });
+        this.audit(action.personId, actionId, action.sourceCallId, "action.failed", { channel: "sms", reason: "provider_rejected", status: providerError.status, code: typeof providerError.code === "number" ? providerError.code : undefined });
         throw new Error("Unable to dispatch message.");
       }
-      this.audit(action.personId, actionId, "action.dispatch_uncertain", { channel: "sms" });
+      this.audit(action.personId, actionId, action.sourceCallId, "action.dispatch_uncertain", { channel: "sms" });
       throw new Error("Unable to dispatch message.");
     }
   }
@@ -93,6 +94,7 @@ export class ActionDispatcher {
         this.audit(
           action.personId,
           actionId,
+          action.sourceCallId,
           "action.reconciled",
           { channel: "sms", providerMessageId, status },
           { channel: "sms", status },
@@ -106,6 +108,7 @@ export class ActionDispatcher {
       this.audit(
         action.personId,
         actionId,
+        action.sourceCallId,
         "sms.delivery_updated",
         { channel: "sms", providerMessageId, status },
         { channel: "sms", status },
@@ -123,7 +126,7 @@ export class ActionDispatcher {
     const cutoff = new Date(nowMs - this.staleDispatchMs).toISOString();
     const stale = this.repositories.reclaimStaleDispatches(cutoff);
     for (const row of stale) {
-      this.audit(row.personId, row.actionRequestId, "action.dispatch_needs_review", { channel: "sms" });
+      this.audit(row.personId, row.actionRequestId, row.sourceCallId, "action.dispatch_needs_review", { channel: "sms" });
     }
     return stale.map((row) => row.actionRequestId);
   }
@@ -133,7 +136,7 @@ export class ActionDispatcher {
     const action = this.repositories.getActionRequest(actionId);
     if (!action || action.status !== "approved") return null;
     if (!this.repositories.releaseDispatchForRetry(actionId)) return null;
-    this.audit(action.personId, actionId, "action.dispatch_released", { channel: "sms" });
+    this.audit(action.personId, actionId, action.sourceCallId, "action.dispatch_released", { channel: "sms" });
     return action;
   }
 
@@ -141,8 +144,8 @@ export class ActionDispatcher {
     return !!signature && twilio.validateRequest(this.config.twilioAuthToken, signature, `${this.config.publicBaseUrl}${path}`, body);
   }
 
-  private audit(personId: string, actionId: string, action: string, auditMetadata: unknown, timelineMetadata: unknown = auditMetadata) {
-    this.repositories.createEvent({ id: randomUUID(), personId, type: action, payload: timelineMetadata });
+  private audit(personId: string, actionId: string, callId: string | null, action: string, auditMetadata: unknown, timelineMetadata: unknown = auditMetadata) {
+    this.repositories.createEvent({ id: randomUUID(), personId, callId, type: action, payload: timelineMetadata });
     this.repositories.createAuditEvent({ id: randomUUID(), personId, action, targetId: actionId, metadata: auditMetadata });
   }
 }

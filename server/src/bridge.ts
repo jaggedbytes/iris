@@ -21,7 +21,7 @@ export class BridgeService {
     };
   }
 
-  async sendApprovedSms(input: { personId: string; trustedContactId: string; message: string; approvalId: string }) {
+  async sendApprovedSms(input: { callId: string; personId: string; trustedContactId: string; message: string; approvalId: string }) {
     const contact = this.repositories.getSmsEligibleTrustedContact({ id: input.trustedContactId, personId: input.personId });
     const body = formatIrisSms(truncateSmsContent(input.message));
     if (!contact || !body) return { ok: false };
@@ -37,14 +37,14 @@ export class BridgeService {
     const actionId = existing?.id ?? randomUUID();
     if (!existing) {
       this.repositories.createActionRequest({
-        id: actionId, personId: input.personId, feature: "bridge", actionType: "sms",
+        id: actionId, personId: input.personId, sourceCallId: input.callId, feature: "bridge", actionType: "sms",
         approvalSource: "spoken_call", idempotencyKey, payload: { to: contact.phoneE164, body },
       });
     }
     this.actions.approve(actionId, "spoken_call");
     const dispatched = await this.actions.dispatchSms(actionId);
     if (!dispatched) return { ok: false, contactName: contact.displayName };
-    this.repositories.createEvent({ id: randomUUID(), personId: input.personId, type: "bridge.sms_sent", payload: { contactName: contact.displayName } });
+    this.repositories.createEvent({ id: randomUUID(), personId: input.personId, callId: input.callId, type: "bridge.sms_sent", payload: { contactName: contact.displayName } });
     return { ok: true, contactName: contact.displayName };
   }
 }

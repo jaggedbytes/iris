@@ -426,6 +426,11 @@ test("Bridge SMS runs once from a completed response.done function call", async 
     await new Promise((resolve) => setImmediate(resolve));
 
     assert.equal(sends, 1);
+    assert.equal(repositories.listActionRequests("person-a")[0]?.sourceCallId, callId);
+    assert.equal(
+      repositories.listEvents("person-a").filter((event) => event.type.startsWith("action.") || event.type === "sms.delivery_updated" || event.type === "bridge.sms_sent").every((event) => event.callId === callId),
+      true,
+    );
     const sent = realtime.sent.slice(1).map((message) => JSON.parse(message) as { type: string; item?: { call_id?: string } });
     assert.deepEqual(sent.map((message) => message.type), ["conversation.item.create", "response.create"]);
     assert.equal(sent[0].item?.call_id, "tool-sms");
@@ -521,6 +526,11 @@ test("Shield tools dispatch only from completed response.done calls and preserve
     assert.notEqual(repositories.listCalls("person-a")[0].status, "failed");
     assert.deepEqual(sentSms, [{ to: "+15550003333", body: "Iris: Iris is speaking with Avery about something that feels urgent or suspicious. Please check in with them when you can. Reply HELP for help. Reply STOP to opt out." }]);
     assert.equal(repositories.listActionRequests("person-a").length, 1);
+    assert.equal(repositories.listActionRequests("person-a")[0]?.sourceCallId, callId);
+    assert.equal(
+      repositories.listEvents("person-a").filter((event) => event.type.startsWith("action.") || event.type === "sms.delivery_updated" || event.type === "shield.pause_offered" || event.type === "shield.alert_sent").every((event) => event.callId === callId),
+      true,
+    );
     assert.deepEqual(
       repositories.listEvents("person-a").filter((event) => event.type === "shield.alert_sent").map((event) => event.payload),
       [{ contactName: "Robin" }],

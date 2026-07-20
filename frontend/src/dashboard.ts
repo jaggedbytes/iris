@@ -45,6 +45,8 @@ export type DashboardOverview = {
     authorRelationship: string | null;
     body: string;
     createdAt: string;
+    updatedAt: string;
+    canEdit: boolean;
   }>;
   /** Present only for viewers with the care_notes scope. */
   lastCheckInAt?: string | null;
@@ -80,6 +82,12 @@ export type DashboardOverview = {
     careSummarySharing: boolean;
   };
   permissions: string[];
+};
+
+export type DashboardCallThread = {
+  call: DashboardOverview["calls"][number];
+  events: DashboardOverview["events"];
+  notes: NonNullable<DashboardOverview["notes"]>;
 };
 
 export type DashboardPersonList = Array<{
