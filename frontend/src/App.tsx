@@ -17,6 +17,14 @@ const E164_PATTERN = /^\+[1-9]\d{7,14}$/;
 type DashboardPage = "home" | "activity";
 let capturedOptInToken: string | null | undefined;
 
+function dashboardPageFromPath(pathname: string): DashboardPage {
+  return pathname === "/activity" ? "activity" : "home";
+}
+
+function pathForDashboardPage(page: DashboardPage) {
+  return page === "activity" ? "/activity" : "/";
+}
+
 function readMagicLinkToken() {
   const fragment = window.location.hash.replace(/^#/, "");
   const params = new URLSearchParams(fragment);
@@ -183,7 +191,9 @@ function DashboardApp() {
   const [isCallRequesting, setIsCallRequesting] = useState(false);
   const [dispatchingActionId, setDispatchingActionId] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
-  const [dashboardPage, setDashboardPage] = useState<DashboardPage>("home");
+  const [dashboardPage, setDashboardPage] = useState<DashboardPage>(() =>
+    dashboardPageFromPath(window.location.pathname),
+  );
   const [dashboardNavOpen, setDashboardNavOpen] = useState(false);
   const magicLinkRequestId = useRef(0);
   const overviewRequestId = useRef(0);
@@ -416,6 +426,9 @@ function DashboardApp() {
     setAdminPeople([]);
     setDashboardPage("home");
     setDashboardNavOpen(false);
+    if (window.location.pathname !== "/") {
+      window.history.replaceState({}, "", "/");
+    }
   };
 
   const createMagicLink = async (trustedContactId: string) => {
@@ -787,7 +800,20 @@ function DashboardApp() {
   const goToDashboardPage = (page: DashboardPage) => {
     setDashboardPage(page);
     setDashboardNavOpen(false);
+    const nextPath = pathForDashboardPage(page);
+    if (window.location.pathname !== nextPath) {
+      window.history.pushState({}, "", nextPath);
+    }
   };
+
+  useEffect(() => {
+    const onPopState = () => {
+      setDashboardPage(dashboardPageFromPath(window.location.pathname));
+      setDashboardNavOpen(false);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
 
   useEffect(() => {
     if (!dashboardNavOpen) return;
@@ -1190,24 +1216,30 @@ function DashboardApp() {
             </button>
             {dashboardNavOpen && (
               <div id="dashboard-nav-menu" className="dashboard-nav-panel" role="menu">
-                <button
-                  type="button"
+                <a
+                  href="/"
                   role="menuitem"
                   className={`nav-link${dashboardPage === "home" ? " is-active" : ""}`}
                   aria-current={dashboardPage === "home" ? "page" : undefined}
-                  onClick={() => goToDashboardPage("home")}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    goToDashboardPage("home");
+                  }}
                 >
                   Home
-                </button>
-                <button
-                  type="button"
+                </a>
+                <a
+                  href="/activity"
                   role="menuitem"
                   className={`nav-link${dashboardPage === "activity" ? " is-active" : ""}`}
                   aria-current={dashboardPage === "activity" ? "page" : undefined}
-                  onClick={() => goToDashboardPage("activity")}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    goToDashboardPage("activity");
+                  }}
                 >
                   Activity
-                </button>
+                </a>
                 <button
                   type="button"
                   role="menuitem"
@@ -1230,22 +1262,28 @@ function DashboardApp() {
 
       <nav className="dashboard-nav" aria-label="Dashboard pages">
         <div className="dashboard-nav-links" role="presentation">
-          <button
-            type="button"
+          <a
+            href="/"
             className={`nav-link${dashboardPage === "home" ? " is-active" : ""}`}
             aria-current={dashboardPage === "home" ? "page" : undefined}
-            onClick={() => goToDashboardPage("home")}
+            onClick={(event) => {
+              event.preventDefault();
+              goToDashboardPage("home");
+            }}
           >
             Home
-          </button>
-          <button
-            type="button"
+          </a>
+          <a
+            href="/activity"
             className={`nav-link${dashboardPage === "activity" ? " is-active" : ""}`}
             aria-current={dashboardPage === "activity" ? "page" : undefined}
-            onClick={() => goToDashboardPage("activity")}
+            onClick={(event) => {
+              event.preventDefault();
+              goToDashboardPage("activity");
+            }}
           >
             Activity
-          </button>
+          </a>
         </div>
       </nav>
 

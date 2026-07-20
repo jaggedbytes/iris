@@ -138,7 +138,7 @@
   }
 
   .nav-link {
-    @apply rounded-full border border-transparent bg-transparent px-[0.9rem] py-[0.55rem] text-[0.84rem] font-bold text-primary hover:bg-lilac/35;
+    @apply inline-flex items-center rounded-full border border-transparent bg-transparent px-[0.9rem] py-[0.55rem] text-[0.84rem] font-bold text-primary no-underline hover:bg-lilac/35;
   }
 
   .nav-link.is-active {
