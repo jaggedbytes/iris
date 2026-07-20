@@ -71,7 +71,7 @@ function IrisSuggestions({ idPrefix, items }: { idPrefix: string; items: string[
   return (
     <div className="care-summary">
       <strong>Iris suggested</strong>
-      <ul>{items.map((item, index) => <li key={`${idPrefix}-suggestion-${index}`}>{item}</li>)}</ul>
+      <ul>{items.map((item, index) => <li key={`${idPrefix}-suggestion-${index}`}>{formatIrisSuggestion(item)}</li>)}</ul>
     </div>
   );
 }
@@ -95,6 +95,30 @@ function summaryLabel(
   return privateSummarySaved ? "Private memory saved; no shared care recap" : "No shared care recap";
 }
 
+function formatSharedConcern(item: string) {
+  const stripped = item.replace(/^.+?\s+said\s+/i, "").trim();
+  if (!stripped) return item.trim();
+  return stripped.charAt(0).toUpperCase() + stripped.slice(1);
+}
+
+function formatIrisSuggestion(item: string) {
+  const stripped = item.replace(/^Iris suggested(?:\s+that)?\s+/i, "").trim();
+  if (!stripped) return item.trim();
+  return stripped.charAt(0).toUpperCase() + stripped.slice(1);
+}
+
+function callSharedHeadline(
+  careSummary: DashboardOverview["calls"][number]["careSummary"],
+  summaryState: DashboardOverview["calls"][number]["summaryState"],
+  careSharingActive: boolean | null,
+  privateSummarySaved?: boolean,
+  callStatus?: string,
+) {
+  const shared = (careSummary?.moodAndConcerns ?? []).slice(0, 2).map(formatSharedConcern).filter(Boolean);
+  if (shared.length > 0) return shared.join(" ");
+  return summaryLabel(careSummary, summaryState, careSharingActive, privateSummarySaved, callStatus);
+}
+
 function phoneNumberLabel(person: DashboardOverview["person"]) {
   if (person.phoneNumberStatus === "not_configured") return "Phone number not configured";
   return person.phoneE164 ?? "Phone number unavailable";
@@ -102,6 +126,10 @@ function phoneNumberLabel(person: DashboardOverview["person"]) {
 
 function contactPhoneLabel(phoneE164: string | null) {
   return phoneE164 ?? "Phone number not configured";
+}
+
+function givenName(displayName: string) {
+  return displayName.trim().split(/\s+/).find(Boolean) ?? displayName;
 }
 
 function timelineCopy(event: DashboardOverview["events"][number], personName: string) {
@@ -1221,7 +1249,7 @@ function DashboardApp() {
                 onClick={() => selectCallThread(call.id)}
               >
                 <span>
-                  <strong>{call.careSummary?.moodAndConcerns[0] ?? summaryLabel(
+                  <strong>{callSharedHeadline(
                     call.careSummary,
                     call.summaryState,
                     careConsents?.careSummarySharing ?? null,
@@ -1247,7 +1275,17 @@ function DashboardApp() {
                           callThread.call.privateSummarySaved,
                           callThread.call.status,
                         )}</p>
-                        {callThread.call.careSummary && <IrisSuggestions idPrefix={`${call.id}-thread`} items={callThread.call.careSummary.irisSuggestedNextSteps} />}
+                        {callThread.call.careSummary && (
+                          <>
+                            {callThread.call.careSummary.moodAndConcerns.length > 0 && (
+                              <div className="care-summary">
+                                <strong>{givenName(overview.person.displayName)} shared</strong>
+                                <ul>{callThread.call.careSummary.moodAndConcerns.map((item, index) => <li key={`${call.id}-thread-mood-${index}`}>{formatSharedConcern(item)}</li>)}</ul>
+                              </div>
+                            )}
+                            <IrisSuggestions idPrefix={`${call.id}-thread`} items={callThread.call.careSummary.irisSuggestedNextSteps} />
+                          </>
+                        )}
                       </div>
                       {canViewThreadEvents || canUseCareNotes ? (
                         <div className="call-thread-activity">
