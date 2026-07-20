@@ -215,24 +215,25 @@
     @apply grid grid-cols-12 items-start gap-4;
   }
 
-  /* Operator Home / Activity: left column stack beside a right-column card (tablet+). */
-  .operator-column-stack {
+  /* Home / Activity: left column stack beside a right-column card (tablet+). */
+  .dashboard-column-stack {
     @apply col-span-4 contents max-[820px]:col-span-6 max-[560px]:col-span-12;
   }
 
-  .dashboard-grid.is-operator-split {
+  .dashboard-grid.is-dashboard-split {
     @apply max-[820px]:flex max-[820px]:items-stretch max-[820px]:gap-4 max-[560px]:flex-col;
   }
 
-  .dashboard-grid.is-operator-split .operator-column-stack {
+  .dashboard-grid.is-dashboard-split .dashboard-column-stack {
     @apply max-[820px]:flex max-[820px]:min-w-0 max-[820px]:flex-1 max-[820px]:flex-col max-[820px]:gap-4;
   }
 
-  .dashboard-grid.is-operator-split .operator-column-stack .overview-card {
+  .dashboard-grid.is-dashboard-split .dashboard-column-stack .overview-card {
     @apply max-[820px]:col-span-full max-[820px]:w-full max-[820px]:min-h-0;
   }
 
-  .dashboard-grid.is-operator-split .operator-split-aside {
+  .dashboard-grid.is-dashboard-split > .overview-card,
+  .dashboard-grid.is-dashboard-split .dashboard-split-aside {
     @apply max-[820px]:col-span-full max-[820px]:min-w-0 max-[820px]:flex-1 max-[820px]:self-stretch;
   }
 

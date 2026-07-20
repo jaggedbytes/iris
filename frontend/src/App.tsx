@@ -14,7 +14,7 @@ const DASHBOARD_POLL_INTERVAL_MS = 2_500;
 const ADD_PERSON_OPTION = "__add_person__";
 const ADD_CONTACT_OPTION = "__add_contact__";
 const E164_PATTERN = /^\+[1-9]\d{7,14}$/;
-type OperatorPage = "home" | "activity";
+type DashboardPage = "home" | "activity";
 let capturedOptInToken: string | null | undefined;
 
 function readMagicLinkToken() {
@@ -183,8 +183,8 @@ function DashboardApp() {
   const [isCallRequesting, setIsCallRequesting] = useState(false);
   const [dispatchingActionId, setDispatchingActionId] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
-  const [operatorPage, setOperatorPage] = useState<OperatorPage>("home");
-  const [operatorNavOpen, setOperatorNavOpen] = useState(false);
+  const [dashboardPage, setDashboardPage] = useState<DashboardPage>("home");
+  const [dashboardNavOpen, setDashboardNavOpen] = useState(false);
   const magicLinkRequestId = useRef(0);
   const overviewRequestId = useRef(0);
   const pendingTrustedContactId = useRef<string | null>(null);
@@ -414,8 +414,8 @@ function DashboardApp() {
     setSelectedPersonId(null);
     setIsAddingPerson(false);
     setAdminPeople([]);
-    setOperatorPage("home");
-    setOperatorNavOpen(false);
+    setDashboardPage("home");
+    setDashboardNavOpen(false);
   };
 
   const createMagicLink = async (trustedContactId: string) => {
@@ -780,22 +780,23 @@ function DashboardApp() {
   const canRequestCheckIn = principal?.role === "trusted_contact"
     && principal.scopes.includes("request_check_in");
   const isOperator = principal?.role === "admin";
-  const showHomeCards = !isOperator || operatorPage === "home";
-  const showActivityCards = !isOperator || operatorPage === "activity";
+  const isTrusted = principal?.role === "trusted_contact";
+  const showHomeCards = dashboardPage === "home";
+  const showActivityCards = dashboardPage === "activity";
 
-  const goToOperatorPage = (page: OperatorPage) => {
-    setOperatorPage(page);
-    setOperatorNavOpen(false);
+  const goToDashboardPage = (page: DashboardPage) => {
+    setDashboardPage(page);
+    setDashboardNavOpen(false);
   };
 
   useEffect(() => {
-    if (!operatorNavOpen) return;
+    if (!dashboardNavOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOperatorNavOpen(false);
+      if (event.key === "Escape") setDashboardNavOpen(false);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [operatorNavOpen]);
+  }, [dashboardNavOpen]);
 
   const personCard = overview ? (
     <section className="overview-card profile-card">
@@ -961,7 +962,7 @@ function DashboardApp() {
   ) : null;
 
   const timelineCard = overview ? (
-    <section className={`overview-card timeline-card${isOperator ? " operator-split-aside" : ""}`}>
+    <section className="overview-card timeline-card dashboard-split-aside">
       <div className="card-heading">
         <div>
           <p className="card-kicker">Timeline</p>
@@ -1023,6 +1024,69 @@ function DashboardApp() {
     </section>
   ) : null;
 
+  const trustedSelfCard = overview?.viewer ? (
+    <section className="overview-card trusted-self-card dashboard-split-aside">
+      <div className="card-header">
+        <p className="card-kicker">You</p>
+        <h2>{overview.viewer.displayName}</h2>
+        <span className="contact-relationship">{overview.viewer.relationship}</span>
+        <div className="person-phone-row">
+          <p className="person-phone">{contactPhoneLabel(overview.viewer.phoneE164)}</p>
+        </div>
+      </div>
+      <div className="trusted-self-sms">
+        <strong>Text messages</strong>
+        <p className="privacy-note">Iris can text you for Shield safety alerts once you’ve opted in. An operator sends you an opt-in link to get started.</p>
+        <ul className="contact-status-list">
+          <li>
+            <span>
+              <strong>SMS</strong>
+              <span className="contact-status-detail">Whether you’ve agreed to receive Iris texts, including Shield alerts.</span>
+            </span>
+            <span className={`contact-status-pill${overview.viewer.smsOptInStatus === "opted_in" ? "" : " is-off"}`}>
+              {overview.viewer.smsOptInStatus === "opted_in" ? "Opted in" : overview.viewer.smsOptInStatus === "opted_out" ? "Opted out" : "Not opted in"}
+            </span>
+          </li>
+          <li>
+            <span>
+              <strong>SMS confirmation</strong>
+              <span className="contact-status-detail">Whether Iris has sent the confirmation text after you use the opt-in link.</span>
+            </span>
+            <span className={`contact-status-pill${overview.viewer.confirmationState === "not_requested" ? " is-off" : ""}`}>
+              {overview.viewer.confirmationState === "not_requested" ? "Not requested" : overview.viewer.confirmationState.replaceAll("_", " ")}
+            </span>
+          </li>
+        </ul>
+      </div>
+      <div className="compact-form consent-choices is-readonly">
+        <strong>Conversation preferences</strong>
+        <p className="privacy-note">These choices were set for {overview.person.displayName}. Contact the Iris operator if you’d like them changed.</p>
+        <div className="consent-check">
+          <span className="consent-option">
+            <span className="consent-option-heading">
+              <strong>Private memory</strong>
+              <span className={`consent-status${overview.consents.summaryRetention ? "" : " is-off"}`} aria-label={overview.consents.summaryRetention ? "Currently on" : "Currently off"}>
+                {overview.consents.summaryRetention ? "On" : "Off"}
+              </span>
+            </span>
+            <span>Helps Iris remember helpful details between calls. Only Iris uses this.</span>
+          </span>
+        </div>
+        <div className="consent-check">
+          <span className="consent-option">
+            <span className="consent-option-heading">
+              <strong>Shared care recaps</strong>
+              <span className={`consent-status${overview.consents.careSummarySharing ? "" : " is-off"}`} aria-label={overview.consents.careSummarySharing ? "Currently on" : "Currently off"}>
+                {overview.consents.careSummarySharing ? "On" : "Off"}
+              </span>
+            </span>
+            <span>Shares a concise recap with you and trusted contacts, including health-related concerns and Iris’s guidance. Never raw audio or a full transcript. Requires private memory.</span>
+          </span>
+        </div>
+      </div>
+    </section>
+  ) : null;
+
   if (!token && !isLoading) {
     return (
       <main className="access-shell">
@@ -1077,6 +1141,16 @@ function DashboardApp() {
               {callStateLabel}
             </button>
           )}
+          {canRequestCheckIn && (
+            <button
+              className="call-button header-call-mobile"
+              type="button"
+              disabled={callDisabled}
+              onClick={() => void startCall()}
+            >
+              {activeCall ? callStateLabel : "Ask Iris to check in"}
+            </button>
+          )}
         </div>
         <div className="header-actions">
           {principal?.role === "admin" && (
@@ -1090,93 +1164,90 @@ function DashboardApp() {
             </button>
           )}
           {canRequestCheckIn && (
-            <button className="call-button" type="button" disabled={callDisabled} onClick={() => void startCall()}>
+            <button
+              className="call-button header-call-desktop"
+              type="button"
+              disabled={callDisabled}
+              onClick={() => void startCall()}
+            >
               {activeCall ? callStateLabel : "Ask Iris to check in"}
             </button>
           )}
-          {isOperator && (
-            <div className="header-menu">
-              <button
-                type="button"
-                className="nav-menu-button"
-                aria-expanded={operatorNavOpen}
-                aria-controls="operator-nav-menu"
-                onClick={() => setOperatorNavOpen((open) => !open)}
-              >
-                <span className="sr-only">{operatorNavOpen ? "Close menu" : "Open menu"}</span>
-                <span className="nav-menu-icon" aria-hidden="true">
-                  <span />
-                  <span />
-                  <span />
-                </span>
-              </button>
-              {operatorNavOpen && (
-                <div id="operator-nav-menu" className="dashboard-nav-panel" role="menu">
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className={`nav-link${operatorPage === "home" ? " is-active" : ""}`}
-                    aria-current={operatorPage === "home" ? "page" : undefined}
-                    onClick={() => goToOperatorPage("home")}
-                  >
-                    Home
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className={`nav-link${operatorPage === "activity" ? " is-active" : ""}`}
-                    aria-current={operatorPage === "activity" ? "page" : undefined}
-                    onClick={() => goToOperatorPage("activity")}
-                  >
-                    Activity
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="nav-link"
-                    onClick={() => {
-                      setOperatorNavOpen(false);
-                      signOut();
-                    }}
-                  >
-                    Sign out
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-          <button
-            className={`text-button${isOperator ? " header-sign-out-desktop" : ""}`}
-            type="button"
-            onClick={signOut}
-          >
+          <div className="header-menu">
+            <button
+              type="button"
+              className="nav-menu-button"
+              aria-expanded={dashboardNavOpen}
+              aria-controls="dashboard-nav-menu"
+              onClick={() => setDashboardNavOpen((open) => !open)}
+            >
+              <span className="sr-only">{dashboardNavOpen ? "Close menu" : "Open menu"}</span>
+              <span className="nav-menu-icon" aria-hidden="true">
+                <span />
+                <span />
+                <span />
+              </span>
+            </button>
+            {dashboardNavOpen && (
+              <div id="dashboard-nav-menu" className="dashboard-nav-panel" role="menu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={`nav-link${dashboardPage === "home" ? " is-active" : ""}`}
+                  aria-current={dashboardPage === "home" ? "page" : undefined}
+                  onClick={() => goToDashboardPage("home")}
+                >
+                  Home
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={`nav-link${dashboardPage === "activity" ? " is-active" : ""}`}
+                  aria-current={dashboardPage === "activity" ? "page" : undefined}
+                  onClick={() => goToDashboardPage("activity")}
+                >
+                  Activity
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="nav-link"
+                  onClick={() => {
+                    setDashboardNavOpen(false);
+                    signOut();
+                  }}
+                >
+                  Sign out
+                </button>
+              </div>
+            )}
+          </div>
+          <button className="text-button header-sign-out-desktop" type="button" onClick={signOut}>
             Sign out
           </button>
         </div>
       </header>
 
-      {isOperator && (
-        <nav className="dashboard-nav" aria-label="Operator pages">
-          <div className="dashboard-nav-links" role="presentation">
-            <button
-              type="button"
-              className={`nav-link${operatorPage === "home" ? " is-active" : ""}`}
-              aria-current={operatorPage === "home" ? "page" : undefined}
-              onClick={() => goToOperatorPage("home")}
-            >
-              Home
-            </button>
-            <button
-              type="button"
-              className={`nav-link${operatorPage === "activity" ? " is-active" : ""}`}
-              aria-current={operatorPage === "activity" ? "page" : undefined}
-              onClick={() => goToOperatorPage("activity")}
-            >
-              Activity
-            </button>
-          </div>
-        </nav>
-      )}
+      <nav className="dashboard-nav" aria-label="Dashboard pages">
+        <div className="dashboard-nav-links" role="presentation">
+          <button
+            type="button"
+            className={`nav-link${dashboardPage === "home" ? " is-active" : ""}`}
+            aria-current={dashboardPage === "home" ? "page" : undefined}
+            onClick={() => goToDashboardPage("home")}
+          >
+            Home
+          </button>
+          <button
+            type="button"
+            className={`nav-link${dashboardPage === "activity" ? " is-active" : ""}`}
+            aria-current={dashboardPage === "activity" ? "page" : undefined}
+            onClick={() => goToDashboardPage("activity")}
+          >
+            Activity
+          </button>
+        </div>
+      </nav>
 
       {error && <p className="form-error" role="alert">{error}</p>}
       {isLoading && <p className="loading-note">Loading the current picture…</p>}
@@ -1187,9 +1258,9 @@ function DashboardApp() {
       )}
 
       {(overview || (principal?.role === "admin" && (isAddingPerson || adminPeople.length === 0))) && (
-        <div className={`dashboard-grid${isOperator && (operatorPage === "home" || operatorPage === "activity") ? " is-operator-split" : ""}`}>
+        <div className="dashboard-grid is-dashboard-split">
           {isOperator && showHomeCards && (
-            <div className="operator-column-stack">
+            <div className="dashboard-column-stack">
             <section className="overview-card enrollment-card">
               <div className="enrollment-header">
                 <p className="card-kicker">Enrollment</p>
@@ -1262,90 +1333,34 @@ function DashboardApp() {
             {personCard}
             </div>
           )}
-          {!isOperator && personCard}
-
-          {!isOperator && showActivityCards && (
+          {isTrusted && showHomeCards && (
             <>
-              {recentCallsCard}
-              {timelineCard}
+              {personCard}
+              {trustedSelfCard}
             </>
           )}
 
-          {isOperator && showActivityCards && overview && (
+          {showActivityCards && overview && (
             <>
-              <div className="operator-column-stack">
-                {actionsCard}
-                {recentCallsCard}
+              <div className="dashboard-column-stack">
+                {isOperator ? (
+                  <>
+                    {actionsCard}
+                    {recentCallsCard}
+                  </>
+                ) : (
+                  <>
+                    {recentCallsCard}
+                    {actionsCard}
+                  </>
+                )}
               </div>
               {timelineCard}
             </>
-          )}
-
-          {principal?.role === "trusted_contact" && overview?.viewer && (
-            <section className="overview-card trusted-self-card">
-              <div className="card-header">
-                <p className="card-kicker">You</p>
-                <h2>{overview.viewer.displayName}</h2>
-                <span className="contact-relationship">{overview.viewer.relationship}</span>
-                <div className="person-phone-row">
-                  <p className="person-phone">{contactPhoneLabel(overview.viewer.phoneE164)}</p>
-                </div>
-              </div>
-              <div className="trusted-self-sms">
-                <strong>Text messages</strong>
-                <p className="privacy-note">Iris can text you for Shield safety alerts once you’ve opted in. An operator sends you an opt-in link to get started.</p>
-                <ul className="contact-status-list">
-                  <li>
-                    <span>
-                      <strong>SMS</strong>
-                      <span className="contact-status-detail">Whether you’ve agreed to receive Iris texts, including Shield alerts.</span>
-                    </span>
-                    <span className={`contact-status-pill${overview.viewer.smsOptInStatus === "opted_in" ? "" : " is-off"}`}>
-                      {overview.viewer.smsOptInStatus === "opted_in" ? "Opted in" : overview.viewer.smsOptInStatus === "opted_out" ? "Opted out" : "Not opted in"}
-                    </span>
-                  </li>
-                  <li>
-                    <span>
-                      <strong>SMS confirmation</strong>
-                      <span className="contact-status-detail">Whether Iris has sent the confirmation text after you use the opt-in link.</span>
-                    </span>
-                    <span className={`contact-status-pill${overview.viewer.confirmationState === "not_requested" ? " is-off" : ""}`}>
-                      {overview.viewer.confirmationState === "not_requested" ? "Not requested" : overview.viewer.confirmationState.replaceAll("_", " ")}
-                    </span>
-                  </li>
-                </ul>
-              </div>
-              <div className="compact-form consent-choices is-readonly">
-                <strong>Conversation preferences</strong>
-                <p className="privacy-note">These choices were set for {overview.person.displayName}. Contact the Iris operator if you’d like them changed.</p>
-                <div className="consent-check">
-                  <span className="consent-option">
-                    <span className="consent-option-heading">
-                      <strong>Private memory</strong>
-                      <span className={`consent-status${overview.consents.summaryRetention ? "" : " is-off"}`} aria-label={overview.consents.summaryRetention ? "Currently on" : "Currently off"}>
-                        {overview.consents.summaryRetention ? "On" : "Off"}
-                      </span>
-                    </span>
-                    <span>Helps Iris remember helpful details between calls. Only Iris uses this.</span>
-                  </span>
-                </div>
-                <div className="consent-check">
-                  <span className="consent-option">
-                    <span className="consent-option-heading">
-                      <strong>Shared care recaps</strong>
-                      <span className={`consent-status${overview.consents.careSummarySharing ? "" : " is-off"}`} aria-label={overview.consents.careSummarySharing ? "Currently on" : "Currently off"}>
-                        {overview.consents.careSummarySharing ? "On" : "Off"}
-                      </span>
-                    </span>
-                    <span>Shares a concise recap with you and trusted contacts, including health-related concerns and Iris’s guidance. Never raw audio or a full transcript. Requires private memory.</span>
-                  </span>
-                </div>
-              </div>
-            </section>
           )}
 
           {isOperator && showHomeCards && overview && (
-          <section className="overview-card trusted-contacts-card operator-split-aside">
+          <section className="overview-card trusted-contacts-card dashboard-split-aside">
             <div className="card-header">
               <p className="card-kicker">Trusted contacts</p>
               <h2>People in the circle</h2>
