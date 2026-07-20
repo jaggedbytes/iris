@@ -8,7 +8,6 @@ import { CallSession, createRealtimeSocket, type CallSessionScheduler, type Real
 import type { TranscriptTurn } from "../summary.js";
 import type { BridgeService } from "../bridge.js";
 import type { ShieldService } from "../shield.js";
-import { createShieldAlertText } from "../shield.js";
 
 type TwilioClient = {
   calls: {
@@ -236,11 +235,9 @@ export class OutboundCallManager {
       socket.off("message", awaitStart);
       clearHandshakeTimer();
       const bridgeContext = this.bridge?.context(active.personId);
-      const alertText = createShieldAlertText(this.repositories.getPerson(active.personId)?.displayName ?? "the person");
-      const shield = this.shield && alertText ? {
+      const shield = this.shield ? {
         contacts: this.repositories.listSmsEligibleTrustedContacts(active.personId)
           .map((contact) => ({ id: contact.id, name: contact.displayName })),
-        alertText,
         assess: (situation: string) => this.shield!.assess({ callId, personId: active.personId, situation }),
         sendAlert: (trustedContactId: string, approvalId: string) => this.shield!.sendApprovedAlert({ callId, personId: active.personId, trustedContactId, approvalId }),
       } : undefined;

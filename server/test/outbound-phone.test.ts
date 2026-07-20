@@ -405,8 +405,8 @@ test("Shield tools dispatch only from completed response.done calls and preserve
     assert.match(sessionUpdate.session.instructions, /Never state that something is definitely a scam/);
     assert.match(sessionUpdate.session.instructions, /stop or limit contact with the suspicious party/);
     assert.match(sessionUpdate.session.instructions, /do not help draft, send, or refine any reply/);
-    assert.match(sessionUpdate.session.instructions, /promptly offer to send the fixed Shield check-in alert/);
-    assert.match(sessionUpdate.session.instructions, /Iris is speaking with Avery about something that feels urgent or suspicious\. Please check in with them when you can\./);
+    assert.match(sessionUpdate.session.instructions, /promptly offer a check-in text/);
+    assert.match(sessionUpdate.session.instructions, /Do not read the SMS body, Iris prefix, or HELP\/STOP footer aloud/);
     assert.match(sessionUpdate.session.instructions, /Shield context: the listed trusted contacts are \[\{"id":"contact-a","name":"Robin"\}\]/);
     assert.deepEqual(sessionUpdate.session.tools.map((tool) => tool.name).sort(), ["bridge_send_sms", "end_call", "shield_assess", "shield_send_alert"].sort());
 
@@ -687,6 +687,60 @@ test("end_call keeps an early direct goodbye in the confirmation path", async ()
     assert.equal(socket.closed, false);
     socket.emit("close");
   } finally { closeDatabase(database); }
+});
+
+test("end_call accepts Yes Iris or a repeated goodbye after confirmation is asked", async () => {
+  for (const confirmation of ["Yes, Iris.", "Goodbye, Iris."]) {
+    const database = createDatabase(":memory:");
+    const repositories = createRepositories(database);
+    repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+    const realtime = new FakeSocket();
+    const scheduler = new FakeScheduler();
+    const manager = new OutboundCallManager(
+      repositories, { ...telephonyConfig, farewellCloseTimeoutMs: 77 }, { calls: { create: async () => ({ sid: "CA123" }) } }, () => realtime,
+      undefined, scheduler, 10_000, undefined, 10_000,
+    );
+    try {
+      const { callId } = await manager.startCall("person-a");
+      const token = /streamToken" value="([^"]+)"/.exec(manager.twiml(callId) ?? "")?.[1];
+      assert.ok(token);
+      const socket = new FakeSocket();
+      manager.acceptMediaSocket(socket);
+      socket.emit("message", Buffer.from(JSON.stringify({ event: "start", start: { streamSid: "MZ123", customParameters: { callId, streamToken: token } } })));
+      realtime.emit("open");
+
+      realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "Goodbye." })));
+      realtime.emit("message", Buffer.from(JSON.stringify({
+        type: "response.done",
+        response: { id: "response-ask", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-ask", arguments: "{}" }] },
+      })));
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.ok(
+        realtime.sent
+          .map((message) => JSON.parse(message) as { item?: { output?: string } })
+          .map((message) => message.item?.output)
+          .filter((output): output is string => typeof output === "string")
+          .map((output) => JSON.parse(output) as { error?: string })
+          .some((result) => result.error === "confirmation_required"),
+      );
+
+      realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: confirmation })));
+      realtime.emit("message", Buffer.from(JSON.stringify({
+        type: "response.done",
+        response: { id: "response-confirmed", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-confirmed", arguments: JSON.stringify({ confirmation }) }] },
+      })));
+      assert.equal(scheduler.scheduled?.delayMs, 77);
+      assert.equal(socket.closed, false);
+
+      realtime.emit("message", Buffer.from(JSON.stringify({ type: "response.created", response: { id: "response-farewell" } })));
+      realtime.emit("message", Buffer.from(JSON.stringify({ type: "response.output_audio.delta", response_id: "response-farewell", delta: "farewell-audio" })));
+      realtime.emit("message", Buffer.from(JSON.stringify({ type: "response.output_audio.done", response_id: "response-farewell" })));
+      realtime.emit("message", Buffer.from(JSON.stringify({ type: "response.done", response: { id: "response-farewell", output: [] } })));
+      socket.emit("message", Buffer.from(JSON.stringify({ event: "mark", streamSid: "MZ123", mark: { name: "iris-farewell" } })));
+      assert.equal(socket.closed, true);
+      assert.equal(repositories.listCalls("person-a")[0].status, "completed");
+    } finally { closeDatabase(database); }
+  }
 });
 
 test("end_call uses its farewell-only timeout when completion events never arrive", async () => {

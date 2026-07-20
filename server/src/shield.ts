@@ -32,7 +32,7 @@ export function createShieldAlertContent(personDisplayName: string) {
   return `Iris is speaking with ${personDisplayName} about something that feels urgent or suspicious. Please check in with them when you can.`;
 }
 
-/** The exact fully formatted alert Iris must quote before spoken approval. */
+/** Fully formatted Shield alert SMS body (server-owned; not read aloud for approval). */
 export function createShieldAlertText(personDisplayName: string) {
   return formatIrisSms(truncateSmsContent(createShieldAlertContent(personDisplayName)));
 }

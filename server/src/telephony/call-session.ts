@@ -54,9 +54,9 @@ function isExplicitEndCallConfirmation(text: string) {
   const filler = "(?:(?:um|uh|well|actually)\\s+)*";
   const affirmative = "(?:yes|yeah|yep|sure|okay|ok|alright|all right|please)";
   // After Iris asks to confirm, accept short yes-forms or an explicit end request.
-  // Optional trailing "iris" covers common ASR attachments without requiring a
-  // perfect transcript of the confirmation phrase Iris suggested.
-  if (new RegExp(`^${filler}${affirmative}(?:\\s+please)?$`).test(normalized)) return true;
+  // Optional trailing "iris" covers common ASR attachments ("Yes, Iris") without
+  // requiring a perfect transcript of the confirmation phrase Iris suggested.
+  if (new RegExp(`^${filler}${affirmative}(?:\\s+please)?(?:\\s+iris)?$`).test(normalized)) return true;
   if (new RegExp(
     `^${filler}(?:${affirmative}\\s+)*(?:please\\s+)?(?:go ahead(?:\\s+and)?\\s+)?(?:end(?:ing)?(?:\\s+the)?\\s+call|hang\\s+up)(?:\\s+please)?(?:\\s+iris)?$`,
   ).test(normalized)) return true;
@@ -78,8 +78,9 @@ function isNaturalEndCallIntent(text: string, userTurns: LiveTranscriptTurn[]) {
   // A direct address makes a short farewell meaningful. A bare "bye" or
   // "goodbye" needs a little more conversation behind it because it is easy
   // for ASR to pick up from background speech at the beginning of a call.
-  if (/^(?:bye|goodbye)\s+iris$/.test(normalized)) return true;
-  if (/^(?:bye|goodbye)$/.test(normalized)) return meaningfulTurnCount >= 3;
+  if (/^(?:(?:okay|ok|well|thanks?)\s+)?(?:bye|goodbye|good\s+bye)(?:\s+iris)?$/.test(normalized)) {
+    return /\biris$/.test(normalized) || meaningfulTurnCount >= 3;
+  }
   // Closing phrases must describe the utterance as a whole or its ending.
   // Substring matches would turn “I'm done eating” or “That's all I remember”
   // into a hang-up request.
@@ -92,6 +93,11 @@ function isNaturalEndCallIntent(text: string, userTurns: LiveTranscriptTurn[]) {
     /\bi (?:should|need to|have to) (?:get going|go)(?: now)?$/,
     /^(?:please\s+)?(?:end(?:ing)?(?:\s+the)?\s+call|hang\s+up)(?:\s+please)?(?:\s+iris)?$/,
   ].some((pattern) => pattern.test(normalized));
+}
+
+function isEndCallConfirmation(text: string, userTurns: LiveTranscriptTurn[]) {
+  // After Iris asks to confirm, a repeated natural goodbye counts as yes.
+  return isExplicitEndCallConfirmation(text) || isNaturalEndCallIntent(text, userTurns);
 }
 
 function hasNaturalEndConversationContext(userTurns: LiveTranscriptTurn[]) {
@@ -150,7 +156,6 @@ type PendingEndCallConfirmation = {
 
 type ShieldSession = {
   contacts: Array<{ id: string; name: string }>;
-  alertText: string;
   assess: (situation: string) => Promise<unknown>;
   sendAlert: (contactId: string, approvalId: string) => Promise<{ ok: boolean; contactName?: string }>;
 };
@@ -241,9 +246,9 @@ export class CallSession {
             ? `Bridge context:\n${this.bridge.context}\n\nAuthoritative phone-session instructions: the configured bridge_send_sms tool is allowed only after the person clearly says yes to sending a specific message to a listed trusted contact. First say who you would contact and the exact final text, including the Iris prefix and HELP/STOP footer, then ask for approval. Never call it on ambiguity. Keep the message content at or below ${MAX_SMS_CONTENT_LENGTH} characters so the required prefix and footer fit; never promise text beyond that limit. ${this.bridge.recallAnchor ? `After any family-requested greeting, offer exactly one gentle invitation based on this prior user-stated thread: ${JSON.stringify(this.bridge.recallAnchor)}. Do not present it as certain, and do not repeat it later in the call.` : "Do not volunteer prior conversation details at the opening of this call."}`
             : "",
           this.shield
-            ? `Shield context: the listed trusted contacts are ${JSON.stringify(this.shield.contacts)}. The exact fixed Shield alert text is ${JSON.stringify(this.shield.alertText)}. Authoritative phone-session instructions: use shield_assess only after the person explicitly describes observable suspicious pressure. Summarize only what they said; never invent or embellish details. When assessment recommends a pause, calmly recommend that pause, name only the returned observable signals, and be firmly clear that they should stop or limit contact with the suspicious party for now—do not help draft, send, or refine any reply to that party. Prefer verifying through a known official number or established contact method, and speaking with a trusted person. Never state that something is definitely a scam, ask for credentials, or give financial, legal, or medical advice. After recommending a pause, if at least one listed trusted contact is available, promptly offer to send the fixed Shield check-in alert: state the selected contact's name and that exact fixed alert text, then ask clearly for yes-or-no approval. The shield_send_alert tool is allowed only after Iris has stated the selected contact's name and that exact fixed alert text, and the person has then clearly and directly approved sending that exact alert to that listed contact. Never call it on ambiguity, before that spoken approval, or for an unlisted contact.`
+            ? `Shield context: the listed trusted contacts are ${JSON.stringify(this.shield.contacts)}. Authoritative phone-session instructions: use shield_assess only after the person explicitly describes observable suspicious pressure. Summarize only what they said; never invent or embellish details. When assessment recommends a pause, calmly recommend that pause, name only the returned observable signals, and be firmly clear that they should stop or limit contact with the suspicious party for now—do not help draft, send, or refine any reply to that party. Prefer verifying through a known official number or established contact method, and speaking with a trusted person. Never state that something is definitely a scam, ask for credentials, or give financial, legal, or medical advice. After recommending a pause, if at least one listed trusted contact is available, promptly offer a check-in text: name the selected contact and briefly say Iris will text them a short fixed message asking them to check in on the person when they can, then ask clearly for yes-or-no approval. Do not read the SMS body, Iris prefix, or HELP/STOP footer aloud—the server owns that fixed text. The shield_send_alert tool is allowed only after Iris has named the selected contact, described that check-in purpose, and the person has clearly and directly approved sending that alert to that listed contact. Never call it on ambiguity, before that spoken approval, or for an unlisted contact.`
             : "",
-          "Authoritative phone-session instructions: let a clear, natural closing end naturally after some real back-and-forth. You may use end_call after a completed user transcript clearly closes the conversation, such as “Goodbye, Iris,” “I should get going,” or “Talk to you later.” A plain “bye” or “goodbye” can close a well-established conversation, but never use it for an isolated early goodbye, background speech, partial words, hesitation, or an uncertain transcription. Ask a short confirmation only when the ending is genuinely unclear. If you ask for confirmation, wait for a new, clear yes or no before using end_call, and set confirmation to the exact words you heard. The phone session verifies every request against the completed user transcript; the tool argument is not consent by itself. If the person continues talking, says no, is silent, or the words are ambiguous, keep the call open. When using it, give a brief warm farewell after the tool result.",
+          "Authoritative phone-session instructions: let a clear, natural closing end naturally after some real back-and-forth. You may use end_call after a completed user transcript clearly closes the conversation, such as “Goodbye, Iris,” “I should get going,” or “Talk to you later.” A plain “bye” or “goodbye” can close a well-established conversation, but never use it for an isolated early goodbye, background speech, partial words, hesitation, or an uncertain transcription. Ask a short confirmation only when the ending is genuinely unclear. If you ask for confirmation, wait for a new clear yes (including “Yes, Iris”), “end the call,” or another goodbye such as “Goodbye, Iris,” before using end_call, and set confirmation to the exact words you heard. The phone session verifies every request against the completed user transcript; the tool argument is not consent by itself. If the person continues talking, says no, is silent, or the words are ambiguous, keep the call open. When using it, give a brief warm farewell after the tool result.",
         ].filter(Boolean).join("\n\n");
         this.realtime.send(
           JSON.stringify({
@@ -256,7 +261,7 @@ export class CallSession {
                 ...(this.bridge ? [{ type: "function", name: "bridge_send_sms", description: "Send an explicitly approved SMS to a listed trusted contact.", parameters: { type: "object", additionalProperties: false, required: ["trusted_contact_id", "message"], properties: { trusted_contact_id: { type: "string" }, message: { type: "string", maxLength: MAX_SMS_CONTENT_LENGTH } } } }] : []),
                 ...(this.shield ? [
                   { type: "function", name: "shield_assess", description: "Assess an explicitly stated suspicious or urgent situation before offering a safety pause. Do not use for vague or inferred concerns.", parameters: { type: "object", additionalProperties: false, required: ["situation"], properties: { situation: { type: "string", minLength: 1, maxLength: 2000 } } } },
-                  { type: "function", name: "shield_send_alert", description: "Send the fixed Shield check-in alert only after direct spoken approval of the named recipient and exact alert text.", parameters: { type: "object", additionalProperties: false, required: ["trusted_contact_id"], properties: { trusted_contact_id: { type: "string" } } } },
+                  { type: "function", name: "shield_send_alert", description: "Send the fixed Shield check-in alert only after direct spoken approval of the named recipient and a short check-in purpose (do not require reading the SMS body aloud).", parameters: { type: "object", additionalProperties: false, required: ["trusted_contact_id"], properties: { trusted_contact_id: { type: "string" } } } },
                 ] : []),
                 { type: "function", name: "end_call", description: "End after a clear completed user closing or after a direct confirmation Iris asked for. confirmation must contain the exact closing or confirmation words heard.", parameters: { type: "object", additionalProperties: false, required: ["confirmation"], properties: { confirmation: { type: "string", minLength: 1, maxLength: 120 } } } },
               ],
@@ -428,7 +433,7 @@ export class CallSession {
       const transcriptConfirmation = userTurns.slice(this.pendingEndCallConfirmation.userTurnCount).at(-1)?.text;
       const args = parseToolArgumentsObject(argumentsJson);
       const toolConfirmation = typeof args?.confirmation === "string" ? args.confirmation : null;
-      if (transcriptConfirmation && !isExplicitEndCallConfirmation(transcriptConfirmation)) {
+      if (transcriptConfirmation && !isEndCallConfirmation(transcriptConfirmation, userTurns)) {
         // A real post-question answer that is not an affirmation cancels this
         // confirmation attempt. A later goodbye must start a fresh ask.
         this.clearPendingEndCallConfirmation();
@@ -529,7 +534,7 @@ export class CallSession {
     const transcriptConfirmation = userTurns.slice(pending.userTurnCount).at(-1)?.text;
     if (!transcriptConfirmation) return;
     const callId = pending.toolCallId;
-    const confirmed = isExplicitEndCallConfirmation(transcriptConfirmation);
+    const confirmed = isEndCallConfirmation(transcriptConfirmation, userTurns);
     this.clearPendingEndCallConfirmation();
     if (!confirmed) {
       this.sendToolOutput(callId, { ok: false, error: "confirmation_not_clear" });
