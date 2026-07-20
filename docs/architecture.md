@@ -23,7 +23,7 @@ flowchart LR
 - `OPENAI_API_KEY` and Twilio credentials belong only in `server/.env`.
 - Twilio connects to the public server over HTTPS/WSS; audio is relayed without application-side transcoding.
 - Raw audio is never persisted. Transcript text is held only in memory through consent-gated summary extraction after the call, then discarded; it is never written to SQLite.
-- Summary extraction runs only with active, revocable `summary_retention` consent. It uses structured output, stores no raw transcript, and persists only explicit durable facts, named people/context, unresolved topics, a recap, and an optional recall anchor. Dashboard call projections expose only the recap; anchors never enter timeline payloads.
+- Summary extraction runs only with active, revocable `summary_retention` consent. It uses structured output, stores no raw transcript, and persists only explicit durable facts, named people/context, unresolved topics, a recap, and an optional recall anchor. With separately active `care_summary_sharing` consent, the same extraction also produces a dashboard-only shared care recap with explicitly discussed health-related concerns and clearly attributed Iris guidance. It never adds a diagnosis, professional conclusion, or advice Iris did not say. Anchors never enter timeline payloads.
 - Trusted contacts receive only their scoped dashboard projection. A family-requested call derives attribution from the grant, never a client-supplied name.
 - Timeline payloads are allowlisted: no SMS body, phone number, provider ID, raw transcript, or audit metadata reaches the browser.
 - SMS dispatch is approval-gated and uses a durable outbox. Uncertain sends require an explicit operator retry because retrying can duplicate a message.
