@@ -14,6 +14,7 @@ const DASHBOARD_POLL_INTERVAL_MS = 2_500;
 const ADD_PERSON_OPTION = "__add_person__";
 const ADD_CONTACT_OPTION = "__add_contact__";
 const E164_PATTERN = /^\+[1-9]\d{7,14}$/;
+type DashboardPage = "home" | "activity";
 let capturedOptInToken: string | null | undefined;
 
 function readMagicLinkToken() {
@@ -182,6 +183,8 @@ function DashboardApp() {
   const [isCallRequesting, setIsCallRequesting] = useState(false);
   const [dispatchingActionId, setDispatchingActionId] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
+  const [dashboardPage, setDashboardPage] = useState<DashboardPage>("home");
+  const [dashboardNavOpen, setDashboardNavOpen] = useState(false);
   const magicLinkRequestId = useRef(0);
   const overviewRequestId = useRef(0);
   const pendingTrustedContactId = useRef<string | null>(null);
@@ -411,6 +414,8 @@ function DashboardApp() {
     setSelectedPersonId(null);
     setIsAddingPerson(false);
     setAdminPeople([]);
+    setDashboardPage("home");
+    setDashboardNavOpen(false);
   };
 
   const createMagicLink = async (trustedContactId: string) => {
@@ -774,6 +779,313 @@ function DashboardApp() {
   const callDisabled = !overview || isCallRequesting || Boolean(activeCall);
   const canRequestCheckIn = principal?.role === "trusted_contact"
     && principal.scopes.includes("request_check_in");
+  const isOperator = principal?.role === "admin";
+  const isTrusted = principal?.role === "trusted_contact";
+  const showHomeCards = dashboardPage === "home";
+  const showActivityCards = dashboardPage === "activity";
+
+  const goToDashboardPage = (page: DashboardPage) => {
+    setDashboardPage(page);
+    setDashboardNavOpen(false);
+  };
+
+  useEffect(() => {
+    if (!dashboardNavOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setDashboardNavOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [dashboardNavOpen]);
+
+  const personCard = overview ? (
+    <section className="overview-card profile-card">
+      <div className="card-header">
+        <p className="card-kicker">Person</p>
+        <h2>{overview.person.displayName}</h2>
+        <div className="person-phone-row">
+          <p className="person-phone">{phoneNumberLabel(overview.person)}</p>
+          {principal?.role === "admin" && (
+            <button
+              className="person-phone-edit"
+              type="button"
+              onClick={() => {
+                setPhoneDraft(overview.person.phoneE164 ?? "");
+                setPhoneFormError(null);
+                setIsEditingPhone(true);
+              }}
+            >
+              Edit
+            </button>
+          )}
+        </div>
+        {principal?.role === "admin" && isEditingPhone && (
+          <form className="phone-editor" onSubmit={savePersonPhone}>
+            <label className="form-field">
+              Phone number
+              <input required placeholder="E.164, e.g. +15551234567" value={phoneDraft} onChange={(event) => {
+                setPhoneDraft(event.target.value);
+                setPhoneFormError(null);
+              }} />
+              {phoneFormError && <p className="form-validation-error" role="alert">{phoneFormError}</p>}
+            </label>
+            <div className="phone-editor-actions">
+              <button className="secondary-button" type="submit" disabled={isSavingPhone}>{isSavingPhone ? "Saving…" : "Save"}</button>
+              <button className="secondary-button" type="button" disabled={isSavingPhone} onClick={() => {
+                setPhoneFormError(null);
+                setIsEditingPhone(false);
+              }}>Cancel</button>
+            </div>
+          </form>
+        )}
+        {principal?.role === "admin" ? (
+          <p className="privacy-note">Choose what Iris remembers and what your care circle can see. Iris never saves raw audio or full transcripts.</p>
+        ) : (
+          <p className="privacy-note">Iris never saves raw audio or full transcripts.</p>
+        )}
+      </div>
+      {principal?.role === "admin" && careConsents && (
+        <div className="compact-form consent-choices">
+          <strong>Conversation preferences</strong>
+          <label className="consent-check">
+            <input
+              className="consent-toggle"
+              type="checkbox"
+              checked={draftPrivateMemory}
+              onChange={(event) => {
+                const enabled = event.target.checked;
+                setDraftPrivateMemory(enabled);
+                if (!enabled) setDraftSharedCare(false);
+              }}
+            />
+            <span className="consent-option">
+              <span className="consent-option-heading">
+                <strong>Private memory</strong>
+                <span className={`consent-status${careConsents.summaryRetention ? "" : " is-off"}`} aria-label={careConsents.summaryRetention ? "Currently on" : "Currently off"}>{careConsents.summaryRetention ? "On" : "Off"}</span>
+              </span>
+              <span>Helps Iris remember helpful details between calls. Only Iris uses this.</span>
+            </span>
+          </label>
+          <label className="consent-check">
+            <input
+              className="consent-toggle"
+              type="checkbox"
+              checked={draftSharedCare}
+              onChange={(event) => {
+                const enabled = event.target.checked;
+                setDraftSharedCare(enabled);
+                if (enabled) setDraftPrivateMemory(true);
+              }}
+            />
+            <span className="consent-option">
+              <span className="consent-option-heading">
+                <strong>Shared care recaps</strong>
+                <span className={`consent-status${careConsents.careSummarySharing ? "" : " is-off"}`} aria-label={careConsents.careSummarySharing ? "Currently on" : "Currently off"}>{careConsents.careSummarySharing ? "On" : "Off"}</span>
+              </span>
+              <span>Shares a concise recap with you and trusted contacts, including health-related concerns and Iris’s guidance. Never raw audio or a full transcript. Requires private memory.</span>
+            </span>
+          </label>
+          <div className="consent-attestation">
+            <label className="consent-check">
+              <input
+                className="consent-toggle"
+                type="checkbox"
+                checked={consentAttested}
+                onChange={(event) => {
+                  setConsentAttested(event.target.checked);
+                  if (event.target.checked) setConsentFormError(null);
+                }}
+              />
+              <span>I confirm {overview.person.displayName} agreed to these choices.</span>
+            </label>
+            {consentFormError && <p className="consent-form-error" role="alert">{consentFormError}</p>}
+          </div>
+          <button
+            className="secondary-button save-consent-button"
+            type="button"
+            disabled={!consentDirty || savingConsents}
+            onClick={() => void saveConsents()}
+          >
+            {savingConsents ? "Saving…" : "Save"}
+          </button>
+        </div>
+      )}
+    </section>
+  ) : null;
+
+  const recentCallsCard = overview ? (
+    <section className="overview-card recent-calls-card">
+      <div className="card-heading">
+        <div className="card-header">
+          <p className="card-kicker">Recent calls</p>
+          <h2>Calls with Iris</h2>
+          <p className="privacy-note">Shared notes from recent calls.</p>
+        </div>
+        <span className="count-pill">{overview.calls.length}</span>
+      </div>
+      {overview.calls.length ? (
+        <ol className="item-list">
+          {overview.calls.map((call) => (
+            <li key={call.id}>
+              <strong>{summaryLabel(
+                call.careSummary,
+                call.summaryState,
+                careConsents?.careSummarySharing ?? null,
+                call.privateSummarySaved,
+              )}</strong>
+              <span>{formatDate(call.startedAt)} · {call.status}</span>
+              {call.careSummary && (
+                <div className="care-summary">
+                  {call.careSummary.moodAndConcerns.length > 0 && (
+                    <div>
+                      <strong>{givenName(overview.person.displayName)} shared</strong>
+                      <ul>{call.careSummary.moodAndConcerns.map((item, index) => <li key={`${call.id}-mood-${index}`}>{item}</li>)}</ul>
+                    </div>
+                  )}
+                  {call.careSummary.irisSuggestedNextSteps.length > 0 && (
+                    <div>
+                      <strong>Iris suggested</strong>
+                      <ul>{call.careSummary.irisSuggestedNextSteps.map((item, index) => <li key={`${call.id}-suggestion-${index}`}>{item}</li>)}</ul>
+                    </div>
+                  )}
+                </div>
+              )}
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <div className="empty-state-card">
+          <p className="empty-state">Shared notes from calls with Iris will appear here.</p>
+        </div>
+      )}
+    </section>
+  ) : null;
+
+  const timelineCard = overview ? (
+    <section className="overview-card timeline-card dashboard-split-aside">
+      <div className="card-heading">
+        <div>
+          <p className="card-kicker">Timeline</p>
+          <h2>What’s happened</h2>
+        </div>
+        <span className="count-pill">{overview.events.length}</span>
+      </div>
+      {overview.events.length ? (
+        <ol className="item-list">
+          {overview.events.map((event) => (
+            <li key={event.id}>
+              <strong>{timelineCopy(event, overview.person.displayName)}</strong>
+              <span>{formatDate(event.occurredAt)}</span>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <div className="empty-state-card">
+          <p className="empty-state">Iris activity will appear here.</p>
+        </div>
+      )}
+    </section>
+  ) : null;
+
+  const actionsCard = overview ? (
+    <section className="overview-card actions-card">
+      <div className="card-header">
+        <p className="card-kicker">Actions</p>
+        <h2>Text messages</h2>
+        <p className="privacy-note">Message updates and anything that needs your attention.</p>
+      </div>
+      {overview.actions.length ? (
+        <ol className="item-list">
+          {overview.actions.map((action) => (
+            <li key={action.id}>
+              <strong>{actionLabel(action)}</strong>
+              <span>{actionCopy(action)}</span>
+              {action.dispatchState === "needs_review" && (
+                <>
+                  <span className="warning-note">Retrying may create a duplicate message.</span>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={dispatchingActionId === action.id}
+                    onClick={() => void retrySms(action.id)}
+                  >
+                    {dispatchingActionId === action.id ? "Retrying…" : "Retry SMS"}
+                  </button>
+                </>
+              )}
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <div className="empty-state-card">
+          <p className="empty-state">No text-message updates yet.</p>
+        </div>
+      )}
+    </section>
+  ) : null;
+
+  const trustedSelfCard = overview?.viewer ? (
+    <section className="overview-card trusted-self-card dashboard-split-aside">
+      <div className="card-header">
+        <p className="card-kicker">You</p>
+        <h2>{overview.viewer.displayName}</h2>
+        <span className="contact-relationship">{overview.viewer.relationship}</span>
+        <div className="person-phone-row">
+          <p className="person-phone">{contactPhoneLabel(overview.viewer.phoneE164)}</p>
+        </div>
+      </div>
+      <div className="trusted-self-sms">
+        <strong>Text messages</strong>
+        <p className="privacy-note">Iris can text you for Shield safety alerts once you’ve opted in. An operator sends you an opt-in link to get started.</p>
+        <ul className="contact-status-list">
+          <li>
+            <span>
+              <strong>SMS</strong>
+              <span className="contact-status-detail">Whether you’ve agreed to receive Iris texts, including Shield alerts.</span>
+            </span>
+            <span className={`contact-status-pill${overview.viewer.smsOptInStatus === "opted_in" ? "" : " is-off"}`}>
+              {overview.viewer.smsOptInStatus === "opted_in" ? "Opted in" : overview.viewer.smsOptInStatus === "opted_out" ? "Opted out" : "Not opted in"}
+            </span>
+          </li>
+          <li>
+            <span>
+              <strong>SMS confirmation</strong>
+              <span className="contact-status-detail">Whether Iris has sent the confirmation text after you use the opt-in link.</span>
+            </span>
+            <span className={`contact-status-pill${overview.viewer.confirmationState === "not_requested" ? " is-off" : ""}`}>
+              {overview.viewer.confirmationState === "not_requested" ? "Not requested" : overview.viewer.confirmationState.replaceAll("_", " ")}
+            </span>
+          </li>
+        </ul>
+      </div>
+      <div className="compact-form consent-choices is-readonly">
+        <strong>Conversation preferences</strong>
+        <p className="privacy-note">These choices were set for {overview.person.displayName}. Contact the Iris operator if you’d like them changed.</p>
+        <div className="consent-check">
+          <span className="consent-option">
+            <span className="consent-option-heading">
+              <strong>Private memory</strong>
+              <span className={`consent-status${overview.consents.summaryRetention ? "" : " is-off"}`} aria-label={overview.consents.summaryRetention ? "Currently on" : "Currently off"}>
+                {overview.consents.summaryRetention ? "On" : "Off"}
+              </span>
+            </span>
+            <span>Helps Iris remember helpful details between calls. Only Iris uses this.</span>
+          </span>
+        </div>
+        <div className="consent-check">
+          <span className="consent-option">
+            <span className="consent-option-heading">
+              <strong>Shared care recaps</strong>
+              <span className={`consent-status${overview.consents.careSummarySharing ? "" : " is-off"}`} aria-label={overview.consents.careSummarySharing ? "Currently on" : "Currently off"}>
+                {overview.consents.careSummarySharing ? "On" : "Off"}
+              </span>
+            </span>
+            <span>Shares a concise recap with you and trusted contacts, including health-related concerns and Iris’s guidance. Never raw audio or a full transcript. Requires private memory.</span>
+          </span>
+        </div>
+      </div>
+    </section>
+  ) : null;
 
   if (!token && !isLoading) {
     return (
@@ -819,23 +1131,123 @@ function DashboardApp() {
               ? "Operator view"
               : `Trusted view for ${principal?.trustedContact?.displayName ?? "family"}`}
           </p>
-        </div>
-        <div className="header-actions">
           {principal?.role === "admin" && (
-            <button className="call-button" type="button" disabled={callDisabled} onClick={() => void startCall()}>
+            <button
+              className="call-button header-call-mobile"
+              type="button"
+              disabled={callDisabled}
+              onClick={() => void startCall()}
+            >
               {callStateLabel}
             </button>
           )}
           {canRequestCheckIn && (
-            <button className="call-button" type="button" disabled={callDisabled} onClick={() => void startCall()}>
+            <button
+              className="call-button header-call-mobile"
+              type="button"
+              disabled={callDisabled}
+              onClick={() => void startCall()}
+            >
               {activeCall ? callStateLabel : "Ask Iris to check in"}
             </button>
           )}
-          <button className="text-button" type="button" onClick={signOut}>
+        </div>
+        <div className="header-actions">
+          {principal?.role === "admin" && (
+            <button
+              className="call-button header-call-desktop"
+              type="button"
+              disabled={callDisabled}
+              onClick={() => void startCall()}
+            >
+              {callStateLabel}
+            </button>
+          )}
+          {canRequestCheckIn && (
+            <button
+              className="call-button header-call-desktop"
+              type="button"
+              disabled={callDisabled}
+              onClick={() => void startCall()}
+            >
+              {activeCall ? callStateLabel : "Ask Iris to check in"}
+            </button>
+          )}
+          <div className="header-menu">
+            <button
+              type="button"
+              className="nav-menu-button"
+              aria-expanded={dashboardNavOpen}
+              aria-controls="dashboard-nav-menu"
+              onClick={() => setDashboardNavOpen((open) => !open)}
+            >
+              <span className="sr-only">{dashboardNavOpen ? "Close menu" : "Open menu"}</span>
+              <span className="nav-menu-icon" aria-hidden="true">
+                <span />
+                <span />
+                <span />
+              </span>
+            </button>
+            {dashboardNavOpen && (
+              <div id="dashboard-nav-menu" className="dashboard-nav-panel" role="menu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={`nav-link${dashboardPage === "home" ? " is-active" : ""}`}
+                  aria-current={dashboardPage === "home" ? "page" : undefined}
+                  onClick={() => goToDashboardPage("home")}
+                >
+                  Home
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={`nav-link${dashboardPage === "activity" ? " is-active" : ""}`}
+                  aria-current={dashboardPage === "activity" ? "page" : undefined}
+                  onClick={() => goToDashboardPage("activity")}
+                >
+                  Activity
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="nav-link"
+                  onClick={() => {
+                    setDashboardNavOpen(false);
+                    signOut();
+                  }}
+                >
+                  Sign out
+                </button>
+              </div>
+            )}
+          </div>
+          <button className="text-button header-sign-out-desktop" type="button" onClick={signOut}>
             Sign out
           </button>
         </div>
       </header>
+
+      <nav className="dashboard-nav" aria-label="Dashboard pages">
+        <div className="dashboard-nav-links" role="presentation">
+          <button
+            type="button"
+            className={`nav-link${dashboardPage === "home" ? " is-active" : ""}`}
+            aria-current={dashboardPage === "home" ? "page" : undefined}
+            onClick={() => goToDashboardPage("home")}
+          >
+            Home
+          </button>
+          <button
+            type="button"
+            className={`nav-link${dashboardPage === "activity" ? " is-active" : ""}`}
+            aria-current={dashboardPage === "activity" ? "page" : undefined}
+            onClick={() => goToDashboardPage("activity")}
+          >
+            Activity
+          </button>
+        </div>
+      </nav>
 
       {error && <p className="form-error" role="alert">{error}</p>}
       {isLoading && <p className="loading-note">Loading the current picture…</p>}
@@ -846,8 +1258,9 @@ function DashboardApp() {
       )}
 
       {(overview || (principal?.role === "admin" && (isAddingPerson || adminPeople.length === 0))) && (
-        <div className="dashboard-grid">
-          {principal?.role === "admin" && (
+        <div className="dashboard-grid is-dashboard-split">
+          {isOperator && showHomeCards && (
+            <div className="dashboard-column-stack">
             <section className="overview-card enrollment-card">
               <div className="enrollment-header">
                 <p className="card-kicker">Enrollment</p>
@@ -917,257 +1330,37 @@ function DashboardApp() {
                 </form>
               )}
             </section>
+            {personCard}
+            </div>
           )}
-          {overview && (
+          {isTrusted && showHomeCards && (
             <>
-          <section className="overview-card profile-card">
-            <div className="card-header">
-              <p className="card-kicker">Person</p>
-              <h2>{overview.person.displayName}</h2>
-              <div className="person-phone-row">
-                <p className="person-phone">{phoneNumberLabel(overview.person)}</p>
-                {principal?.role === "admin" && (
-                  <button
-                    className="person-phone-edit"
-                    type="button"
-                    onClick={() => {
-                      setPhoneDraft(overview.person.phoneE164 ?? "");
-                      setPhoneFormError(null);
-                      setIsEditingPhone(true);
-                    }}
-                  >
-                    Edit
-                  </button>
+              {personCard}
+              {trustedSelfCard}
+            </>
+          )}
+
+          {showActivityCards && overview && (
+            <>
+              <div className="dashboard-column-stack">
+                {isOperator ? (
+                  <>
+                    {actionsCard}
+                    {recentCallsCard}
+                  </>
+                ) : (
+                  <>
+                    {recentCallsCard}
+                    {actionsCard}
+                  </>
                 )}
               </div>
-              {principal?.role === "admin" && isEditingPhone && (
-                <form className="phone-editor" onSubmit={savePersonPhone}>
-                  <label className="form-field">
-                    Phone number
-                    <input required placeholder="E.164, e.g. +15551234567" value={phoneDraft} onChange={(event) => {
-                      setPhoneDraft(event.target.value);
-                      setPhoneFormError(null);
-                    }} />
-                    {phoneFormError && <p className="form-validation-error" role="alert">{phoneFormError}</p>}
-                  </label>
-                  <div className="phone-editor-actions">
-                    <button className="secondary-button" type="submit" disabled={isSavingPhone}>{isSavingPhone ? "Saving…" : "Save"}</button>
-                    <button className="secondary-button" type="button" disabled={isSavingPhone} onClick={() => {
-                      setPhoneFormError(null);
-                      setIsEditingPhone(false);
-                    }}>Cancel</button>
-                  </div>
-                </form>
-              )}
-              {principal?.role === "admin" ? (
-                <p className="privacy-note">Choose what Iris remembers and what your care circle can see. Iris never saves raw audio or full transcripts.</p>
-              ) : (
-                <p className="privacy-note">Iris never saves raw audio or full transcripts.</p>
-              )}
-            </div>
-            {principal?.role === "admin" && careConsents && (
-              <div className="compact-form consent-choices">
-                <strong>Conversation preferences</strong>
-                <label className="consent-check">
-                  <input
-                    className="consent-toggle"
-                    type="checkbox"
-                    checked={draftPrivateMemory}
-                    onChange={(event) => {
-                      const enabled = event.target.checked;
-                      setDraftPrivateMemory(enabled);
-                      if (!enabled) setDraftSharedCare(false);
-                    }}
-                  />
-                  <span className="consent-option">
-                    <span className="consent-option-heading">
-                      <strong>Private memory</strong>
-                      <span className={`consent-status${careConsents.summaryRetention ? "" : " is-off"}`} aria-label={careConsents.summaryRetention ? "Currently on" : "Currently off"}>{careConsents.summaryRetention ? "On" : "Off"}</span>
-                    </span>
-                    <span>Helps Iris remember helpful details between calls. Only Iris uses this.</span>
-                  </span>
-                </label>
-                <label className="consent-check">
-                  <input
-                    className="consent-toggle"
-                    type="checkbox"
-                    checked={draftSharedCare}
-                    onChange={(event) => {
-                      const enabled = event.target.checked;
-                      setDraftSharedCare(enabled);
-                      if (enabled) setDraftPrivateMemory(true);
-                    }}
-                  />
-                  <span className="consent-option">
-                    <span className="consent-option-heading">
-                      <strong>Shared care recaps</strong>
-                      <span className={`consent-status${careConsents.careSummarySharing ? "" : " is-off"}`} aria-label={careConsents.careSummarySharing ? "Currently on" : "Currently off"}>{careConsents.careSummarySharing ? "On" : "Off"}</span>
-                    </span>
-                    <span>Shares a concise recap with you and trusted contacts, including health-related concerns and Iris’s guidance. Never raw audio or a full transcript. Requires private memory.</span>
-                  </span>
-                </label>
-                <div className="consent-attestation">
-                  <label className="consent-check">
-                    <input
-                      className="consent-toggle"
-                      type="checkbox"
-                      checked={consentAttested}
-                      onChange={(event) => {
-                        setConsentAttested(event.target.checked);
-                        if (event.target.checked) setConsentFormError(null);
-                      }}
-                    />
-                    <span>I confirm {overview.person.displayName} agreed to these choices.</span>
-                  </label>
-                  {consentFormError && <p className="consent-form-error" role="alert">{consentFormError}</p>}
-                </div>
-                <button
-                  className="secondary-button save-consent-button"
-                  type="button"
-                  disabled={!consentDirty || savingConsents}
-                  onClick={() => void saveConsents()}
-                >
-                  {savingConsents ? "Saving…" : "Save"}
-                </button>
-              </div>
-            )}
-          </section>
-
-          <section className="overview-card recent-calls-card">
-            <div className="card-heading">
-              <div className="card-header">
-                <p className="card-kicker">Recent calls</p>
-                <h2>Calls with Iris</h2>
-                <p className="privacy-note">Shared notes from recent calls.</p>
-              </div>
-              <span className="count-pill">{overview.calls.length}</span>
-            </div>
-            {overview.calls.length ? (
-              <ol className="item-list">
-                {overview.calls.map((call) => (
-                  <li key={call.id}>
-                    <strong>{summaryLabel(
-                      call.careSummary,
-                      call.summaryState,
-                      careConsents?.careSummarySharing ?? null,
-                      call.privateSummarySaved,
-                    )}</strong>
-                    <span>{formatDate(call.startedAt)} · {call.status}</span>
-                    {call.careSummary && (
-                      <div className="care-summary">
-                        {call.careSummary.moodAndConcerns.length > 0 && (
-                          <div>
-                            <strong>{givenName(overview.person.displayName)} shared</strong>
-                            <ul>{call.careSummary.moodAndConcerns.map((item, index) => <li key={`${call.id}-mood-${index}`}>{item}</li>)}</ul>
-                          </div>
-                        )}
-                        {call.careSummary.irisSuggestedNextSteps.length > 0 && (
-                          <div>
-                            <strong>Iris suggested</strong>
-                            <ul>{call.careSummary.irisSuggestedNextSteps.map((item, index) => <li key={`${call.id}-suggestion-${index}`}>{item}</li>)}</ul>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </li>
-                ))}
-              </ol>
-            ) : (
-              <div className="empty-state-card">
-                <p className="empty-state">Shared notes from calls with Iris will appear here.</p>
-              </div>
-            )}
-          </section>
-
-          <section className="overview-card timeline-card">
-            <div className="card-heading">
-              <div>
-                <p className="card-kicker">Timeline</p>
-                <h2>What’s happened</h2>
-              </div>
-              <span className="count-pill">{overview.events.length}</span>
-            </div>
-            {overview.events.length ? (
-              <ol className="item-list">
-                {overview.events.map((event) => (
-                  <li key={event.id}>
-                    <strong>{timelineCopy(event, overview.person.displayName)}</strong>
-                    <span>{formatDate(event.occurredAt)}</span>
-                  </li>
-                ))}
-              </ol>
-            ) : (
-              <div className="empty-state-card">
-                <p className="empty-state">Iris activity will appear here.</p>
-              </div>
-            )}
-          </section>
-
-          {principal?.role === "trusted_contact" && overview.viewer && (
-            <section className="overview-card trusted-self-card">
-              <div className="card-header">
-                <p className="card-kicker">You</p>
-                <h2>{overview.viewer.displayName}</h2>
-                <span className="contact-relationship">{overview.viewer.relationship}</span>
-                <div className="person-phone-row">
-                  <p className="person-phone">{contactPhoneLabel(overview.viewer.phoneE164)}</p>
-                </div>
-              </div>
-              <div className="trusted-self-sms">
-                <strong>Text messages</strong>
-                <p className="privacy-note">Iris can text you for Shield safety alerts once you’ve opted in. An operator sends you an opt-in link to get started.</p>
-                <ul className="contact-status-list">
-                  <li>
-                    <span>
-                      <strong>SMS</strong>
-                      <span className="contact-status-detail">Whether you’ve agreed to receive Iris texts, including Shield alerts.</span>
-                    </span>
-                    <span className={`contact-status-pill${overview.viewer.smsOptInStatus === "opted_in" ? "" : " is-off"}`}>
-                      {overview.viewer.smsOptInStatus === "opted_in" ? "Opted in" : overview.viewer.smsOptInStatus === "opted_out" ? "Opted out" : "Not opted in"}
-                    </span>
-                  </li>
-                  <li>
-                    <span>
-                      <strong>SMS confirmation</strong>
-                      <span className="contact-status-detail">Whether Iris has sent the confirmation text after you use the opt-in link.</span>
-                    </span>
-                    <span className={`contact-status-pill${overview.viewer.confirmationState === "not_requested" ? " is-off" : ""}`}>
-                      {overview.viewer.confirmationState === "not_requested" ? "Not requested" : overview.viewer.confirmationState.replaceAll("_", " ")}
-                    </span>
-                  </li>
-                </ul>
-              </div>
-              <div className="compact-form consent-choices is-readonly">
-                <strong>Conversation preferences</strong>
-                <p className="privacy-note">These choices were set for {overview.person.displayName}. Contact the Iris operator if you’d like them changed.</p>
-                <div className="consent-check">
-                  <span className="consent-option">
-                    <span className="consent-option-heading">
-                      <strong>Private memory</strong>
-                      <span className={`consent-status${overview.consents.summaryRetention ? "" : " is-off"}`} aria-label={overview.consents.summaryRetention ? "Currently on" : "Currently off"}>
-                        {overview.consents.summaryRetention ? "On" : "Off"}
-                      </span>
-                    </span>
-                    <span>Helps Iris remember helpful details between calls. Only Iris uses this.</span>
-                  </span>
-                </div>
-                <div className="consent-check">
-                  <span className="consent-option">
-                    <span className="consent-option-heading">
-                      <strong>Shared care recaps</strong>
-                      <span className={`consent-status${overview.consents.careSummarySharing ? "" : " is-off"}`} aria-label={overview.consents.careSummarySharing ? "Currently on" : "Currently off"}>
-                        {overview.consents.careSummarySharing ? "On" : "Off"}
-                      </span>
-                    </span>
-                    <span>Shares a concise recap with you and trusted contacts, including health-related concerns and Iris’s guidance. Never raw audio or a full transcript. Requires private memory.</span>
-                  </span>
-                </div>
-              </div>
-            </section>
+              {timelineCard}
+            </>
           )}
 
-          {principal?.role === "admin" && (
-          <section className="overview-card trusted-contacts-card">
+          {isOperator && showHomeCards && overview && (
+          <section className="overview-card trusted-contacts-card dashboard-split-aside">
             <div className="card-header">
               <p className="card-kicker">Trusted contacts</p>
               <h2>People in the circle</h2>
@@ -1416,45 +1609,6 @@ function DashboardApp() {
               </form>
             )}
           </section>
-          )}
-
-          {principal?.role === "admin" && (
-          <section className="overview-card actions-card">
-            <div className="card-header">
-              <p className="card-kicker">Actions</p>
-              <h2>Text messages</h2>
-              <p className="privacy-note">Message updates and anything that needs your attention.</p>
-            </div>
-            {overview.actions.length ? (
-              <ol className="item-list">
-                {overview.actions.map((action) => (
-                  <li key={action.id}>
-                    <strong>{actionLabel(action)}</strong>
-                    <span>{actionCopy(action)}</span>
-                    {action.dispatchState === "needs_review" && (
-                      <>
-                        <span className="warning-note">Retrying may create a duplicate message.</span>
-                        <button
-                          className="secondary-button"
-                          type="button"
-                          disabled={dispatchingActionId === action.id}
-                          onClick={() => void retrySms(action.id)}
-                        >
-                          {dispatchingActionId === action.id ? "Retrying…" : "Retry SMS"}
-                        </button>
-                      </>
-                    )}
-                  </li>
-                ))}
-              </ol>
-            ) : (
-              <div className="empty-state-card">
-                <p className="empty-state">No text-message updates yet.</p>
-              </div>
-            )}
-          </section>
-          )}
-            </>
           )}
         </div>
       )}
