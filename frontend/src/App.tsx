@@ -444,7 +444,7 @@ function DashboardApp() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             trustedContactId,
-            scopes: ["view_summaries", "view_events", "request_check_in"],
+            scopes: ["care_notes", "view_summaries", "view_events", "request_check_in"],
           }),
         },
       );
