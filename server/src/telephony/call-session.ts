@@ -23,6 +23,7 @@ export type CallSessionScheduler = {
 };
 const systemScheduler: CallSessionScheduler = { setTimeout, clearTimeout };
 const FAREWELL_PLAYBACK_MARK = "iris-farewell";
+const END_CALL_TRANSCRIPT_WAIT_MS = 2_200;
 
 export function friendlyRequesterToken(displayName: string) {
   return displayName.trim().split(/\s+/).find(Boolean) ?? null;
@@ -38,6 +39,22 @@ function parseToolArgumentsObject(argumentsJson: string): Record<string, unknown
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
   return parsed as Record<string, unknown>;
+}
+
+function isExplicitEndCallConfirmation(text: string) {
+  const normalized = text
+    .toLowerCase()
+    .replace(/[^a-z\s']/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized || /\b(?:no|nope|nah|don't|do not|not yet|wait|hold on|keep talking|continue)\b/.test(normalized)) {
+    return false;
+  }
+  const filler = "(?:(?:um|uh|well|actually)\\s+)*";
+  const affirmative = "(?:yes|yeah|yep|sure|okay|ok|alright|all right)";
+  const affirmativeSuffix = "(?:actually|please|go ahead|you can|you may|end the call|hang up|that's all|that is all|that's it|that is it|nothing else|i'm done|i am done|we're done|we are done)";
+  const completeEnding = "(?:that's all|that is all|that's it|that is it|nothing else|i'm done|i am done|we're done|we are done|all done)";
+  return new RegExp(`^${filler}(?:${affirmative}(?:\\s+${affirmativeSuffix})*|${completeEnding})$`).test(normalized);
 }
 
 export const createRealtimeSocket: RealtimeSocketFactory = ({
@@ -84,6 +101,12 @@ type PendingFarewell = {
   timer: unknown | null;
 };
 
+type PendingEndCallConfirmation = {
+  userTurnCount: number;
+  toolCallId: string | null;
+  timer: unknown | null;
+};
+
 type ShieldSession = {
   contacts: Array<{ id: string; name: string }>;
   alertText: string;
@@ -105,6 +128,7 @@ export class CallSession {
   private closed = false;
   private readonly processedToolCallIds = new Set<string>();
   private pendingFarewell: PendingFarewell | null = null;
+  private pendingEndCallConfirmation: PendingEndCallConfirmation | null = null;
   private readonly debugRealtime = process.env.IRIS_REALTIME_DEBUG === "true";
 
   constructor(
@@ -178,7 +202,7 @@ export class CallSession {
           this.shield
             ? `Shield context: the listed trusted contacts are ${JSON.stringify(this.shield.contacts)}. The exact fixed Shield alert text is ${JSON.stringify(this.shield.alertText)}. Authoritative phone-session instructions: use shield_assess only after the person explicitly describes observable suspicious pressure. Summarize only what they said; never invent or embellish details. Its result can guide you to calmly recommend a pause, name only the returned observable signals, and suggest verifying through a known official number or speaking with a trusted person. Never state that something is definitely a scam, ask for credentials, or give financial, legal, or medical advice. The shield_send_alert tool is allowed only after Iris has stated the selected contact's name and that exact fixed alert text, and the person has then clearly and directly approved sending that exact alert to that listed contact. Never call it on ambiguity or for an unlisted contact.`
             : "",
-          "Authoritative phone-session instructions: use end_call only after an unmistakable direct goodbye or explicit request to end the call. Never use it for silence, hesitation, or ambiguous language. When using it, give a brief warm farewell after the tool result.",
+          "Authoritative phone-session instructions: never use end_call from a goodbye alone. First ask a direct confirmation question such as “Would you like me to end our call?” and wait for a new, clear yes or no. Use end_call only after a new direct confirmation to end the call, and set confirmation to the exact confirmation words you heard. The phone session verifies that request against the completed user transcript; the tool argument is not consent by itself. Goodbye is a reason to ask, never confirmation by itself. If the person continues talking, says no, is silent, or the words are ambiguous, keep the call open. Never infer intent from background speech, partial words, hesitation, or an uncertain transcription. When using it, give a brief warm farewell after the tool result.",
         ].filter(Boolean).join("\n\n");
         this.realtime.send(
           JSON.stringify({
@@ -193,7 +217,7 @@ export class CallSession {
                   { type: "function", name: "shield_assess", description: "Assess an explicitly stated suspicious or urgent situation before offering a safety pause. Do not use for vague or inferred concerns.", parameters: { type: "object", additionalProperties: false, required: ["situation"], properties: { situation: { type: "string", minLength: 1, maxLength: 2000 } } } },
                   { type: "function", name: "shield_send_alert", description: "Send the fixed Shield check-in alert only after direct spoken approval of the named recipient and exact alert text.", parameters: { type: "object", additionalProperties: false, required: ["trusted_contact_id"], properties: { trusted_contact_id: { type: "string" } } } },
                 ] : []),
-                { type: "function", name: "end_call", description: "End the phone call after the person has clearly said goodbye or explicitly asked to end it.", parameters: { type: "object", additionalProperties: false, required: [], properties: {} } },
+                { type: "function", name: "end_call", description: "End the phone call only after Iris has asked for confirmation and the person has given a new, clear direct confirmation. confirmation must be their exact confirmation words.", parameters: { type: "object", additionalProperties: false, required: ["confirmation"], properties: { confirmation: { type: "string", minLength: 1, maxLength: 120 } } } },
               ],
               audio: {
                 input: {
@@ -287,6 +311,7 @@ export class CallSession {
     }
     if (event.type === "conversation.item.input_audio_transcription.completed" && event.transcript) {
       this.liveTranscript.push({ speaker: "user", text: event.transcript });
+      this.resolvePendingEndCallConfirmation();
     }
     if (event.type === "response.output_audio_transcript.done" && event.transcript) {
       this.liveTranscript.push({ speaker: "assistant", text: event.transcript });
@@ -344,23 +369,46 @@ export class CallSession {
         this.sendToolOutput(callId, { ok: true, ending: true }, false);
         return;
       }
-      this.pendingFarewell = {
-        responseId: null,
-        responseDone: false,
-        audioStarted: false,
-        audioDone: false,
-        markSent: false,
-        playbackAcked: false,
-        timer: null,
-      };
-      try {
-        this.sendToolOutput(callId, { ok: true });
-      } finally {
-        // Keep the safety bound intact even if the Realtime socket rejects the
-        // function output. The caller also handles that rejected dispatch by
-        // closing this session as failed.
-        this.armFarewellTimeout();
+      const userTurns = this.liveTranscript.filter((turn) => turn.speaker === "user");
+      if (!this.pendingEndCallConfirmation) {
+        this.pendingEndCallConfirmation = { userTurnCount: userTurns.length, toolCallId: null, timer: null };
+        this.sendToolOutput(callId, { ok: false, error: "confirmation_required" });
+        return;
       }
+      if (this.pendingEndCallConfirmation.toolCallId) {
+        this.sendToolOutput(callId, { ok: false, error: "confirmation_pending" }, false);
+        return;
+      }
+      const transcriptConfirmation = userTurns.slice(this.pendingEndCallConfirmation.userTurnCount).at(-1)?.text;
+      const args = parseToolArgumentsObject(argumentsJson);
+      const toolConfirmation = typeof args?.confirmation === "string" ? args.confirmation : null;
+      if (transcriptConfirmation && !isExplicitEndCallConfirmation(transcriptConfirmation)) {
+        // A real post-question answer that is not an affirmation cancels this
+        // confirmation attempt. A later goodbye must start a fresh ask.
+        this.clearPendingEndCallConfirmation();
+        this.sendToolOutput(callId, { ok: false, error: "confirmation_not_clear" });
+        return;
+      }
+      if (transcriptConfirmation) {
+        this.beginFarewell(callId);
+        return;
+      }
+      if (!toolConfirmation || !isExplicitEndCallConfirmation(toolConfirmation)) {
+        this.sendToolOutput(callId, { ok: false, error: "confirmation_pending" });
+        return;
+      }
+      // The tool argument is only a bounded indication that a transcript may
+      // be in flight; it is never enough to end a call by itself.
+      this.pendingEndCallConfirmation.toolCallId = callId;
+      const timer = this.scheduler.setTimeout(() => {
+        if (this.pendingEndCallConfirmation?.toolCallId !== callId) return;
+        // The tool call has timed out, but the ask frame remains available for
+        // a late transcription or a retry. Do not make the model ask again.
+        this.clearEndCallTranscriptWait();
+        this.sendToolOutput(callId, { ok: false, error: "confirmation_not_transcribed" });
+      }, END_CALL_TRANSCRIPT_WAIT_MS);
+      (timer as { unref?: () => void }).unref?.();
+      this.pendingEndCallConfirmation.timer = timer;
       return;
     }
     if (name === "shield_assess") {
@@ -428,6 +476,58 @@ export class CallSession {
     if (createResponse) this.realtime.send(JSON.stringify({ type: "response.create" }));
   }
 
+  private resolvePendingEndCallConfirmation() {
+    const pending = this.pendingEndCallConfirmation;
+    if (!pending?.toolCallId) return;
+    const userTurns = this.liveTranscript.filter((turn) => turn.speaker === "user");
+    const transcriptConfirmation = userTurns.slice(pending.userTurnCount).at(-1)?.text;
+    if (!transcriptConfirmation) return;
+    const callId = pending.toolCallId;
+    const confirmed = isExplicitEndCallConfirmation(transcriptConfirmation);
+    this.clearPendingEndCallConfirmation();
+    if (!confirmed) {
+      this.sendToolOutput(callId, { ok: false, error: "confirmation_not_clear" });
+      return;
+    }
+    this.beginFarewell(callId);
+  }
+
+  private clearPendingEndCallConfirmation() {
+    this.clearEndCallTranscriptWait();
+    this.pendingEndCallConfirmation = null;
+  }
+
+  private clearEndCallTranscriptWait() {
+    if (this.pendingEndCallConfirmation?.timer) {
+      this.scheduler.clearTimeout(this.pendingEndCallConfirmation.timer);
+    }
+    if (this.pendingEndCallConfirmation) {
+      this.pendingEndCallConfirmation.timer = null;
+      this.pendingEndCallConfirmation.toolCallId = null;
+    }
+  }
+
+  private beginFarewell(callId: string) {
+    this.clearPendingEndCallConfirmation();
+    this.pendingFarewell = {
+      responseId: null,
+      responseDone: false,
+      audioStarted: false,
+      audioDone: false,
+      markSent: false,
+      playbackAcked: false,
+      timer: null,
+    };
+    try {
+      this.sendToolOutput(callId, { ok: true });
+    } finally {
+      // Keep the safety bound intact even if the Realtime socket rejects the
+      // function output. The caller also handles that rejected dispatch by
+      // closing this session as failed.
+      this.armFarewellTimeout();
+    }
+  }
+
   private armFarewellTimeout() {
     if (!this.pendingFarewell || this.pendingFarewell.timer) return;
     const timer = this.scheduler.setTimeout(() => this.close("completed"), this.farewellCloseTimeoutMs);
@@ -492,6 +592,7 @@ export class CallSession {
   close(reason: "completed" | "failed") {
     if (this.closed) return;
     this.closed = true;
+    this.clearPendingEndCallConfirmation();
     if (this.pendingFarewell?.timer) this.scheduler.clearTimeout(this.pendingFarewell.timer);
     this.pendingFarewell = null;
     this.bufferedAudio.length = 0;

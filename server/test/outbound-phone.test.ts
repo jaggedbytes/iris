@@ -526,7 +526,7 @@ test("end_call waits for the farewell response, then finalizes through the exist
     socket.emit("message", Buffer.from(JSON.stringify({ event: "start", start: { streamSid: "MZ123", customParameters: { callId, streamToken: token } } })));
     realtime.emit("open");
     const sessionUpdate = JSON.parse(realtime.sent[0]) as { session: { instructions: string; tools: Array<{ name: string }> } };
-    assert.match(sessionUpdate.session.instructions, /Never use it for silence, hesitation, or ambiguous language/);
+    assert.match(sessionUpdate.session.instructions, /never use end_call from a goodbye alone/i);
     assert.equal(sessionUpdate.session.tools.some((tool) => tool.name === "end_call"), true);
     // A tentative remark in a transcript is never a local teardown signal.
     realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "Maybe we can wrap up later." })));
@@ -539,9 +539,31 @@ test("end_call waits for the farewell response, then finalizes through the exist
     };
     realtime.emit("message", Buffer.from(JSON.stringify(endResponse)));
     realtime.emit("message", Buffer.from(JSON.stringify(endResponse)));
+    assert.equal(scheduler.scheduled?.delayMs, 10_000);
+    assert.equal(socket.closed, false);
+
+    // A negative or unrelated post-question turn cancels the pending request.
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "No, let's keep talking." })));
+    realtime.emit("message", Buffer.from(JSON.stringify({
+      type: "response.done", response: { id: "response-end-rejected", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-end-rejected", arguments: "{\"confirmation\":\"No, let's keep talking.\"}" }] },
+    })));
+    assert.equal(scheduler.scheduled?.delayMs, 10_000);
+
+    // A later goodbye asks again; it can never double as confirmation.
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "Bye, Iris." })));
+    realtime.emit("message", Buffer.from(JSON.stringify({
+      type: "response.done", response: { id: "response-end-ask-again", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-end-ask-again", arguments: "{\"confirmation\":\"Bye, Iris.\"}" }] },
+    })));
+    assert.equal(scheduler.scheduled?.delayMs, 10_000);
+
+    // A separate affirmative with a harmless filler is accepted.
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "Actually, yes please hang up." })));
+    realtime.emit("message", Buffer.from(JSON.stringify({
+      type: "response.done", response: { id: "response-end-confirmed", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-end-confirmed", arguments: "{\"confirmation\":\"Actually, yes please hang up.\"}" }] },
+    })));
     assert.equal(scheduler.scheduled?.delayMs, 77);
     assert.equal(socket.closed, false);
-    assert.equal(realtime.sent.filter((message) => JSON.parse(message).type === "response.create").length, 1);
+    assert.equal(realtime.sent.filter((message) => JSON.parse(message).type === "response.create").length, 4);
 
     // A non-tool response that predates the tool result cannot masquerade as
     // the farewell before response.created binds the newly requested response.
@@ -554,7 +576,7 @@ test("end_call waits for the farewell response, then finalizes through the exist
       type: "response.done",
       response: { id: "response-end-duplicate", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-end-second", arguments: "{}" }] },
     })));
-    assert.equal(realtime.sent.filter((message) => JSON.parse(message).type === "response.create").length, 1);
+    assert.equal(realtime.sent.filter((message) => JSON.parse(message).type === "response.create").length, 4);
 
     realtime.emit("message", Buffer.from(JSON.stringify({ type: "response.created", response: { id: "response-farewell" } })));
     realtime.emit("message", Buffer.from(JSON.stringify({ type: "response.output_audio.delta", response_id: "response-farewell", delta: "farewell-audio" })));
@@ -575,6 +597,9 @@ test("end_call waits for the farewell response, then finalizes through the exist
     assert.deepEqual(summaries, [{ callId, personId: "person-a", transcript: [
       { speaker: "user", text: "Maybe we can wrap up later." },
       { speaker: "user", text: "Goodbye, Iris." },
+      { speaker: "user", text: "No, let's keep talking." },
+      { speaker: "user", text: "Bye, Iris." },
+      { speaker: "user", text: "Actually, yes please hang up." },
     ] }]);
   } finally { closeDatabase(database); }
 });
@@ -602,6 +627,20 @@ test("end_call uses its farewell-only timeout when completion events never arriv
       type: "response.done",
       response: { id: "response-end-tool", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-end", arguments: "{}" }] },
     })));
+    realtime.emit("message", Buffer.from(JSON.stringify({
+      type: "response.done",
+      response: { id: "response-end-confirmed", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-end-confirmed", arguments: "{\"confirmation\":\"yes please\"}" }] },
+    })));
+    assert.equal(scheduler.scheduled?.delayMs, 2_200);
+    // A slow ASR result does not discard the ask frame. The tool call times
+    // out harmlessly, then the late transcript can confirm a retry.
+    scheduler.scheduled?.callback();
+    assert.equal(socket.closed, false);
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "Yes, please." })));
+    realtime.emit("message", Buffer.from(JSON.stringify({
+      type: "response.done",
+      response: { id: "response-end-retry", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-end-retry", arguments: "{\"confirmation\":\"yes please\"}" }] },
+    })));
     assert.equal(scheduler.scheduled?.delayMs, 91);
     scheduler.scheduled?.callback();
     assert.equal(socket.closed, true);
@@ -610,6 +649,45 @@ test("end_call uses its farewell-only timeout when completion events never arriv
     // Late farewell events cannot finalize the already-closed session again.
     realtime.emit("message", Buffer.from(JSON.stringify({ type: "response.done", response: { id: "response-farewell", output: [] } })));
     assert.equal(repositories.listEvents("person-a").filter((event) => event.type === "call.completed").length, 1);
+  } finally { closeDatabase(database); }
+});
+
+test("end_call never closes from a tool confirmation without a completed user transcript", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  const realtime = new FakeSocket();
+  const scheduler = new FakeScheduler();
+  const manager = new OutboundCallManager(
+    repositories, telephonyConfig, { calls: { create: async () => ({ sid: "CA123" }) } }, () => realtime,
+    undefined, scheduler, 10_000, undefined, 10_000,
+  );
+  try {
+    const { callId } = await manager.startCall("person-a");
+    const token = /streamToken" value="([^"]+)"/.exec(manager.twiml(callId) ?? "")?.[1];
+    assert.ok(token);
+    const socket = new FakeSocket();
+    manager.acceptMediaSocket(socket);
+    socket.emit("message", Buffer.from(JSON.stringify({ event: "start", start: { streamSid: "MZ123", customParameters: { callId, streamToken: token } } })));
+    realtime.emit("open");
+    realtime.emit("message", Buffer.from(JSON.stringify({
+      type: "response.done",
+      response: { id: "response-end-first", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-end-first", arguments: "{}" }] },
+    })));
+    realtime.emit("message", Buffer.from(JSON.stringify({
+      type: "response.done",
+      response: { id: "response-end-untranscribed", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-end-untranscribed", arguments: "{\"confirmation\":\"yes\"}" }] },
+    })));
+    assert.equal(scheduler.scheduled?.delayMs, 2_200);
+    scheduler.scheduled?.callback();
+    assert.equal(socket.closed, false);
+    assert.notEqual(repositories.listCalls("person-a")[0].status, "completed");
+    const toolResults = realtime.sent
+      .map((message) => JSON.parse(message) as { item?: { output?: string } })
+      .map((message) => message.item?.output)
+      .filter((output): output is string => typeof output === "string")
+      .map((output) => JSON.parse(output) as { error?: string });
+    assert.ok(toolResults.some((result) => result.error === "confirmation_not_transcribed"));
   } finally { closeDatabase(database); }
 });
 
@@ -632,11 +710,16 @@ test("a failed end_call tool output arms its safety timeout and closes the call"
     manager.acceptMediaSocket(socket);
     socket.emit("message", Buffer.from(JSON.stringify({ event: "start", start: { streamSid: "MZ123", customParameters: { callId, streamToken: token } } })));
     realtime.emit("open");
-    realtime.throwOnSend = true;
 
     realtime.emit("message", Buffer.from(JSON.stringify({
       type: "response.done",
       response: { id: "response-end-tool", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-end", arguments: "{}" }] },
+    })));
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "Yes." })));
+    realtime.throwOnSend = true;
+    realtime.emit("message", Buffer.from(JSON.stringify({
+      type: "response.done",
+      response: { id: "response-end-confirmed", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-end-confirmed", arguments: "{}" }] },
     })));
     assert.equal(scheduler.scheduled?.delayMs, 91);
 
@@ -669,6 +752,11 @@ test("handset hangup clears a pending farewell timeout through the normal close 
     realtime.emit("message", Buffer.from(JSON.stringify({
       type: "response.done",
       response: { id: "response-end-tool", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-end", arguments: "{}" }] },
+    })));
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "Yes." })));
+    realtime.emit("message", Buffer.from(JSON.stringify({
+      type: "response.done",
+      response: { id: "response-end-confirmed", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-end-confirmed", arguments: "{}" }] },
     })));
     const farewellTimeout = scheduler.scheduled;
     const clearsBeforeHangup = scheduler.cleared;
