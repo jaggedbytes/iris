@@ -11,7 +11,8 @@ export function createTelephonyRouter(manager: OutboundCallManager) {
     if (!manager.validateWebhook(request.header("x-twilio-signature"), request.originalUrl, request.body)) {
       return response.status(403).type("text/plain").send("Invalid Twilio signature.");
     }
-    const twiml = manager.twiml(request.params.callId);
+    const answeredBy = typeof request.body?.AnsweredBy === "string" ? request.body.AnsweredBy : null;
+    const twiml = manager.twiml(request.params.callId, answeredBy);
     if (!twiml) return response.status(404).type("text/plain").send("Call session not found.");
     response.type("text/xml").send(twiml);
   });

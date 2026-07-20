@@ -72,10 +72,12 @@ function summaryLabel(
   summaryState: DashboardOverview["calls"][number]["summaryState"],
   careSharingActive: boolean | null,
   privateSummarySaved?: boolean,
+  callStatus?: string,
 ) {
   if (summaryState === "processing") return "Preparing shared care recap…";
   if (summaryState === "unavailable") return "Shared care recap unavailable";
   if (careSummary) return careSummary.recap;
+  if (callStatus === "failed" && summaryState === "not_requested") return "No conversation";
   if (careSharingActive === false) {
     return privateSummarySaved
       ? "Private memory saved; shared care recaps are off"
@@ -109,6 +111,7 @@ function timelineCopy(event: DashboardOverview["events"][number], personName: st
     case "check_in.requested": return `${requester} requested an Iris check-in`;
     case "call.attempted": return `Iris started calling ${personName}`;
     case "call.answered": return `${personName} answered Iris’s call`;
+    case "call.no_answer": return `${personName} did not answer`;
     case "call.stream_started": return "Iris began listening";
     case "call.completed": return "Call ended";
     case "call.failed": return "Call could not be completed";
@@ -1002,6 +1005,7 @@ function DashboardApp() {
                 call.summaryState,
                 careConsents?.careSummarySharing ?? null,
                 call.privateSummarySaved,
+                call.status,
               )}</strong>
               <span>{formatDate(call.startedAt)} · {call.status}</span>
               {call.careSummary && (

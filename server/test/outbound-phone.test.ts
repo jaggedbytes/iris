@@ -71,11 +71,14 @@ test("outbound calls use a token-bound μ-law stream and discard live transcript
     assert.equal(repositories.listCalls("person-a")[0].providerCallId, "CA123");
 
     manager.handleStatus(callId, "in-progress");
-    assert.equal(repositories.listCalls("person-a")[0].status, "answered");
+    assert.equal(repositories.listCalls("person-a")[0].status, "attempted");
+    assert.equal(repositories.listEvents("person-a").some((event) => event.type === "call.answered"), false);
 
-    const twiml = manager.twiml(callId);
+    const twiml = manager.twiml(callId, "human");
     assert.match(twiml ?? "", /wss:\/\/iris\.test\/api\/telephony\/media/);
     assert.match(twiml ?? "", /<Parameter name="callId"/);
+    assert.equal(repositories.listCalls("person-a")[0].status, "answered");
+    assert.equal(requestedCalls[0].machineDetection, "Enable");
 
     const socket = new FakeSocket();
     manager.acceptMediaSocket(socket);
@@ -121,6 +124,65 @@ test("outbound calls use a token-bound μ-law stream and discard live transcript
     ] }]);
     const eventTypes = repositories.listEvents("person-a").map((event) => event.type);
     assert.deepEqual(eventTypes.sort(), ["call.attempted", "call.answered", "call.completed", "call.stream_started"].sort());
+  } finally {
+    closeDatabase(database);
+  }
+});
+
+test("AMD voicemail hangs up without answering or opening a Realtime session", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  repositories.recordConsent({ id: "consent-a", personId: "person-a", kind: "summary_retention", status: "granted", source: "test" });
+  const summaryInputs: unknown[] = [];
+  const realtime = new FakeSocket();
+  const manager = new OutboundCallManager(
+    repositories,
+    telephonyConfig,
+    { calls: { create: async () => ({ sid: "CA-vm" }) } },
+    () => realtime,
+    { process: async (input) => { summaryInputs.push(input); } },
+  );
+
+  try {
+    const { callId } = await manager.startCall("person-a");
+    manager.handleStatus(callId, "in-progress");
+    const twiml = manager.twiml(callId, "machine_start");
+    assert.match(twiml ?? "", /<Hangup\s*\/>/);
+    assert.equal(twiml?.includes("Stream"), false);
+    assert.equal(repositories.listCalls("person-a")[0].status, "failed");
+    assert.equal(repositories.listCalls("person-a")[0].summaryState, "not_requested");
+    assert.deepEqual(summaryInputs, []);
+    assert.deepEqual(
+      repositories.listEvents("person-a").map((event) => event.type).sort(),
+      ["call.attempted", "call.no_answer"].sort(),
+    );
+    // A late Twilio completed callback must not invent a human answer.
+    manager.handleStatus(callId, "completed");
+    assert.equal(repositories.listEvents("person-a").some((event) => event.type === "call.answered"), false);
+  } finally {
+    closeDatabase(database);
+  }
+});
+
+test("Twilio no-answer status records that the person did not answer", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  const manager = new OutboundCallManager(
+    repositories,
+    telephonyConfig,
+    { calls: { create: async () => ({ sid: "CA-na" }) } },
+  );
+
+  try {
+    const { callId } = await manager.startCall("person-a");
+    manager.handleStatus(callId, "no-answer");
+    assert.equal(repositories.listCalls("person-a")[0].status, "failed");
+    assert.deepEqual(
+      repositories.listEvents("person-a").map((event) => event.type).sort(),
+      ["call.attempted", "call.no_answer"].sort(),
+    );
   } finally {
     closeDatabase(database);
   }

@@ -19,6 +19,8 @@ type TwilioClient = {
       statusCallback: string;
       statusCallbackMethod: "POST";
       statusCallbackEvent: string[];
+      /** Sync AMD: AnsweredBy is posted to the TwiML URL before Iris connects audio. */
+      machineDetection: "Enable";
     }): Promise<{ sid: string }>;
   };
 };
@@ -30,6 +32,8 @@ type ActiveCall = {
   session?: CallSession;
   terminalStatus?: "completed" | "failed";
   finalizationTimer?: unknown;
+  /** True after Iris has recorded a human answer (AMD or stream path). */
+  humanAnswered?: boolean;
 };
 
 export const DEFAULT_STREAM_CLOSE_GRACE_MS = 10_000;
@@ -46,6 +50,14 @@ export class ActiveCallConflictError extends Error {
 }
 export type CallScheduler = CallSessionScheduler;
 const systemScheduler: CallScheduler = { setTimeout, clearTimeout };
+
+/** Twilio AMD AnsweredBy values that mean a person did not pick up. */
+export function isMachineAnswer(answeredBy: string | null | undefined) {
+  if (!answeredBy) return false;
+  return answeredBy === "machine_start"
+    || answeredBy === "fax"
+    || answeredBy.startsWith("machine_end_");
+}
 
 export class OutboundCallManager {
   private readonly activeCalls = new Map<string, ActiveCall>();
@@ -140,6 +152,8 @@ export class OutboundCallManager {
         statusCallback: `${this.config.publicBaseUrl}/api/telephony/status/${callId}`,
         statusCallbackMethod: "POST",
         statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
+        // Sync AMD so Iris only opens Realtime after AnsweredBy is known.
+        machineDetection: "Enable",
       });
       this.repositories.updateCall({ id: callId, providerCallId: call.sid });
       return { callId };
@@ -149,9 +163,23 @@ export class OutboundCallManager {
     }
   }
 
-  twiml(callId: string) {
+  /**
+   * Build TwiML after Twilio answers. With MachineDetection=Enable, AnsweredBy
+   * is included on this webhook: machines hang up without a Realtime session;
+   * humans (or unknown/absent) connect the Media Stream.
+   */
+  twiml(callId: string, answeredBy?: string | null) {
+    if (isMachineAnswer(answeredBy)) {
+      const active = this.activeCalls.get(callId);
+      if (active) this.finish(callId, "failed", "call.no_answer");
+      const response = new twilio.twiml.VoiceResponse();
+      response.hangup();
+      return response.toString();
+    }
+
     const active = this.activeCalls.get(callId);
     if (!active) return null;
+    this.markHumanAnswered(callId, active);
     const response = new twilio.twiml.VoiceResponse();
     const connect = response.connect();
     const stream = connect.stream({ url: this.config.publicBaseUrl.replace(/^https:/, "wss:") + "/api/telephony/media" });
@@ -173,13 +201,14 @@ export class OutboundCallManager {
   handleStatus(callId: string, callStatus: string) {
     const active = this.activeCalls.get(callId);
     if (!active) return;
-    // Twilio's `answered` StatusCallbackEvent arrives with CallStatus set to
-    // `in-progress`; `answered` itself is not a CallStatus value.
-    if (callStatus === "in-progress") {
-      this.repositories.updateCall({ id: callId, status: "answered" });
-      this.repositories.createEvent({ id: randomUUID(), personId: active.personId, callId, type: "call.answered", payload: { transport: "twilio" } });
+    // Carrier "answered" / in-progress includes voicemail. Do not treat it as a
+    // human pickup; sync AMD reports AnsweredBy on the TwiML webhook instead.
+    if (callStatus === "in-progress") return;
+    if (callStatus === "no-answer" || callStatus === "busy") {
+      this.finish(callId, "failed", "call.no_answer");
+      return;
     }
-    if (["completed", "busy", "no-answer", "canceled", "failed"].includes(callStatus)) {
+    if (["completed", "canceled", "failed"].includes(callStatus)) {
       const terminalStatus = callStatus === "completed" ? "completed" : "failed";
       // A terminal callback can precede the final WebSocket close and its last
       // transcription events. Let an established session close itself first.
@@ -195,6 +224,19 @@ export class OutboundCallManager {
       }
       this.finish(callId, terminalStatus, terminalStatus === "completed" ? "call.completed" : "call.failed");
     }
+  }
+
+  private markHumanAnswered(callId: string, active: ActiveCall) {
+    if (active.humanAnswered) return;
+    active.humanAnswered = true;
+    this.repositories.updateCall({ id: callId, status: "answered" });
+    this.repositories.createEvent({
+      id: randomUUID(),
+      personId: active.personId,
+      callId,
+      type: "call.answered",
+      payload: { transport: "twilio" },
+    });
   }
 
   acceptMediaSocket(socket: SocketLike) {
@@ -272,13 +314,21 @@ export class OutboundCallManager {
     if (!active) return;
     this.activeCalls.delete(callId);
     if (active.finalizationTimer) this.scheduler.clearTimeout(active.finalizationTimer);
-    const shouldProcessSummary = status === "completed" && transcript.length > 0 && this.repositories.hasActiveConsent(active.personId, "summary_retention");
+    const noAnswer = eventType === "call.no_answer";
+    const shouldProcessSummary = !noAnswer
+      && status === "completed"
+      && transcript.length > 0
+      && this.repositories.hasActiveConsent(active.personId, "summary_retention");
     // Set processing before detaching the background promise. This leaves no
     // observable post-hangup window where an eligible call looks unsummarized.
     this.repositories.completeCall({
       id: callId,
       status,
-      summaryState: shouldProcessSummary ? "processing" : status === "failed" ? "unavailable" : "not_requested",
+      summaryState: shouldProcessSummary
+        ? "processing"
+        : noAnswer
+          ? "not_requested"
+          : status === "failed" ? "unavailable" : "not_requested",
     });
     this.repositories.createEvent({ id: randomUUID(), personId: active.personId, callId, type: eventType, payload: { transport: "twilio" } });
     if (shouldProcessSummary && this.summaries) {

@@ -36,6 +36,8 @@ flowchart LR
 
 ## Call completion
 
+Outbound calls enable Twilio Answering Machine Detection (`MachineDetection=Enable`). Carrier connect alone is not treated as a human pickup: Iris records `call.answered` and opens the Media Stream only when AMD reports a human (or unknown/absent AnsweredBy). Voicemail/fax yields `call.no_answer`, an immediate hangup with a failed call (no summary), and no Realtime session. Busy and native Twilio `no-answer` statuses use the same `call.no_answer` timeline event.
+
 `end_call` is available after a clear natural goodbye or an explicit request to end. After Iris asks for confirmation, a short yes (including “Yes, Iris”) or another natural goodbye (including “Goodbye, Iris”) counts as confirmation. Once Iris returns the tool result, the session binds the next `response.created` event, waits for that response’s OpenAI audio/done completion, then waits for a Twilio Media Stream mark acknowledging farewell playback before closing through the ordinary `CallSession` → call-manager finalization path. `IRIS_FAREWELL_CLOSE_TIMEOUT_MS` defaults to 8,000 ms and may be set to a whole value from 1,000 to 30,000 ms; it is a safety bound for that farewell only, never an idle-call timeout.
 
 An ordinary handset hangup remains a fully supported completion path. Both paths clear the live session transcript into the same consent-gated summary lifecycle; transcript text is discarded after extraction and is never persisted.
