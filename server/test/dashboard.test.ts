@@ -711,13 +711,15 @@ test("scopes call threads and keeps linked activity out of overview feeds", asyn
     const thread = await threadResponse.json() as {
       call: Record<string, unknown>;
       events: Array<{ id: string; payload: unknown }>;
-      notes: Array<{ id: string; body: string }>;
+      notes: Array<{ id: string; body: string; canEdit: boolean; updatedAt: string }>;
     };
     assert.deepEqual(overview.events.map((event) => event.id), ["general-event"]);
-    assert.deepEqual(overview.notes?.map((note) => note.id), ["general-note"]);
+    assert.deepEqual(overview.notes?.map((note) => note.id), ["general-note", "thread-note"]);
     assert.equal(thread.call.careSummary && typeof thread.call.careSummary === "object", true);
     assert.deepEqual(thread.events.map((event) => ({ id: event.id, payload: event.payload })), [{ id: "thread-event", payload: { contactName: "Robin" } }]);
     assert.deepEqual(thread.notes.map((note) => ({ id: note.id, body: note.body })), [{ id: "thread-note", body: "Follow up tomorrow." }]);
+    assert.equal(thread.notes[0]?.canEdit, false);
+    assert.ok(thread.notes[0]?.updatedAt);
     assert.equal(JSON.stringify(thread).includes("Private memory"), false);
     assert.equal(JSON.stringify(thread).includes("private text"), false);
 

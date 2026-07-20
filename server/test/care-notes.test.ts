@@ -383,3 +383,56 @@ test("only a note author may edit or delete their note", async () => {
     fixture.close();
   }
 });
+
+test("Home notes include only general notes and the newest visible call's active notes", async () => {
+  const fixture = await createDashboardServer();
+  try {
+    fixture.repositories.createCall({ id: "older-call", personId: "person-a", status: "completed" });
+    fixture.repositories.createCall({ id: "newer-call", personId: "person-a", status: "completed" });
+    fixture.database.prepare("UPDATE calls SET started_at = ? WHERE id = ?")
+      .run("2026-07-20T10:00:00.000Z", "older-call");
+    fixture.database.prepare("UPDATE calls SET started_at = ? WHERE id = ?")
+      .run("2026-07-20T11:00:00.000Z", "newer-call");
+    fixture.repositories.createCareNote({
+      id: "general-note", personId: "person-a", authorRole: "operator", authorDisplayName: "Operator", body: "General update.",
+    });
+    fixture.repositories.createCareNote({
+      id: "older-note", personId: "person-a", callId: "older-call", authorRole: "operator", authorDisplayName: "Operator", body: "Older-call note.",
+    });
+    fixture.repositories.createCareNote({
+      id: "newer-note", personId: "person-a", callId: "newer-call", authorRole: "operator", authorDisplayName: "Operator", body: "Newest-call note.",
+    });
+    fixture.repositories.createCareNote({
+      id: "deleted-newer-note", personId: "person-a", callId: "newer-call", authorRole: "operator", authorDisplayName: "Operator", body: "Hidden note.",
+    });
+    fixture.repositories.deleteCareNote("deleted-newer-note");
+    fixture.repositories.grantAccess({
+      id: "notes-only", personId: "person-a", trustedContactId: "contact-a",
+      scopes: ["care_notes"], tokenHash: hash("notes-only-token"), expiresAt: futureExpiry(),
+    });
+    fixture.repositories.grantAccess({
+      id: "notes-and-summaries", personId: "person-a", trustedContactId: "contact-a",
+      scopes: ["care_notes", "view_summaries"], tokenHash: hash("notes-and-summaries-home-token"), expiresAt: futureExpiry(),
+    });
+
+    const notesOnly = await fetch(`${fixture.url}/api/dashboard/people/person-a/overview`, {
+      headers: { Authorization: "Bearer notes-only-token" },
+    });
+    const notesOnlyBody = await notesOnly.json() as { notes: Array<{ id: string }>; calls: unknown[] };
+    assert.deepEqual(notesOnlyBody.notes.map((note) => note.id), ["general-note"]);
+    assert.deepEqual(notesOnlyBody.calls, []);
+
+    const full = await fetch(`${fixture.url}/api/dashboard/people/person-a/overview`, {
+      headers: { Authorization: "Bearer notes-and-summaries-home-token" },
+    });
+    const fullBody = await full.json() as {
+      notes: Array<{ id: string; canEdit: boolean; updatedAt: string } & Record<string, unknown>>;
+    };
+    assert.deepEqual(fullBody.notes.map((note) => note.id), ["general-note", "newer-note"]);
+    assert.equal(fullBody.notes.every((note) => note.canEdit === false && typeof note.updatedAt === "string"), true);
+    assert.equal(JSON.stringify(fullBody.notes).includes("callId"), false);
+    assert.equal(JSON.stringify(fullBody.notes).includes("deletedAt"), false);
+  } finally {
+    fixture.close();
+  }
+});

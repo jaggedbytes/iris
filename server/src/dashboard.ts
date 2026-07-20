@@ -446,6 +446,17 @@ export function createDashboardRouter(context: DashboardContext) {
       && context.repositories.hasActiveConsent(personId, "care_summary_sharing");
     const canUseCareNotes = hasScope(principal, "care_notes");
     const canSeeCompletedCallsForCheckIn = canUseCareNotes && hasScope(principal, "view_summaries");
+    const visibleCalls = hasScope(principal, "view_summaries")
+      ? context.repositories.listCalls(personId)
+      : [];
+    const homeNotes = canUseCareNotes
+      ? [
+          ...context.repositories.listUnthreadedCareNotes(personId),
+          ...(hasScope(principal, "view_summaries") && visibleCalls[0]
+            ? context.repositories.listCareNotesForCall(personId, visibleCalls[0].id)
+            : []),
+        ]
+      : [];
 
     response.json({
       person: {
@@ -454,15 +465,16 @@ export function createDashboardRouter(context: DashboardContext) {
         phoneE164: person.phoneE164,
         phoneNumberStatus: person.phoneE164 ? "configured" : "not_configured",
       },
-      calls: hasScope(principal, "view_summaries")
-        ? context.repositories.listCalls(personId).map((call) => callOverview(call, careSummarySharingActive, principal.role === "admin"))
-        : [],
+      calls: visibleCalls.map((call) => callOverview(call, careSummarySharingActive, principal.role === "admin")),
       activeCall: activeCall
         ? { id: activeCall.id, status: activeCall.status, startedAt: activeCall.startedAt }
         : null,
       ...(canUseCareNotes
         ? {
-          notes: context.repositories.listUnthreadedCareNotes(personId).map((note) => noteOverview(note, canEditCareNote(principal, note))),
+          // Home keeps general notes plus notes from exactly one visible call.
+          // Intentionally omit callId here so this safe feed cannot be used to
+          // reconstruct call-thread associations.
+          notes: homeNotes.map((note) => noteOverview(note, canEditCareNote(principal, note))),
           lastCheckInAt: context.repositories.lastCheckInAt(personId, canSeeCompletedCallsForCheckIn),
         }
         : {}),

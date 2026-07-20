@@ -45,6 +45,8 @@ export type DashboardOverview = {
     authorRelationship: string | null;
     body: string;
     createdAt: string;
+    updatedAt: string;
+    canEdit: boolean;
   }>;
   /** Present only for viewers with the care_notes scope. */
   lastCheckInAt?: string | null;
