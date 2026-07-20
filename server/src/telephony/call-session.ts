@@ -24,6 +24,7 @@ export type CallSessionScheduler = {
 const systemScheduler: CallSessionScheduler = { setTimeout, clearTimeout };
 const FAREWELL_PLAYBACK_MARK = "iris-farewell";
 const END_CALL_TRANSCRIPT_WAIT_MS = 2_200;
+const MIN_USER_TURNS_FOR_NATURAL_END = 2;
 
 export function friendlyRequesterToken(displayName: string) {
   return displayName.trim().split(/\s+/).find(Boolean) ?? null;
@@ -55,6 +56,38 @@ function isExplicitEndCallConfirmation(text: string) {
   const affirmativeSuffix = "(?:actually|please|go ahead|you can|you may|end the call|hang up|that's all|that is all|that's it|that is it|nothing else|i'm done|i am done|we're done|we are done)";
   const completeEnding = "(?:that's all|that is all|that's it|that is it|nothing else|i'm done|i am done|we're done|we are done|all done)";
   return new RegExp(`^${filler}(?:${affirmative}(?:\\s+${affirmativeSuffix})*|${completeEnding})$`).test(normalized);
+}
+
+function isNaturalEndCallIntent(text: string, userTurns: LiveTranscriptTurn[]) {
+  const normalized = text
+    .toLowerCase()
+    .replace(/[^a-z\s']/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized || /\b(?:no|nope|nah|don't|do not|not yet|wait|hold on|keep talking|continue)\b/.test(normalized)) {
+    return false;
+  }
+  const meaningfulTurnCount = userTurns.filter((turn) => turn.text.trim().length > 0).length;
+  // A direct address makes a short farewell meaningful. A bare "bye" or
+  // "goodbye" needs a little more conversation behind it because it is easy
+  // for ASR to pick up from background speech at the beginning of a call.
+  if (/^(?:bye|goodbye)\s+iris$/.test(normalized)) return true;
+  if (/^(?:bye|goodbye)$/.test(normalized)) return meaningfulTurnCount >= 3;
+  // Closing phrases must describe the utterance as a whole or its ending.
+  // Substring matches would turn “I'm done eating” or “That's all I remember”
+  // into a hang-up request.
+  return [
+    /^(?:i'm|i am) (?:all set|done)(?: for now)?$/,
+    /^(?:that's|that is) all(?: for now)?$/,
+    /^(?:(?:okay|ok|thanks?|well) )?take care(?: iris)?$/,
+    /^(?:(?:okay|ok|well) )?(?:good night|have a good (?:day|night))(?: iris)?$/,
+    /\b(?:i(?:'ll| will) )?(?:talk|speak) to you later$/,
+    /\bi (?:should|need to|have to) (?:get going|go)(?: now)?$/,
+  ].some((pattern) => pattern.test(normalized));
+}
+
+function hasNaturalEndConversationContext(userTurns: LiveTranscriptTurn[]) {
+  return userTurns.filter((turn) => turn.text.trim().length > 0).length >= MIN_USER_TURNS_FOR_NATURAL_END;
 }
 
 export const createRealtimeSocket: RealtimeSocketFactory = ({
@@ -202,7 +235,7 @@ export class CallSession {
           this.shield
             ? `Shield context: the listed trusted contacts are ${JSON.stringify(this.shield.contacts)}. The exact fixed Shield alert text is ${JSON.stringify(this.shield.alertText)}. Authoritative phone-session instructions: use shield_assess only after the person explicitly describes observable suspicious pressure. Summarize only what they said; never invent or embellish details. Its result can guide you to calmly recommend a pause, name only the returned observable signals, and suggest verifying through a known official number or speaking with a trusted person. Never state that something is definitely a scam, ask for credentials, or give financial, legal, or medical advice. The shield_send_alert tool is allowed only after Iris has stated the selected contact's name and that exact fixed alert text, and the person has then clearly and directly approved sending that exact alert to that listed contact. Never call it on ambiguity or for an unlisted contact.`
             : "",
-          "Authoritative phone-session instructions: never use end_call from a goodbye alone. First ask a direct confirmation question such as “Would you like me to end our call?” and wait for a new, clear yes or no. Use end_call only after a new direct confirmation to end the call, and set confirmation to the exact confirmation words you heard. The phone session verifies that request against the completed user transcript; the tool argument is not consent by itself. Goodbye is a reason to ask, never confirmation by itself. If the person continues talking, says no, is silent, or the words are ambiguous, keep the call open. Never infer intent from background speech, partial words, hesitation, or an uncertain transcription. When using it, give a brief warm farewell after the tool result.",
+          "Authoritative phone-session instructions: let a clear, natural closing end naturally after some real back-and-forth. You may use end_call after a completed user transcript clearly closes the conversation, such as “Goodbye, Iris,” “I should get going,” or “Talk to you later.” A plain “bye” or “goodbye” can close a well-established conversation, but never use it for an isolated early goodbye, background speech, partial words, hesitation, or an uncertain transcription. Ask a short confirmation only when the ending is genuinely unclear. If you ask for confirmation, wait for a new, clear yes or no before using end_call, and set confirmation to the exact words you heard. The phone session verifies every request against the completed user transcript; the tool argument is not consent by itself. If the person continues talking, says no, is silent, or the words are ambiguous, keep the call open. When using it, give a brief warm farewell after the tool result.",
         ].filter(Boolean).join("\n\n");
         this.realtime.send(
           JSON.stringify({
@@ -217,7 +250,7 @@ export class CallSession {
                   { type: "function", name: "shield_assess", description: "Assess an explicitly stated suspicious or urgent situation before offering a safety pause. Do not use for vague or inferred concerns.", parameters: { type: "object", additionalProperties: false, required: ["situation"], properties: { situation: { type: "string", minLength: 1, maxLength: 2000 } } } },
                   { type: "function", name: "shield_send_alert", description: "Send the fixed Shield check-in alert only after direct spoken approval of the named recipient and exact alert text.", parameters: { type: "object", additionalProperties: false, required: ["trusted_contact_id"], properties: { trusted_contact_id: { type: "string" } } } },
                 ] : []),
-                { type: "function", name: "end_call", description: "End the phone call only after Iris has asked for confirmation and the person has given a new, clear direct confirmation. confirmation must be their exact confirmation words.", parameters: { type: "object", additionalProperties: false, required: ["confirmation"], properties: { confirmation: { type: "string", minLength: 1, maxLength: 120 } } } },
+                { type: "function", name: "end_call", description: "End after a clear completed user closing or after a direct confirmation Iris asked for. confirmation must contain the exact closing or confirmation words heard.", parameters: { type: "object", additionalProperties: false, required: ["confirmation"], properties: { confirmation: { type: "string", minLength: 1, maxLength: 120 } } } },
               ],
               audio: {
                 input: {
@@ -371,6 +404,11 @@ export class CallSession {
       }
       const userTurns = this.liveTranscript.filter((turn) => turn.speaker === "user");
       if (!this.pendingEndCallConfirmation) {
+        const latestUserTurn = userTurns.at(-1)?.text;
+        if (latestUserTurn && hasNaturalEndConversationContext(userTurns) && isNaturalEndCallIntent(latestUserTurn, userTurns)) {
+          this.beginFarewell(callId);
+          return;
+        }
         this.pendingEndCallConfirmation = { userTurnCount: userTurns.length, toolCallId: null, timer: null };
         this.sendToolOutput(callId, { ok: false, error: "confirmation_required" });
         return;

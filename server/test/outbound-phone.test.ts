@@ -526,12 +526,12 @@ test("end_call waits for the farewell response, then finalizes through the exist
     socket.emit("message", Buffer.from(JSON.stringify({ event: "start", start: { streamSid: "MZ123", customParameters: { callId, streamToken: token } } })));
     realtime.emit("open");
     const sessionUpdate = JSON.parse(realtime.sent[0]) as { session: { instructions: string; tools: Array<{ name: string }> } };
-    assert.match(sessionUpdate.session.instructions, /never use end_call from a goodbye alone/i);
+    assert.match(sessionUpdate.session.instructions, /let a clear, natural closing end naturally/i);
     assert.equal(sessionUpdate.session.tools.some((tool) => tool.name === "end_call"), true);
     // A tentative remark in a transcript is never a local teardown signal.
     realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "Maybe we can wrap up later." })));
     assert.equal(socket.closed, false);
-    realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "Goodbye, Iris." })));
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "Goodbye." })));
 
     const endResponse = {
       type: "response.done",
@@ -549,8 +549,8 @@ test("end_call waits for the farewell response, then finalizes through the exist
     })));
     assert.equal(scheduler.scheduled?.delayMs, 10_000);
 
-    // A later goodbye asks again; it can never double as confirmation.
-    realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "Bye, Iris." })));
+    // An unclear request asks again; it cannot double as confirmation.
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "Could you end the call?" })));
     realtime.emit("message", Buffer.from(JSON.stringify({
       type: "response.done", response: { id: "response-end-ask-again", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-end-ask-again", arguments: "{\"confirmation\":\"Bye, Iris.\"}" }] },
     })));
@@ -596,11 +596,92 @@ test("end_call waits for the farewell response, then finalizes through the exist
     assert.equal(repositories.listCalls("person-a")[0].summaryState, "processing");
     assert.deepEqual(summaries, [{ callId, personId: "person-a", transcript: [
       { speaker: "user", text: "Maybe we can wrap up later." },
-      { speaker: "user", text: "Goodbye, Iris." },
+      { speaker: "user", text: "Goodbye." },
       { speaker: "user", text: "No, let's keep talking." },
-      { speaker: "user", text: "Bye, Iris." },
+      { speaker: "user", text: "Could you end the call?" },
       { speaker: "user", text: "Actually, yes please hang up." },
     ] }]);
+  } finally { closeDatabase(database); }
+});
+
+test("end_call accepts a natural goodbye after real conversation without a confirmation ritual", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  const realtime = new FakeSocket();
+  const scheduler = new FakeScheduler();
+  const manager = new OutboundCallManager(
+    repositories, { ...telephonyConfig, farewellCloseTimeoutMs: 77 }, { calls: { create: async () => ({ sid: "CA123" }) } }, () => realtime,
+    undefined, scheduler, 10_000, undefined, 10_000,
+  );
+  try {
+    const { callId } = await manager.startCall("person-a");
+    const token = /streamToken" value="([^"]+)"/.exec(manager.twiml(callId) ?? "")?.[1];
+    assert.ok(token);
+    const socket = new FakeSocket();
+    manager.acceptMediaSocket(socket);
+    socket.emit("message", Buffer.from(JSON.stringify({ event: "start", start: { streamSid: "MZ123", customParameters: { callId, streamToken: token } } })));
+    realtime.emit("open");
+
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "I really enjoyed the family videos today." })));
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "They made me smile." })));
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "Goodbye." })));
+    realtime.emit("message", Buffer.from(JSON.stringify({
+      type: "response.done",
+      response: { id: "response-natural-end", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-natural-end", arguments: "{\"confirmation\":\"Goodbye.\"}" }] },
+    })));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(scheduler.scheduled?.delayMs, 77);
+    const toolResults = realtime.sent
+      .map((message) => JSON.parse(message) as { item?: { output?: string } })
+      .map((message) => message.item?.output)
+      .filter((output): output is string => typeof output === "string")
+      .map((output) => JSON.parse(output) as { ok?: boolean; error?: string });
+    assert.ok(toolResults.some((result) => result.ok === true));
+    assert.equal(toolResults.some((result) => result.error === "confirmation_required"), false);
+    assert.equal(socket.closed, false);
+    // Finish through the normal handset-hangup path so this focused test does
+    // not leave an intentionally open session behind.
+    socket.emit("close");
+  } finally { closeDatabase(database); }
+});
+
+test("end_call keeps an early direct goodbye in the confirmation path", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  const realtime = new FakeSocket();
+  const scheduler = new FakeScheduler();
+  const manager = new OutboundCallManager(
+    repositories, { ...telephonyConfig, farewellCloseTimeoutMs: 77 }, { calls: { create: async () => ({ sid: "CA123" }) } }, () => realtime,
+    undefined, scheduler, 10_000, undefined, 10_000,
+  );
+  try {
+    const { callId } = await manager.startCall("person-a");
+    const token = /streamToken" value="([^"]+)"/.exec(manager.twiml(callId) ?? "")?.[1];
+    assert.ok(token);
+    const socket = new FakeSocket();
+    manager.acceptMediaSocket(socket);
+    socket.emit("message", Buffer.from(JSON.stringify({ event: "start", start: { streamSid: "MZ123", customParameters: { callId, streamToken: token } } })));
+    realtime.emit("open");
+
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "Goodbye, Iris." })));
+    realtime.emit("message", Buffer.from(JSON.stringify({
+      type: "response.done",
+      response: { id: "response-early-end", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-early-end", arguments: "{\"confirmation\":\"Goodbye, Iris.\"}" }] },
+    })));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const toolResults = realtime.sent
+      .map((message) => JSON.parse(message) as { item?: { output?: string } })
+      .map((message) => message.item?.output)
+      .filter((output): output is string => typeof output === "string")
+      .map((output) => JSON.parse(output) as { error?: string });
+    assert.ok(toolResults.some((result) => result.error === "confirmation_required"));
+    assert.equal(scheduler.scheduled?.delayMs, 10_000);
+    assert.equal(socket.closed, false);
+    socket.emit("close");
   } finally { closeDatabase(database); }
 });
 
