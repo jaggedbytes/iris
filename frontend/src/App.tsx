@@ -14,15 +14,19 @@ const DASHBOARD_POLL_INTERVAL_MS = 2_500;
 const ADD_PERSON_OPTION = "__add_person__";
 const ADD_CONTACT_OPTION = "__add_contact__";
 const E164_PATTERN = /^\+[1-9]\d{7,14}$/;
-type DashboardPage = "home" | "activity";
+type DashboardPage = "home" | "activity" | "other_events";
 let capturedOptInToken: string | null | undefined;
 
 function dashboardPageFromPath(pathname: string): DashboardPage {
-  return pathname === "/activity" ? "activity" : "home";
+  if (pathname === "/activity") return "activity";
+  if (pathname === "/other-events") return "other_events";
+  return "home";
 }
 
 function pathForDashboardPage(page: DashboardPage) {
-  return page === "activity" ? "/activity" : "/";
+  if (page === "activity") return "/activity";
+  if (page === "other_events") return "/other-events";
+  return "/";
 }
 
 function callIdFromLocation() {
@@ -100,10 +104,6 @@ function contactPhoneLabel(phoneE164: string | null) {
   return phoneE164 ?? "Phone number not configured";
 }
 
-function givenName(displayName: string) {
-  return displayName.trim().split(/\s+/).find(Boolean) ?? displayName;
-}
-
 function timelineCopy(event: DashboardOverview["events"][number], personName: string) {
   const payload = event.payload && typeof event.payload === "object"
     ? event.payload as { requesterDisplayName?: unknown; contactName?: unknown; status?: unknown }
@@ -127,6 +127,10 @@ function timelineCopy(event: DashboardOverview["events"][number], personName: st
     case "shield.pause_offered": return "Iris offered a safety pause";
     case "shield.alert_sent": return `Iris asked ${contact} to check in`;
     case "action.dispatched": return "Message accepted by the SMS provider";
+    case "action.approved": return "Message approved for sending";
+    case "action.dispatch_retryable": return "Message send can be retried";
+    case "action.dispatch_uncertain": return "Message delivery needs confirmation";
+    case "action.dispatch_released": return "Message send released for a retry";
     case "action.reconciled": return "Message delivery was reconciled";
     case "sms.delivery_updated": return `Message delivery ${deliveryStatus}`;
     case "action.dispatch_needs_review": return "A message send needs operator review";
@@ -218,6 +222,9 @@ function DashboardApp() {
   const [callNoteDraft, setCallNoteDraft] = useState("");
   const [isSavingCallNote, setIsSavingCallNote] = useState(false);
   const [callNoteFormError, setCallNoteFormError] = useState<string | null>(null);
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [editingNoteDraft, setEditingNoteDraft] = useState("");
+  const [savingEditedNoteId, setSavingEditedNoteId] = useState<string | null>(null);
   const [callThreadRefreshVersion, setCallThreadRefreshVersion] = useState(0);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [dashboardPage, setDashboardPage] = useState<DashboardPage>(() =>
@@ -260,6 +267,8 @@ function DashboardApp() {
   useEffect(() => {
     setNoteDraft("");
     setNoteFormError(null);
+    setEditingNoteId(null);
+    setEditingNoteDraft("");
   }, [personId]);
 
   const resetOpenCallThread = () => {
@@ -269,6 +278,8 @@ function DashboardApp() {
     setCallThreadError(null);
     setCallNoteDraft("");
     setCallNoteFormError(null);
+    setEditingNoteId(null);
+    setEditingNoteDraft("");
   };
 
   const clearCallThread = (historyMode: "push" | "replace" = "replace") => {
@@ -671,6 +682,60 @@ function DashboardApp() {
     }
   };
 
+  const beginEditingNote = (note: { id: string; body: string }) => {
+    setEditingNoteId(note.id);
+    setEditingNoteDraft(note.body);
+  };
+
+  const saveEditedNote = async (noteId: string) => {
+    if (!personId) return;
+    const body = editingNoteDraft.trim();
+    if (!body) {
+      setError("Enter a note before saving.");
+      return;
+    }
+    setSavingEditedNoteId(noteId);
+    setError(null);
+    try {
+      await dashboardJson(`/api/dashboard/people/${personId}/notes/${noteId}`, token, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ body }),
+      });
+      setEditingNoteId(null);
+      setEditingNoteDraft("");
+      setCallThreadRefreshVersion((current) => current + 1);
+      setRefreshVersion((current) => current + 1);
+    } catch (noteError) {
+      setError(noteError instanceof Error ? noteError.message : "Unable to update this note.");
+    } finally {
+      setSavingEditedNoteId(null);
+    }
+  };
+
+  const deleteNote = async (noteId: string) => {
+    if (!personId || !window.confirm("Delete this note? It will no longer appear in the dashboard.")) return;
+    setSavingEditedNoteId(noteId);
+    setError(null);
+    try {
+      const response = await dashboardRequest(`/api/dashboard/people/${personId}/notes/${noteId}`, token, { method: "DELETE" });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new DashboardError(payload?.error ?? "Unable to delete this note.", response.status);
+      }
+      if (editingNoteId === noteId) {
+        setEditingNoteId(null);
+        setEditingNoteDraft("");
+      }
+      setCallThreadRefreshVersion((current) => current + 1);
+      setRefreshVersion((current) => current + 1);
+    } catch (noteError) {
+      setError(noteError instanceof Error ? noteError.message : "Unable to delete this note.");
+    } finally {
+      setSavingEditedNoteId(null);
+    }
+  };
+
   const createPerson = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setIsCreatingPerson(true);
@@ -976,12 +1041,13 @@ function DashboardApp() {
   const isTrusted = principal?.role === "trusted_contact";
   const showHomeCards = dashboardPage === "home";
   const showActivityCards = dashboardPage === "activity";
+  const showOtherEventsCards = dashboardPage === "other_events";
 
   const goToDashboardPage = (page: DashboardPage) => {
     setDashboardPage(page);
     setDashboardNavOpen(false);
     const nextPath = pathForDashboardPage(page);
-    if (page === "home") {
+    if (page !== "activity") {
       resetOpenCallThread();
     }
     if (window.location.pathname !== nextPath || window.location.search) {
@@ -1155,7 +1221,7 @@ function DashboardApp() {
                 onClick={() => selectCallThread(call.id)}
               >
                 <span>
-                  <strong>{summaryLabel(
+                  <strong>{call.careSummary?.moodAndConcerns[0] ?? summaryLabel(
                     call.careSummary,
                     call.summaryState,
                     careConsents?.careSummarySharing ?? null,
@@ -1181,17 +1247,7 @@ function DashboardApp() {
                           callThread.call.privateSummarySaved,
                           callThread.call.status,
                         )}</p>
-                        {callThread.call.careSummary && (
-                          <>
-                            {callThread.call.careSummary.moodAndConcerns.length > 0 && (
-                              <div className="care-summary">
-                                <strong>{givenName(overview.person.displayName)} shared</strong>
-                                <ul>{callThread.call.careSummary.moodAndConcerns.map((item, index) => <li key={`${call.id}-thread-mood-${index}`}>{item}</li>)}</ul>
-                              </div>
-                            )}
-                            <IrisSuggestions idPrefix={`${call.id}-thread`} items={callThread.call.careSummary.irisSuggestedNextSteps} />
-                          </>
-                        )}
+                        {callThread.call.careSummary && <IrisSuggestions idPrefix={`${call.id}-thread`} items={callThread.call.careSummary.irisSuggestedNextSteps} />}
                       </div>
                       {canViewThreadEvents || canUseCareNotes ? (
                         <div className="call-thread-activity">
@@ -1207,7 +1263,30 @@ function DashboardApp() {
                                 <li key={item.id}>
                                   <strong>{item.note.authorDisplayName}{item.note.authorRelationship ? ` · ${item.note.authorRelationship}` : ""}</strong>
                                   <span>{formatDate(item.occurredAt)}</span>
-                                  <p className="care-note-body">{item.note.body}</p>
+                                  {editingNoteId === item.note.id ? (
+                                    <div className="note-editor">
+                                      <textarea
+                                        value={editingNoteDraft}
+                                        maxLength={1000}
+                                        aria-label="Edit note"
+                                        onChange={(event) => setEditingNoteDraft(event.target.value)}
+                                      />
+                                      <div className="note-controls">
+                                        <button className="secondary-button" type="button" disabled={!editingNoteDraft.trim() || savingEditedNoteId === item.note.id} onClick={() => void saveEditedNote(item.note.id)}>
+                                          {savingEditedNoteId === item.note.id ? "Saving…" : "Save"}
+                                        </button>
+                                        <button className="text-button" type="button" disabled={savingEditedNoteId === item.note.id} onClick={() => { setEditingNoteId(null); setEditingNoteDraft(""); }}>
+                                          Cancel
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : <p className="care-note-body">{item.note.body}</p>}
+                                  {item.note.canEdit && editingNoteId !== item.note.id && (
+                                    <div className="note-controls">
+                                      <button className="text-button" type="button" onClick={() => beginEditingNote(item.note)}>Edit</button>
+                                      <button className="text-button" type="button" disabled={savingEditedNoteId === item.note.id} onClick={() => void deleteNote(item.note.id)}>Delete</button>
+                                    </div>
+                                  )}
                                 </li>
                               ))}
                             </ol>
@@ -1267,11 +1346,13 @@ function DashboardApp() {
     })),
     ...careNotes.map((note) => ({
       id: `note-${note.id}`,
+      noteId: note.id,
       kind: "note" as const,
       occurredAt: note.createdAt,
       authorDisplayName: note.authorDisplayName,
       authorRelationship: note.authorRelationship,
       body: note.body,
+      canEdit: note.canEdit,
     })),
   ].sort((left, right) => right.occurredAt.localeCompare(left.occurredAt) || right.id.localeCompare(left.id));
   const notesCard = overview && canUseCareNotes ? (
@@ -1302,7 +1383,30 @@ function DashboardApp() {
               <li key={item.id}>
                 <strong>{item.authorDisplayName}{item.authorRelationship ? ` · ${item.authorRelationship}` : ""}</strong>
                 <span>{formatDate(item.occurredAt)}</span>
-                <p className="care-note-body">{item.body}</p>
+                {editingNoteId === item.noteId ? (
+                  <div className="note-editor">
+                    <textarea
+                      value={editingNoteDraft}
+                      maxLength={1000}
+                      aria-label="Edit note"
+                      onChange={(event) => setEditingNoteDraft(event.target.value)}
+                    />
+                    <div className="note-controls">
+                      <button className="secondary-button" type="button" disabled={!editingNoteDraft.trim() || savingEditedNoteId === item.noteId} onClick={() => void saveEditedNote(item.noteId)}>
+                        {savingEditedNoteId === item.noteId ? "Saving…" : "Save"}
+                      </button>
+                      <button className="text-button" type="button" disabled={savingEditedNoteId === item.noteId} onClick={() => { setEditingNoteId(null); setEditingNoteDraft(""); }}>
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : <p className="care-note-body">{item.body}</p>}
+                {item.canEdit && editingNoteId !== item.noteId && (
+                  <div className="note-controls">
+                    <button className="text-button" type="button" onClick={() => beginEditingNote({ id: item.noteId, body: item.body })}>Edit</button>
+                    <button className="text-button" type="button" disabled={savingEditedNoteId === item.noteId} onClick={() => void deleteNote(item.noteId)}>Delete</button>
+                  </div>
+                )}
               </li>
             ))}
           </ol>
@@ -1588,6 +1692,18 @@ function DashboardApp() {
                 >
                   Activity
                 </a>
+                <a
+                  href="/other-events"
+                  role="menuitem"
+                  className={`nav-link${dashboardPage === "other_events" ? " is-active" : ""}`}
+                  aria-current={dashboardPage === "other_events" ? "page" : undefined}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    goToDashboardPage("other_events");
+                  }}
+                >
+                  Other Events
+                </a>
                 <button
                   type="button"
                   role="menuitem"
@@ -1631,6 +1747,17 @@ function DashboardApp() {
             }}
           >
             Activity
+          </a>
+          <a
+            href="/other-events"
+            className={`nav-link${dashboardPage === "other_events" ? " is-active" : ""}`}
+            aria-current={dashboardPage === "other_events" ? "page" : undefined}
+            onClick={(event) => {
+              event.preventDefault();
+              goToDashboardPage("other_events");
+            }}
+          >
+            Other Events
           </a>
         </div>
       </nav>
@@ -1727,20 +1854,12 @@ function DashboardApp() {
           )}
 
           {showActivityCards && overview && (
+            recentCallsCard
+          )}
+
+          {showOtherEventsCards && overview && (
             <>
-              <div className="dashboard-column-stack">
-                {isOperator ? (
-                  <>
-                    {actionsCard}
-                    {recentCallsCard}
-                  </>
-                ) : (
-                  <>
-                    {recentCallsCard}
-                    {actionsCard}
-                  </>
-                )}
-              </div>
+              {isOperator && actionsCard}
               {timelineCard}
             </>
           )}

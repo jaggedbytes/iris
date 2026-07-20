@@ -777,6 +777,18 @@
     @apply border-t border-border pt-4;
   }
 
+  .note-editor {
+    @apply grid gap-2;
+  }
+
+  .note-editor textarea {
+    @apply min-h-24 w-full rounded-[0.6rem] border border-border bg-surface p-[0.65rem] text-[0.88rem] leading-relaxed;
+  }
+
+  .note-controls {
+    @apply flex flex-wrap items-center gap-2;
+  }
+
   .item-list li {
     @apply grid gap-[0.2rem] rounded-[0.7rem] bg-subtle p-[0.8rem];
   }
