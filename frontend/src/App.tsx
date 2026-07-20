@@ -14,23 +14,23 @@ const DASHBOARD_POLL_INTERVAL_MS = 2_500;
 const ADD_PERSON_OPTION = "__add_person__";
 const ADD_CONTACT_OPTION = "__add_contact__";
 const E164_PATTERN = /^\+[1-9]\d{7,14}$/;
-type DashboardPage = "home" | "activity" | "other_events";
+type DashboardPage = "home" | "calls" | "updates";
 let capturedOptInToken: string | null | undefined;
 
 function dashboardPageFromPath(pathname: string): DashboardPage {
-  if (pathname === "/activity") return "activity";
-  if (pathname === "/other-events") return "other_events";
+  if (pathname === "/calls" || pathname === "/activity") return "calls";
+  if (pathname === "/updates") return "updates";
   return "home";
 }
 
 function pathForDashboardPage(page: DashboardPage) {
-  if (page === "activity") return "/activity";
-  if (page === "other_events") return "/other-events";
+  if (page === "calls") return "/calls";
+  if (page === "updates") return "/updates";
   return "/";
 }
 
 function callIdFromLocation() {
-  if (window.location.pathname !== "/activity") return null;
+  if (window.location.pathname !== "/calls" && window.location.pathname !== "/activity") return null;
   return new URL(window.location.href).searchParams.get("call");
 }
 
@@ -521,7 +521,7 @@ function DashboardApp() {
   }, [personId]);
 
   useEffect(() => {
-    if (dashboardPage !== "activity" || !selectedCallId || !overview) return;
+    if (dashboardPage !== "calls" || !selectedCallId || !overview) return;
     if (overview.calls.some((call) => call.id === selectedCallId)) return;
     // The URL may be stale, inaccessible, or point to a call that disappeared
     // after a person switch. Normalize it quietly rather than showing an error.
@@ -529,7 +529,7 @@ function DashboardApp() {
   }, [dashboardPage, selectedCallId, visibleCallIds]);
 
   useEffect(() => {
-    if (dashboardPage !== "activity" || !overview || overview.calls.length !== 1) return;
+    if (dashboardPage !== "calls" || !overview || overview.calls.length !== 1) return;
     const onlyCallId = overview.calls[0]!.id;
     if (selectedCallId === onlyCallId) return;
     callThreadRequestId.current += 1;
@@ -552,7 +552,7 @@ function DashboardApp() {
   }, [selectedOverviewCall?.summaryState, callThread?.call.summaryState]);
 
   useEffect(() => {
-    if (!token || !personId || dashboardPage !== "activity" || !selectedCallId || !selectedOverviewCall) {
+    if (!token || !personId || dashboardPage !== "calls" || !selectedCallId || !selectedOverviewCall) {
       setIsLoadingCallThread(false);
       return;
     }
@@ -1085,14 +1085,14 @@ function DashboardApp() {
   const isOperator = principal?.role === "admin";
   const isTrusted = principal?.role === "trusted_contact";
   const showHomeCards = dashboardPage === "home";
-  const showActivityCards = dashboardPage === "activity";
-  const showOtherEventsCards = dashboardPage === "other_events";
+  const showCallsCards = dashboardPage === "calls";
+  const showUpdatesCards = dashboardPage === "updates";
 
   const goToDashboardPage = (page: DashboardPage) => {
     setDashboardPage(page);
     setDashboardNavOpen(false);
     const nextPath = pathForDashboardPage(page);
-    if (page !== "activity") {
+    if (page !== "calls") {
       resetOpenCallThread();
     }
     if (window.location.pathname !== nextPath || window.location.search) {
@@ -1105,7 +1105,7 @@ function DashboardApp() {
       const nextPage = dashboardPageFromPath(window.location.pathname);
       setDashboardPage(nextPage);
       resetOpenCallThread();
-      setSelectedCallId(nextPage === "activity" ? callIdFromLocation() : null);
+      setSelectedCallId(nextPage === "calls" ? callIdFromLocation() : null);
       setDashboardNavOpen(false);
     };
     window.addEventListener("popstate", onPopState);
@@ -1256,8 +1256,8 @@ function DashboardApp() {
       <div className="card-heading">
         <div className="card-header">
           <p className="card-kicker">Recent calls</p>
-          <h2>Calls with Iris</h2>
-          <p className="privacy-note">Shared notes from recent calls.</p>
+          <h2>Conversations with Iris</h2>
+          <p className="privacy-note">Recaps, suggestions, and updates from recent conversations.</p>
         </div>
         <span className="count-pill">{overview.calls.length}</span>
       </div>
@@ -1411,7 +1411,7 @@ function DashboardApp() {
         </div>
       ) : (
         <div className="empty-state-card">
-          <p className="empty-state">Shared notes from calls with Iris will appear here.</p>
+          <p className="empty-state">Conversations with Iris will appear here.</p>
         </div>
       )}
     </section>
@@ -1526,8 +1526,9 @@ function DashboardApp() {
     <section className="overview-card timeline-card dashboard-split-aside">
       <div className="card-heading">
         <div>
-          <p className="card-kicker">Timeline</p>
-          <h2>What’s happened</h2>
+          <p className="card-kicker">Recent activity</p>
+          <h2>System updates</h2>
+          <p className="privacy-note">Calls, check-ins, and delivery updates that aren’t tied to a specific conversation.</p>
         </div>
         <span className="count-pill">{overview.events.length}</span>
       </div>
@@ -1542,7 +1543,7 @@ function DashboardApp() {
         </ol>
       ) : (
         <div className="empty-state-card">
-          <p className="empty-state">Iris activity will appear here.</p>
+          <p className="empty-state">System updates will appear here.</p>
         </div>
       )}
     </section>
@@ -1551,9 +1552,9 @@ function DashboardApp() {
   const actionsCard = overview ? (
     <section className="overview-card actions-card">
       <div className="card-header">
-        <p className="card-kicker">Actions</p>
-        <h2>Text messages</h2>
-        <p className="privacy-note">Message updates and anything that needs your attention.</p>
+        <p className="card-kicker">Messages</p>
+        <h2>Text message status</h2>
+        <p className="privacy-note">Track Iris messages and any delivery that needs attention.</p>
       </div>
       {overview.actions.length ? (
         <ol className="item-list">
@@ -1764,28 +1765,28 @@ function DashboardApp() {
                   Home
                 </a>
                 <a
-                  href="/activity"
+                  href="/calls"
                   role="menuitem"
-                  className={`nav-link${dashboardPage === "activity" ? " is-active" : ""}`}
-                  aria-current={dashboardPage === "activity" ? "page" : undefined}
+                  className={`nav-link${dashboardPage === "calls" ? " is-active" : ""}`}
+                  aria-current={dashboardPage === "calls" ? "page" : undefined}
                   onClick={(event) => {
                     event.preventDefault();
-                    goToDashboardPage("activity");
+                    goToDashboardPage("calls");
                   }}
                 >
-                  Activity
+                  Calls
                 </a>
                 <a
-                  href="/other-events"
+                  href="/updates"
                   role="menuitem"
-                  className={`nav-link${dashboardPage === "other_events" ? " is-active" : ""}`}
-                  aria-current={dashboardPage === "other_events" ? "page" : undefined}
+                  className={`nav-link${dashboardPage === "updates" ? " is-active" : ""}`}
+                  aria-current={dashboardPage === "updates" ? "page" : undefined}
                   onClick={(event) => {
                     event.preventDefault();
-                    goToDashboardPage("other_events");
+                    goToDashboardPage("updates");
                   }}
                 >
-                  Other Events
+                  Updates
                 </a>
                 <button
                   type="button"
@@ -1821,26 +1822,26 @@ function DashboardApp() {
             Home
           </a>
           <a
-            href="/activity"
-            className={`nav-link${dashboardPage === "activity" ? " is-active" : ""}`}
-            aria-current={dashboardPage === "activity" ? "page" : undefined}
+            href="/calls"
+            className={`nav-link${dashboardPage === "calls" ? " is-active" : ""}`}
+            aria-current={dashboardPage === "calls" ? "page" : undefined}
             onClick={(event) => {
               event.preventDefault();
-              goToDashboardPage("activity");
+              goToDashboardPage("calls");
             }}
           >
-            Activity
+            Calls
           </a>
           <a
-            href="/other-events"
-            className={`nav-link${dashboardPage === "other_events" ? " is-active" : ""}`}
-            aria-current={dashboardPage === "other_events" ? "page" : undefined}
+            href="/updates"
+            className={`nav-link${dashboardPage === "updates" ? " is-active" : ""}`}
+            aria-current={dashboardPage === "updates" ? "page" : undefined}
             onClick={(event) => {
               event.preventDefault();
-              goToDashboardPage("other_events");
+              goToDashboardPage("updates");
             }}
           >
-            Other Events
+            Updates
           </a>
         </div>
       </nav>
@@ -1936,11 +1937,11 @@ function DashboardApp() {
             </div>
           )}
 
-          {showActivityCards && overview && (
+          {showCallsCards && overview && (
             recentCallsCard
           )}
 
-          {showOtherEventsCards && overview && (
+          {showUpdatesCards && overview && (
             <>
               {isOperator && actionsCard}
               {timelineCard}

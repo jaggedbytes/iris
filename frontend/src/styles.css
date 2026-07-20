@@ -215,7 +215,7 @@
     @apply grid grid-cols-12 items-start gap-4;
   }
 
-  /* Home / Activity: left column stack beside a right-column card (tablet+). */
+  /* Home / Calls: left column stack beside a right-column card (tablet+). */
   .dashboard-column-stack {
     @apply col-span-4 contents max-[820px]:col-span-6 max-[560px]:col-span-12;
   }
@@ -701,7 +701,7 @@
     @apply grid gap-[0.15rem] text-[0.78rem] leading-snug text-muted;
   }
 
-  /* Actions */
+  /* Messages (operator SMS queue) */
   .actions-card {
     @apply order-4 col-span-4 max-[820px]:col-span-6 max-[560px]:col-span-12;
   }
@@ -770,6 +770,10 @@
 
   .call-thread-item.is-open .call-thread-toggle {
     @apply bg-lilac/40;
+  }
+
+  .call-thread-item.is-open .call-thread-toggle strong {
+    @apply text-ink;
   }
 
   .call-thread-toggle > span:first-child {

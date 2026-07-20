@@ -18,9 +18,9 @@ test("serves built SPA routes without shadowing API or health endpoints", async 
   const baseUrl = `http://127.0.0.1:${address.port}`;
 
   try {
-    const [optIn, activity, asset, health, api, media] = await Promise.all([
+    const [optIn, calls, asset, health, api, media] = await Promise.all([
       fetch(`${baseUrl}/opt-in?token=opaque`),
-      fetch(`${baseUrl}/activity`),
+      fetch(`${baseUrl}/calls`),
       fetch(`${baseUrl}/asset.txt`),
       fetch(`${baseUrl}/health`),
       fetch(`${baseUrl}/api/unknown`),
@@ -28,8 +28,8 @@ test("serves built SPA routes without shadowing API or health endpoints", async 
     ]);
     assert.equal(optIn.status, 200);
     assert.equal(await optIn.text(), "<html><body>Iris hosted app</body></html>");
-    assert.equal(activity.status, 200);
-    assert.equal(await activity.text(), "<html><body>Iris hosted app</body></html>");
+    assert.equal(calls.status, 200);
+    assert.equal(await calls.text(), "<html><body>Iris hosted app</body></html>");
     assert.equal(asset.status, 200);
     assert.equal(await asset.text(), "static asset");
     assert.deepEqual(await health.json(), { status: "ok" });
