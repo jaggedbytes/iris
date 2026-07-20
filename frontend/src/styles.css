@@ -719,6 +719,64 @@
     @apply mt-[1.2rem] grid list-none gap-[0.7rem] p-0;
   }
 
+  .call-thread-list {
+    @apply mt-[1.2rem] grid list-none gap-[0.7rem] p-0;
+  }
+
+  .call-thread-item {
+    @apply overflow-hidden rounded-[0.7rem] bg-subtle;
+  }
+
+  .call-thread-toggle {
+    @apply flex w-full items-start justify-between gap-3 p-[0.8rem] text-left transition-colors hover:bg-lilac/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary;
+  }
+
+  .call-thread-toggle > span:first-child {
+    @apply grid min-w-0 gap-[0.2rem];
+  }
+
+  .call-thread-toggle strong {
+    @apply text-[0.9rem];
+  }
+
+  .call-thread-toggle span:not(.call-thread-chevron) {
+    @apply text-[0.78rem] text-muted;
+  }
+
+  .call-thread-chevron {
+    @apply shrink-0 text-xl leading-none text-primary-dark;
+  }
+
+  .call-thread-detail {
+    @apply grid gap-4 border-t border-border bg-surface p-[0.8rem];
+  }
+
+  .call-thread-recap,
+  .call-thread-activity {
+    @apply grid gap-[0.45rem];
+  }
+
+  .call-thread-recap > strong,
+  .call-thread-activity > strong {
+    @apply text-[0.82rem];
+  }
+
+  .call-thread-recap > p {
+    @apply m-0 text-[0.88rem] leading-[1.5] text-ink;
+  }
+
+  .call-thread-activity .item-list {
+    @apply mt-0;
+  }
+
+  .call-thread-activity .empty-state-card {
+    @apply mt-0;
+  }
+
+  .call-thread-note-form {
+    @apply border-t border-border pt-4;
+  }
+
   .item-list li {
     @apply grid gap-[0.2rem] rounded-[0.7rem] bg-subtle p-[0.8rem];
   }

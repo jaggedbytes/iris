@@ -82,6 +82,12 @@ export type DashboardOverview = {
   permissions: string[];
 };
 
+export type DashboardCallThread = {
+  call: DashboardOverview["calls"][number];
+  events: DashboardOverview["events"];
+  notes: NonNullable<DashboardOverview["notes"]>;
+};
+
 export type DashboardPersonList = Array<{
   id: string;
   displayName: string;

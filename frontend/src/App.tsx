@@ -7,7 +7,7 @@ import {
   DashboardError,
   publicJson,
 } from "./dashboard";
-import type { DashboardOverview, DashboardPersonList, DashboardPrincipal } from "./dashboard";
+import type { DashboardCallThread, DashboardOverview, DashboardPersonList, DashboardPrincipal } from "./dashboard";
 
 const SESSION_TOKEN_KEY = "iris-dashboard-access-token";
 const DASHBOARD_POLL_INTERVAL_MS = 2_500;
@@ -23,6 +23,11 @@ function dashboardPageFromPath(pathname: string): DashboardPage {
 
 function pathForDashboardPage(page: DashboardPage) {
   return page === "activity" ? "/activity" : "/";
+}
+
+function callIdFromLocation() {
+  if (window.location.pathname !== "/activity") return null;
+  return new URL(window.location.href).searchParams.get("call");
 }
 
 function readMagicLinkToken() {
@@ -206,6 +211,14 @@ function DashboardApp() {
   const [noteDraft, setNoteDraft] = useState("");
   const [isSavingNote, setIsSavingNote] = useState(false);
   const [noteFormError, setNoteFormError] = useState<string | null>(null);
+  const [selectedCallId, setSelectedCallId] = useState<string | null>(callIdFromLocation);
+  const [callThread, setCallThread] = useState<DashboardCallThread | null>(null);
+  const [isLoadingCallThread, setIsLoadingCallThread] = useState(false);
+  const [callThreadError, setCallThreadError] = useState<string | null>(null);
+  const [callNoteDraft, setCallNoteDraft] = useState("");
+  const [isSavingCallNote, setIsSavingCallNote] = useState(false);
+  const [callNoteFormError, setCallNoteFormError] = useState<string | null>(null);
+  const [callThreadRefreshVersion, setCallThreadRefreshVersion] = useState(0);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [dashboardPage, setDashboardPage] = useState<DashboardPage>(() =>
     dashboardPageFromPath(window.location.pathname),
@@ -213,6 +226,8 @@ function DashboardApp() {
   const [dashboardNavOpen, setDashboardNavOpen] = useState(false);
   const magicLinkRequestId = useRef(0);
   const overviewRequestId = useRef(0);
+  const callThreadRequestId = useRef(0);
+  const callThreadPersonId = useRef<string | null>(null);
   const pendingTrustedContactId = useRef<string | null>(null);
   // Skip interval/visibility refreshes while an overview load is still running so
   // a slow response is not cancelled every 2.5s into an endless backlog.
@@ -246,6 +261,34 @@ function DashboardApp() {
     setNoteDraft("");
     setNoteFormError(null);
   }, [personId]);
+
+  const clearCallThread = (historyMode: "push" | "replace" = "replace") => {
+    callThreadRequestId.current += 1;
+    setSelectedCallId(null);
+    setCallThread(null);
+    setCallThreadError(null);
+    setCallNoteDraft("");
+    setCallNoteFormError(null);
+    const location = new URL(window.location.href);
+    location.searchParams.delete("call");
+    window.history[`${historyMode}State`]({}, "", `${location.pathname}${location.search}${location.hash}`);
+  };
+
+  const selectCallThread = (callId: string) => {
+    if (selectedCallId === callId) {
+      clearCallThread("push");
+      return;
+    }
+    callThreadRequestId.current += 1;
+    setSelectedCallId(callId);
+    setCallThread(null);
+    setCallThreadError(null);
+    setCallNoteDraft("");
+    setCallNoteFormError(null);
+    const location = new URL(window.location.href);
+    location.searchParams.set("call", callId);
+    window.history.pushState({}, "", `${location.pathname}${location.search}${location.hash}`);
+  };
 
   const trustedContactIds = overview?.contacts.map((contact) => contact.id).join("|") ?? "";
 
@@ -402,6 +445,7 @@ function DashboardApp() {
   const shouldPoll = Boolean(
     overview?.activeCall || overview?.calls.some((call) => call.summaryState === "processing"),
   );
+  const selectedOverviewCall = overview?.calls.find((call) => call.id === selectedCallId) ?? null;
 
   useEffect(() => {
     if (!token || !shouldPoll) return;
@@ -420,6 +464,65 @@ function DashboardApp() {
       document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
   }, [token, shouldPoll]);
+
+  const visibleCallIds = overview?.calls.map((call) => call.id).join("|") ?? "";
+
+  useEffect(() => {
+    if (!personId) return;
+    if (callThreadPersonId.current && callThreadPersonId.current !== personId) {
+      clearCallThread();
+    }
+    callThreadPersonId.current = personId;
+  }, [personId]);
+
+  useEffect(() => {
+    if (dashboardPage !== "activity" || !selectedCallId || !overview) return;
+    if (overview.calls.some((call) => call.id === selectedCallId)) return;
+    // The URL may be stale, inaccessible, or point to a call that disappeared
+    // after a person switch. Normalize it quietly rather than showing an error.
+    clearCallThread();
+  }, [dashboardPage, selectedCallId, visibleCallIds]);
+
+  useEffect(() => {
+    if (!selectedOverviewCall || !callThread) return;
+    if (selectedOverviewCall.summaryState === callThread.call.summaryState) return;
+    // The overview poll observed a meaningful summary-state change. Refresh the
+    // open thread once, while retaining the last successful detail on screen.
+    setCallThreadRefreshVersion((current) => current + 1);
+  }, [selectedOverviewCall?.summaryState, callThread?.call.summaryState]);
+
+  useEffect(() => {
+    if (!token || !personId || dashboardPage !== "activity" || !selectedCallId || !selectedOverviewCall) {
+      setIsLoadingCallThread(false);
+      return;
+    }
+    let cancelled = false;
+    const requestId = ++callThreadRequestId.current;
+    setIsLoadingCallThread(true);
+    setCallThreadError(null);
+    void dashboardJson<DashboardCallThread>(
+      `/api/dashboard/people/${personId}/calls/${selectedCallId}/thread`,
+      token,
+    ).then((thread) => {
+      if (cancelled || requestId !== callThreadRequestId.current) return;
+      setCallThread(thread);
+    }).catch((threadError) => {
+      if (cancelled || requestId !== callThreadRequestId.current) return;
+      if (threadError instanceof DashboardError && (threadError.status === 403 || threadError.status === 404)) {
+        clearCallThread();
+        return;
+      }
+      setCallThread(null);
+      setCallThreadError(threadError instanceof Error ? threadError.message : "Unable to load this call.");
+    }).finally(() => {
+      if (!cancelled && requestId === callThreadRequestId.current) {
+        setIsLoadingCallThread(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, personId, dashboardPage, selectedCallId, selectedOverviewCall?.id, callThreadRefreshVersion]);
 
   const signIn = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -535,6 +638,32 @@ function DashboardApp() {
       setNoteFormError(noteError instanceof Error ? noteError.message : "Unable to save this note.");
     } finally {
       setIsSavingNote(false);
+    }
+  };
+
+  const addCallNote = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!personId || !selectedCallId) return;
+    const body = callNoteDraft.trim();
+    if (!body) {
+      setCallNoteFormError("Enter a note before saving.");
+      return;
+    }
+    setIsSavingCallNote(true);
+    setCallNoteFormError(null);
+    try {
+      await dashboardJson(`/api/dashboard/people/${personId}/calls/${selectedCallId}/notes`, token, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ body }),
+      });
+      setCallNoteDraft("");
+      setCallThreadRefreshVersion((current) => current + 1);
+      setRefreshVersion((current) => current + 1);
+    } catch (noteError) {
+      setCallNoteFormError(noteError instanceof Error ? noteError.message : "Unable to save this note.");
+    } finally {
+      setIsSavingCallNote(false);
     }
   };
 
@@ -848,14 +977,28 @@ function DashboardApp() {
     setDashboardPage(page);
     setDashboardNavOpen(false);
     const nextPath = pathForDashboardPage(page);
-    if (window.location.pathname !== nextPath) {
+    if (page === "home") {
+      callThreadRequestId.current += 1;
+      setSelectedCallId(null);
+      setCallThread(null);
+      setCallThreadError(null);
+      setCallNoteDraft("");
+      setCallNoteFormError(null);
+    }
+    if (window.location.pathname !== nextPath || window.location.search) {
       window.history.pushState({}, "", nextPath);
     }
   };
 
   useEffect(() => {
     const onPopState = () => {
-      setDashboardPage(dashboardPageFromPath(window.location.pathname));
+      const nextPage = dashboardPageFromPath(window.location.pathname);
+      setDashboardPage(nextPage);
+      setSelectedCallId(nextPage === "activity" ? callIdFromLocation() : null);
+      setCallThread(null);
+      setCallThreadError(null);
+      setCallNoteDraft("");
+      setCallNoteFormError(null);
       setDashboardNavOpen(false);
     };
     window.addEventListener("popstate", onPopState);
@@ -986,7 +1129,15 @@ function DashboardApp() {
     </section>
   ) : null;
 
-  const recentCallsCard = overview ? (
+  const canViewSummaries = overview?.permissions.includes("view_summaries") ?? false;
+  const canUseCareNotes = overview?.permissions.includes("care_notes") ?? false;
+  const canViewThreadEvents = overview?.permissions.includes("view_events") ?? false;
+  const callThreadFeed = callThread ? [
+    ...callThread.events.map((event) => ({ id: `event-${event.id}`, kind: "event" as const, occurredAt: event.occurredAt, event })),
+    ...callThread.notes.map((note) => ({ id: `note-${note.id}`, kind: "note" as const, occurredAt: note.createdAt, note })),
+  ].sort((left, right) => left.occurredAt.localeCompare(right.occurredAt) || left.id.localeCompare(right.id)) : [];
+
+  const recentCallsCard = overview && canViewSummaries ? (
     <section className="overview-card recent-calls-card">
       <div className="card-heading">
         <div className="card-header">
@@ -997,27 +1148,105 @@ function DashboardApp() {
         <span className="count-pill">{overview.calls.length}</span>
       </div>
       {overview.calls.length ? (
-        <ol className="item-list">
+        <ol className="call-thread-list">
           {overview.calls.map((call) => (
-            <li key={call.id}>
-              <strong>{summaryLabel(
-                call.careSummary,
-                call.summaryState,
-                careConsents?.careSummarySharing ?? null,
-                call.privateSummarySaved,
-                call.status,
-              )}</strong>
-              <span>{formatDate(call.startedAt)} · {call.status}</span>
-              {call.careSummary && (
-                <>
-                  {call.careSummary.moodAndConcerns.length > 0 && (
-                    <div className="care-summary">
-                      <strong>{givenName(overview.person.displayName)} shared</strong>
-                      <ul>{call.careSummary.moodAndConcerns.map((item, index) => <li key={`${call.id}-mood-${index}`}>{item}</li>)}</ul>
-                    </div>
+            <li key={call.id} className={`call-thread-item${selectedCallId === call.id ? " is-open" : ""}`}>
+              <button
+                className="call-thread-toggle"
+                type="button"
+                aria-expanded={selectedCallId === call.id}
+                aria-controls={`call-thread-${call.id}`}
+                onClick={() => selectCallThread(call.id)}
+              >
+                <span>
+                  <strong>{summaryLabel(
+                    call.careSummary,
+                    call.summaryState,
+                    careConsents?.careSummarySharing ?? null,
+                    call.privateSummarySaved,
+                    call.status,
+                  )}</strong>
+                  <span>{formatDate(call.startedAt)} · {call.status}</span>
+                </span>
+                <span className="call-thread-chevron" aria-hidden="true">{selectedCallId === call.id ? "−" : "+"}</span>
+              </button>
+              {selectedCallId === call.id && (
+                <div id={`call-thread-${call.id}`} className="call-thread-detail">
+                  {isLoadingCallThread && !callThread && <p className="loading-note">Loading this call…</p>}
+                  {callThreadError && <p className="form-validation-error" role="alert">{callThreadError}</p>}
+                  {callThread && (
+                    <>
+                      <div className="call-thread-recap">
+                        <strong>Conversation recap</strong>
+                        <p>{summaryLabel(
+                          callThread.call.careSummary,
+                          callThread.call.summaryState,
+                          careConsents?.careSummarySharing ?? null,
+                          callThread.call.privateSummarySaved,
+                          callThread.call.status,
+                        )}</p>
+                        {callThread.call.careSummary && (
+                          <>
+                            {callThread.call.careSummary.moodAndConcerns.length > 0 && (
+                              <div className="care-summary">
+                                <strong>{givenName(overview.person.displayName)} shared</strong>
+                                <ul>{callThread.call.careSummary.moodAndConcerns.map((item, index) => <li key={`${call.id}-thread-mood-${index}`}>{item}</li>)}</ul>
+                              </div>
+                            )}
+                            <IrisSuggestions idPrefix={`${call.id}-thread`} items={callThread.call.careSummary.irisSuggestedNextSteps} />
+                          </>
+                        )}
+                      </div>
+                      {canViewThreadEvents || canUseCareNotes ? (
+                        <div className="call-thread-activity">
+                          <strong>Call activity</strong>
+                          {callThreadFeed.length ? (
+                            <ol className="item-list">
+                              {callThreadFeed.map((item) => item.kind === "event" ? (
+                                <li key={item.id}>
+                                  <strong>{timelineCopy(item.event, overview.person.displayName)}</strong>
+                                  <span>{formatDate(item.occurredAt)}</span>
+                                </li>
+                              ) : (
+                                <li key={item.id}>
+                                  <strong>{item.note.authorDisplayName}{item.note.authorRelationship ? ` · ${item.note.authorRelationship}` : ""}</strong>
+                                  <span>{formatDate(item.occurredAt)}</span>
+                                  <p className="care-note-body">{item.note.body}</p>
+                                </li>
+                              ))}
+                            </ol>
+                          ) : (
+                            <div className="empty-state-card"><p className="empty-state">No call activity yet.</p></div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="empty-state-card"><p className="empty-state">Call activity is not included with this link.</p></div>
+                      )}
+                      {canUseCareNotes && (
+                        <form className="compact-form notes-form call-thread-note-form" noValidate onSubmit={addCallNote}>
+                          <label className="form-field" htmlFor={`call-note-${call.id}`}>
+                            Add a note
+                            <span>Share an update about this call with the care circle.</span>
+                            <textarea
+                              id={`call-note-${call.id}`}
+                              value={callNoteDraft}
+                              maxLength={1000}
+                              placeholder="e.g. I will check in after dinner."
+                              onChange={(event) => {
+                                setCallNoteDraft(event.target.value);
+                                setCallNoteFormError(null);
+                              }}
+                            />
+                            {callNoteFormError && <p className="form-validation-error" role="alert">{callNoteFormError}</p>}
+                          </label>
+                          <button className="secondary-button full-width-action" type="submit" disabled={isSavingCallNote}>
+                            {isSavingCallNote ? "Saving…" : "Save note"}
+                          </button>
+                        </form>
+                      )}
+                    </>
                   )}
-                  <IrisSuggestions idPrefix={call.id} items={call.careSummary.irisSuggestedNextSteps} />
-                </>
+                </div>
               )}
             </li>
           ))}
@@ -1030,7 +1259,6 @@ function DashboardApp() {
     </section>
   ) : null;
 
-  const canUseCareNotes = overview?.permissions.includes("care_notes") ?? false;
   const visibleIrisNotes = overview?.calls.filter((call) => call.careSummary) ?? [];
   const careNotes = overview?.notes ?? [];
   const notesFeed = [
