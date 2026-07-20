@@ -81,8 +81,16 @@ export function createEnrollmentRouter(service: EnrollmentService) {
   router.post("/accept", limiter, (request, response) => {
     const token = typeof request.body?.token === "string" ? request.body.token : "";
     const phoneE164 = request.body?.phoneE164;
-    if (!token || !isE164(phoneE164) || request.body?.accepted !== true) {
-      response.status(400).json({ error: "Enter the invited mobile number and agree before submitting." });
+    if (!isE164(phoneE164)) {
+      response.status(400).json({ error: "Enter the invited mobile number in E.164 format." });
+      return;
+    }
+    if (request.body?.accepted !== true) {
+      response.status(400).json({ error: "Agree to receive texts before subscribing." });
+      return;
+    }
+    if (!token) {
+      response.status(404).json({ error: "This opt-in link is unavailable." });
       return;
     }
     const enrollment = service.acceptInvitation({ token, phoneE164 });

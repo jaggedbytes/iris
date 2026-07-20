@@ -13,6 +13,7 @@ const SESSION_TOKEN_KEY = "iris-dashboard-access-token";
 const DASHBOARD_POLL_INTERVAL_MS = 2_500;
 const ADD_PERSON_OPTION = "__add_person__";
 const ADD_CONTACT_OPTION = "__add_contact__";
+const E164_PATTERN = /^\+[1-9]\d{7,14}$/;
 let capturedOptInToken: string | null | undefined;
 
 function readMagicLinkToken() {
@@ -1366,6 +1367,8 @@ function OptInPage() {
   const [accepted, setAccepted] = useState(false);
   const [status, setStatus] = useState<"loading" | "ready" | "submitting" | "complete" | "unavailable">("loading");
   const [error, setError] = useState<string | null>(null);
+  const [phoneFormError, setPhoneFormError] = useState<string | null>(null);
+  const [consentFormError, setConsentFormError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!token) {
@@ -1390,8 +1393,13 @@ function OptInPage() {
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!token) return;
+    const phoneIsValid = E164_PATTERN.test(phoneE164);
+    setPhoneFormError(phoneIsValid ? null : "Enter the invited mobile number in E.164 format.");
+    setConsentFormError(accepted ? null : "Agree to receive texts before subscribing.");
+    if (!phoneIsValid || !accepted) return;
     setStatus("submitting");
     setError(null);
+    setConsentFormError(null);
     void publicJson<{ status: "subscribed" }>("/api/opt-in/accept", {
       token,
       phoneE164,
@@ -1400,7 +1408,14 @@ function OptInPage() {
       setStatus("complete");
     }).catch((acceptError) => {
       setStatus("ready");
-      setError(acceptError instanceof Error ? acceptError.message : "We could not save your opt-in.");
+      const message = acceptError instanceof Error ? acceptError.message : "We could not save your opt-in.";
+      if (message === "Enter the invited mobile number in E.164 format.") {
+        setPhoneFormError(message);
+      } else if (message === "Agree to receive texts before subscribing.") {
+        setConsentFormError(message);
+      } else {
+        setError(message);
+      }
     });
   };
 
@@ -1417,30 +1432,41 @@ function OptInPage() {
               <p role="status">You’re subscribed to Iris care check-in and Shield alert texts for {invitation.personDisplayName}. A confirmation text is on its way.</p>
             ) : (
               <>
-                <p>
-                  {invitation.contactDisplayName}, {invitation.personDisplayName}’s operator invited you to receive care check-in and Shield alert texts from Iris.
+                <p className="access-introduction">
+                  You’ve been invited to be a trusted contact for {invitation.personDisplayName}. If you opt in, Iris can send you care check-ins and safety alerts.
                 </p>
-                <form onSubmit={submit}>
-                  <label htmlFor="opt-in-phone">Your invited mobile number</label>
+                <form className="opt-in-form" noValidate onSubmit={submit}>
+                  <label className="form-field" htmlFor="opt-in-phone">
+                    Confirm your mobile number
+                    <span>This is the mobile number the operator entered when adding you as a trusted contact.</span>
+                  </label>
                   <input
                     id="opt-in-phone"
                     required
                     inputMode="tel"
-                    placeholder="+15551234567"
+                    placeholder="E.164, e.g. +15551234567"
                     value={phoneE164}
-                    onChange={(event) => setPhoneE164(event.target.value)}
+                    onChange={(event) => {
+                      setPhoneE164(event.target.value);
+                      setPhoneFormError(null);
+                    }}
                   />
+                  {phoneFormError && <p className="form-validation-error" role="alert">{phoneFormError}</p>}
                   <label className="consent-check">
-                    <input type="checkbox" checked={accepted} onChange={(event) => setAccepted(event.target.checked)} />
+                    <input className="consent-toggle" type="checkbox" checked={accepted} onChange={(event) => {
+                      setAccepted(event.target.checked);
+                      setConsentFormError(null);
+                    }} />
                     I agree to receive Iris care check-in and Shield alert texts for {invitation.personDisplayName}. Message frequency varies. Msg & data rates may apply. Reply HELP for help. Reply STOP to opt out.
                   </label>
+                  {consentFormError && <p className="form-validation-error" role="alert">{consentFormError}</p>}
                   <p className="legal-note">
                     Replying HELP returns: {invitation.helpText}
                   </p>
                   <p className="legal-note">
-                    By submitting, you agree to the <a href={invitation.termsUrl} target="_blank" rel="noreferrer">Terms</a> and acknowledge the <a href={invitation.privacyUrl} target="_blank" rel="noreferrer">Privacy Policy</a>.
+                    By subscribing, you agree to the <a href={invitation.termsUrl} target="_blank" rel="noreferrer">Terms</a> and acknowledge the <a href={invitation.privacyUrl} target="_blank" rel="noreferrer">Privacy Policy</a>.
                   </p>
-                  <button type="submit" disabled={!accepted || status === "submitting"}>{status === "submitting" ? "Saving…" : "Subscribe"}</button>
+                  <button type="submit" disabled={status === "submitting"}>{status === "submitting" ? "Saving…" : "Subscribe"}</button>
                 </form>
               </>
             )}
