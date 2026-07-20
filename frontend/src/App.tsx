@@ -66,7 +66,6 @@ function summaryLabel(
 }
 
 function phoneNumberLabel(person: DashboardOverview["person"]) {
-  if (person.phoneNumberStatus === "private") return "Phone number is private in this view.";
   if (person.phoneNumberStatus === "not_configured") return "Phone number not configured";
   return person.phoneE164 ?? "Phone number unavailable";
 }
@@ -947,7 +946,11 @@ function DashboardApp() {
                   </div>
                 </form>
               )}
-              <p className="privacy-note">Choose what Iris remembers and what your care circle can see. Iris never saves raw audio or full transcripts.</p>
+              {principal?.role === "admin" ? (
+                <p className="privacy-note">Choose what Iris remembers and what your care circle can see. Iris never saves raw audio or full transcripts.</p>
+              ) : (
+                <p className="privacy-note">Iris never saves raw audio or full transcripts.</p>
+              )}
             </div>
             {principal?.role === "admin" && careConsents && (
               <div className="compact-form consent-choices">
@@ -1087,14 +1090,76 @@ function DashboardApp() {
             )}
           </section>
 
+          {principal?.role === "trusted_contact" && overview.viewer && (
+            <section className="overview-card trusted-self-card">
+              <div className="card-header">
+                <p className="card-kicker">You</p>
+                <h2>{overview.viewer.displayName}</h2>
+                <span className="contact-relationship">{overview.viewer.relationship}</span>
+                <div className="person-phone-row">
+                  <p className="person-phone">{contactPhoneLabel(overview.viewer.phoneE164)}</p>
+                </div>
+              </div>
+              <div className="trusted-self-sms">
+                <strong>Text messages</strong>
+                <p className="privacy-note">Iris can text you for Shield safety alerts once you’ve opted in. An operator sends you an opt-in link to get started.</p>
+                <ul className="contact-status-list">
+                  <li>
+                    <span>
+                      <strong>SMS</strong>
+                      <span className="contact-status-detail">Whether you’ve agreed to receive Iris texts, including Shield alerts.</span>
+                    </span>
+                    <span className={`contact-status-pill${overview.viewer.smsOptInStatus === "opted_in" ? "" : " is-off"}`}>
+                      {overview.viewer.smsOptInStatus === "opted_in" ? "Opted in" : overview.viewer.smsOptInStatus === "opted_out" ? "Opted out" : "Not opted in"}
+                    </span>
+                  </li>
+                  <li>
+                    <span>
+                      <strong>SMS confirmation</strong>
+                      <span className="contact-status-detail">Whether Iris has sent the confirmation text after you use the opt-in link.</span>
+                    </span>
+                    <span className={`contact-status-pill${overview.viewer.confirmationState === "not_requested" ? " is-off" : ""}`}>
+                      {overview.viewer.confirmationState === "not_requested" ? "Not requested" : overview.viewer.confirmationState.replaceAll("_", " ")}
+                    </span>
+                  </li>
+                </ul>
+              </div>
+              <div className="compact-form consent-choices is-readonly">
+                <strong>Conversation preferences</strong>
+                <p className="privacy-note">These choices were set for {overview.person.displayName}. Contact the Iris operator if you’d like them changed.</p>
+                <div className="consent-check">
+                  <span className="consent-option">
+                    <span className="consent-option-heading">
+                      <strong>Private memory</strong>
+                      <span className={`consent-status${overview.consents.summaryRetention ? "" : " is-off"}`} aria-label={overview.consents.summaryRetention ? "Currently on" : "Currently off"}>
+                        {overview.consents.summaryRetention ? "On" : "Off"}
+                      </span>
+                    </span>
+                    <span>Helps Iris remember helpful details between calls. Only Iris uses this.</span>
+                  </span>
+                </div>
+                <div className="consent-check">
+                  <span className="consent-option">
+                    <span className="consent-option-heading">
+                      <strong>Shared care recaps</strong>
+                      <span className={`consent-status${overview.consents.careSummarySharing ? "" : " is-off"}`} aria-label={overview.consents.careSummarySharing ? "Currently on" : "Currently off"}>
+                        {overview.consents.careSummarySharing ? "On" : "Off"}
+                      </span>
+                    </span>
+                    <span>Shares a concise recap with you and trusted contacts, including health-related concerns and Iris’s guidance. Never raw audio or a full transcript. Requires private memory.</span>
+                  </span>
+                </div>
+              </div>
+            </section>
+          )}
+
+          {principal?.role === "admin" && (
           <section className="overview-card trusted-contacts-card">
             <div className="card-header">
               <p className="card-kicker">Trusted contacts</p>
               <h2>People in the circle</h2>
               <p className="privacy-note">Add the people who can stay connected with {overview.person.displayName}. They can receive a dashboard link, request an Iris check-in, and choose whether to receive text messages.</p>
             </div>
-            {principal?.role === "admin" || overview.contacts.length ? (
-              <>
                 <div className="trusted-contact-picker">
                   <strong>Trusted contact</strong>
                   <span>{isAddingContact ? "Fill in the form below, then save to add them to the care circle." : "Choose who the dashboard and SMS actions below apply to."}</span>
@@ -1126,9 +1191,9 @@ function DashboardApp() {
                     }}
                   >
                     {overview.contacts.map((contact) => <option key={contact.id} value={contact.id}>{contact.displayName}</option>)}
-                    {principal?.role === "admin" && <option value={ADD_CONTACT_OPTION}>Add a trusted contact…</option>}
+                    <option value={ADD_CONTACT_OPTION}>Add a trusted contact…</option>
                   </select>
-                  {!isAddingContact && selectedTrustedContact && principal?.role === "admin" && (
+                  {!isAddingContact && selectedTrustedContact && (
                     <button
                       className="remove-contact-button"
                       type="button"
@@ -1147,21 +1212,19 @@ function DashboardApp() {
                       <span className="contact-relationship">{selectedTrustedContact.relationship}</span>
                       <div className="person-phone-row">
                         <p className="person-phone">{contactPhoneLabel(selectedTrustedContact.phoneE164)}</p>
-                        {principal?.role === "admin" && (
-                          <button
-                            className="person-phone-edit"
-                            type="button"
-                            onClick={() => {
-                              setContactPhoneDraft(selectedTrustedContact.phoneE164 ?? "");
-                              setContactPhoneFormError(null);
-                              setIsEditingContactPhone(true);
-                            }}
-                          >
-                            Edit
-                          </button>
-                        )}
+                        <button
+                          className="person-phone-edit"
+                          type="button"
+                          onClick={() => {
+                            setContactPhoneDraft(selectedTrustedContact.phoneE164 ?? "");
+                            setContactPhoneFormError(null);
+                            setIsEditingContactPhone(true);
+                          }}
+                        >
+                          Edit
+                        </button>
                       </div>
-                      {principal?.role === "admin" && isEditingContactPhone && (
+                      {isEditingContactPhone && (
                         <form className="phone-editor" onSubmit={saveContactPhone}>
                           <label className="form-field">
                             Phone number
@@ -1207,8 +1270,7 @@ function DashboardApp() {
                         </li>
                       </ul>
                     </div>
-                    {principal?.role === "admin" && (
-                      <div className="contact-actions">
+                    <div className="contact-actions">
                         <label className="contact-attestation">
                           <input
                             className="consent-toggle"
@@ -1248,14 +1310,9 @@ function DashboardApp() {
                           Create SMS opt-in link
                         </button>
                       </div>
-                    )}
                   </li>
                 </ul>
                 )}
-              </>
-            ) : (
-              <p className="empty-state">Contact access is not available through this link.</p>
-            )}
             {!isAddingContact && (selectedTrustedContact?.dashboardGrant || magicLink) && (
               <div className="compact-form magic-link" aria-live="polite">
                 <strong>Dashboard link</strong>
@@ -1280,7 +1337,7 @@ function DashboardApp() {
                 ) : (
                   <p className="magic-link-meta">Expires in seven days.</p>
                 )}
-                {principal?.role === "admin" && selectedTrustedContact?.dashboardGrant && (
+                {selectedTrustedContact?.dashboardGrant && (
                   <button
                     className="secondary-button full-width-action"
                     type="button"
@@ -1315,7 +1372,7 @@ function DashboardApp() {
                 )}
               </div>
             )}
-            {principal?.role === "admin" && isAddingContact && (
+            {isAddingContact && (
               <form className="compact-form" onSubmit={createTrustedContact}>
                 <strong>Add a trusted contact</strong>
                 <label className="form-field">
@@ -1346,7 +1403,9 @@ function DashboardApp() {
               </form>
             )}
           </section>
+          )}
 
+          {principal?.role === "admin" && (
           <section className="overview-card actions-card">
             <div className="card-header">
               <p className="card-kicker">Actions</p>
@@ -1381,6 +1440,7 @@ function DashboardApp() {
               </div>
             )}
           </section>
+          )}
             </>
           )}
         </div>

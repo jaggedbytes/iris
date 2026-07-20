@@ -117,6 +117,34 @@ function canAccessPerson(principal: DashboardPrincipal, personId: string) {
   return principal.role === "admin" || principal.personId === personId;
 }
 
+function smsOptInStatusForContact(
+  repositories: IrisRepositories,
+  trustedContactId: string,
+): "opted_in" | "not_opted_in" | "opted_out" {
+  const status = repositories.getTrustedContactSmsOptInStatus(trustedContactId);
+  const eligible = repositories.isTrustedContactSmsEligible(trustedContactId);
+  if (status === "granted" && eligible) return "opted_in";
+  if (status === "revoked") return "opted_out";
+  return "not_opted_in";
+}
+
+function projectTrustedContactViewer(
+  repositories: IrisRepositories,
+  trustedContactId: string,
+) {
+  const contact = repositories.getTrustedContact(trustedContactId);
+  if (!contact) return null;
+  const enrollment = repositories.getTrustedContactSmsEnrollmentState(contact.id);
+  return {
+    id: contact.id,
+    displayName: contact.displayName,
+    relationship: contact.relationship,
+    phoneE164: contact.phoneE164,
+    smsOptInStatus: smsOptInStatusForContact(repositories, contact.id),
+    confirmationState: enrollment.confirmationState,
+  };
+}
+
 function requestedScopes(value: unknown) {
   if (!Array.isArray(value) || value.length === 0) return null;
   if (
@@ -397,22 +425,12 @@ export function createDashboardRouter(context: DashboardContext) {
       && context.repositories.hasActiveConsent(personId, "care_summary_sharing");
 
     response.json({
-      // The phone number is operator-only PII; trusted contacts receive a
-      // scope-appropriate projection regardless of their granted view scopes.
-      person:
-        principal.role === "admin"
-          ? {
-              id: person.id,
-              displayName: person.displayName,
-              phoneE164: person.phoneE164,
-              phoneNumberStatus: person.phoneE164 ? "configured" : "not_configured",
-            }
-          : {
-              id: person.id,
-              displayName: person.displayName,
-              phoneE164: null,
-              phoneNumberStatus: "private",
-            },
+      person: {
+        id: person.id,
+        displayName: person.displayName,
+        phoneE164: person.phoneE164,
+        phoneNumberStatus: person.phoneE164 ? "configured" : "not_configured",
+      },
       calls: hasScope(principal, "view_summaries")
         ? context.repositories.listCalls(personId).map((call) => callOverview(call, careSummarySharingActive, principal.role === "admin"))
         : [],
@@ -425,18 +443,12 @@ export function createDashboardRouter(context: DashboardContext) {
       contacts:
         principal.role === "admin"
           ? context.repositories.listTrustedContacts(personId).map((contact) => {
-              const status = context.repositories.getTrustedContactSmsOptInStatus(contact.id);
-              const eligible = context.repositories.isTrustedContactSmsEligible(contact.id);
               const enrollment = context.repositories.getTrustedContactSmsEnrollmentState(contact.id);
               const activeOptInInvitation = context.repositories.findLatestActiveSmsOptInInvitation(contact.id);
               const grant = context.repositories.findLatestActiveGrantForTrustedContact(contact.id);
               return {
                 ...contact,
-                smsOptInStatus: status === "granted" && eligible
-                  ? "opted_in"
-                  : status === "revoked"
-                    ? "opted_out"
-                    : "not_opted_in",
+                smsOptInStatus: smsOptInStatusForContact(context.repositories, contact.id),
                 ...enrollment,
                 smsOptInInvitation: activeOptInInvitation
                   ? { createdAt: activeOptInInvitation.createdAt, expiresAt: activeOptInInvitation.expiresAt }
@@ -447,6 +459,10 @@ export function createDashboardRouter(context: DashboardContext) {
               };
             })
           : [],
+      viewer:
+        principal.role === "trusted_contact"
+          ? projectTrustedContactViewer(context.repositories, principal.trustedContactId)
+          : null,
       actions:
         principal.role === "admin"
           ? context.repositories.listActionRequests(personId).map((action) => ({
@@ -459,13 +475,10 @@ export function createDashboardRouter(context: DashboardContext) {
               dispatchState: context.repositories.getActionDispatch(action.id)?.state ?? null,
             }))
           : [],
-      consents:
-        principal.role === "admin"
-          ? {
-              summaryRetention: context.repositories.hasActiveConsent(personId, "summary_retention"),
-              careSummarySharing: context.repositories.hasActiveConsent(personId, "care_summary_sharing"),
-            }
-          : null,
+      consents: {
+        summaryRetention: context.repositories.hasActiveConsent(personId, "summary_retention"),
+        careSummarySharing: context.repositories.hasActiveConsent(personId, "care_summary_sharing"),
+      },
       permissions:
         principal.role === "admin" ? ALL_SCOPES : principal.scopes,
     });
