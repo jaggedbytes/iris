@@ -125,6 +125,7 @@ function DashboardApp() {
   const [principal, setPrincipal] = useState<DashboardPrincipal | null>(null);
   const [overview, setOverview] = useState<DashboardOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [accessTokenError, setAccessTokenError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(Boolean(token));
   const [magicLink, setMagicLink] = useState<string | null>(null);
   const [optInLink, setOptInLink] = useState<string | null>(null);
@@ -371,7 +372,11 @@ function DashboardApp() {
   const signIn = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const nextToken = adminTokenInput.trim();
-    if (!nextToken) return;
+    if (!nextToken) {
+      setAccessTokenError("Enter your operator access token to open the dashboard.");
+      return;
+    }
+    setAccessTokenError(null);
     sessionStorage.setItem(SESSION_TOKEN_KEY, nextToken);
     setToken(nextToken);
   };
@@ -743,19 +748,22 @@ function DashboardApp() {
         <section className="access-card" aria-labelledby="access-title">
           <p className="eyebrow">Iris companion</p>
           <h1 id="access-title">Trusted dashboard access.</h1>
-          <p>
-            Family links are scoped and revocable. Operators can sign in with
-            the local dashboard token.
+          <p className="access-introduction">
+            Use an operator access token to manage people, trusted contacts, and Iris calls. Family members can use a private link to see shared updates and request a check-in.
           </p>
-          <form onSubmit={signIn}>
+          <form noValidate onSubmit={signIn}>
             <label htmlFor="admin-token">Operator access token</label>
             <input
               id="admin-token"
               type="password"
               value={adminTokenInput}
-              onChange={(event) => setAdminTokenInput(event.target.value)}
+              onChange={(event) => {
+                setAdminTokenInput(event.target.value);
+                setAccessTokenError(null);
+              }}
               autoComplete="current-password"
             />
+            {accessTokenError && <p className="form-validation-error" role="alert">{accessTokenError}</p>}
             <button type="submit">Open dashboard</button>
           </form>
           {error && <p className="form-error" role="alert">{error}</p>}
