@@ -403,6 +403,9 @@ test("Shield tools dispatch only from completed response.done calls and preserve
     realtime.emit("open");
     const sessionUpdate = JSON.parse(realtime.sent[0]) as { session: { instructions: string; tools: Array<{ name: string }> } };
     assert.match(sessionUpdate.session.instructions, /Never state that something is definitely a scam/);
+    assert.match(sessionUpdate.session.instructions, /stop or limit contact with the suspicious party/);
+    assert.match(sessionUpdate.session.instructions, /do not help draft, send, or refine any reply/);
+    assert.match(sessionUpdate.session.instructions, /promptly offer to send the fixed Shield check-in alert/);
     assert.match(sessionUpdate.session.instructions, /Iris is speaking with Avery about something that feels urgent or suspicious\. Please check in with them when you can\./);
     assert.match(sessionUpdate.session.instructions, /Shield context: the listed trusted contacts are \[\{"id":"contact-a","name":"Robin"\}\]/);
     assert.deepEqual(sessionUpdate.session.tools.map((tool) => tool.name).sort(), ["bridge_send_sms", "end_call", "shield_assess", "shield_send_alert"].sort());
