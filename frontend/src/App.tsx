@@ -348,8 +348,11 @@ function DashboardApp() {
         if (loadError instanceof DashboardError && loadError.isAuthError) {
           sessionStorage.removeItem(SESSION_TOKEN_KEY);
           setToken("");
+          setAccessTokenError(loadError.message);
+          setError(null);
+        } else {
+          setError(loadError instanceof Error ? loadError.message : "Unable to load the dashboard.");
         }
-        setError(loadError instanceof Error ? loadError.message : "Unable to load the dashboard.");
       } finally {
         if (!cancelled && requestId === overviewRequestId.current) {
           overviewLoadInFlight.current = false;
@@ -402,6 +405,8 @@ function DashboardApp() {
     overviewRequestId.current += 1;
     sessionStorage.removeItem(SESSION_TOKEN_KEY);
     setToken("");
+    setAccessTokenError(null);
+    setError(null);
     setMagicLink(null);
     setOptInLink(null);
     setSelectedPersonId(null);
@@ -778,11 +783,14 @@ function DashboardApp() {
                 setAccessTokenError(null);
               }}
               autoComplete="current-password"
+              aria-invalid={Boolean(accessTokenError)}
+              aria-describedby={accessTokenError ? "admin-token-error" : undefined}
             />
-            {accessTokenError && <p className="form-validation-error" role="alert">{accessTokenError}</p>}
+            {accessTokenError && (
+              <p id="admin-token-error" className="form-validation-error" role="alert">{accessTokenError}</p>
+            )}
             <button type="submit">Open dashboard</button>
           </form>
-          {error && <p className="form-error" role="alert">{error}</p>}
         </section>
       </main>
     );
