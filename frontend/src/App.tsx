@@ -253,6 +253,7 @@ function DashboardApp() {
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editingNoteDraft, setEditingNoteDraft] = useState("");
   const [savingEditedNoteId, setSavingEditedNoteId] = useState<string | null>(null);
+  const [callActivityNewestFirst, setCallActivityNewestFirst] = useState(false);
   const [callThreadRefreshVersion, setCallThreadRefreshVersion] = useState(0);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [dashboardPage, setDashboardPage] = useState<DashboardPage>(() =>
@@ -319,6 +320,7 @@ function DashboardApp() {
 
   const selectCallThread = (callId: string) => {
     if (selectedCallId === callId) {
+      if (overview?.calls.length === 1) return;
       clearCallThread("push");
       return;
     }
@@ -524,6 +526,21 @@ function DashboardApp() {
     // The URL may be stale, inaccessible, or point to a call that disappeared
     // after a person switch. Normalize it quietly rather than showing an error.
     clearCallThread();
+  }, [dashboardPage, selectedCallId, visibleCallIds]);
+
+  useEffect(() => {
+    if (dashboardPage !== "activity" || !overview || overview.calls.length !== 1) return;
+    const onlyCallId = overview.calls[0]!.id;
+    if (selectedCallId === onlyCallId) return;
+    callThreadRequestId.current += 1;
+    setSelectedCallId(onlyCallId);
+    setCallThread(null);
+    setCallThreadError(null);
+    setCallNoteDraft("");
+    setCallNoteFormError(null);
+    const location = new URL(window.location.href);
+    location.searchParams.set("call", onlyCallId);
+    window.history.replaceState({}, "", `${location.pathname}${location.search}${location.hash}`);
   }, [dashboardPage, selectedCallId, visibleCallIds]);
 
   useEffect(() => {
@@ -1225,10 +1242,17 @@ function DashboardApp() {
   const callThreadFeed = callThread ? [
     ...callThread.events.map((event) => ({ id: `event-${event.id}`, kind: "event" as const, occurredAt: event.occurredAt, event })),
     ...callThread.notes.map((note) => ({ id: `note-${note.id}`, kind: "note" as const, occurredAt: note.createdAt, note })),
-  ].sort((left, right) => left.occurredAt.localeCompare(right.occurredAt) || left.id.localeCompare(right.id)) : [];
+  ].sort((left, right) => {
+    const byTime = callActivityNewestFirst
+      ? right.occurredAt.localeCompare(left.occurredAt)
+      : left.occurredAt.localeCompare(right.occurredAt);
+    return byTime || (callActivityNewestFirst
+      ? right.id.localeCompare(left.id)
+      : left.id.localeCompare(right.id));
+  }) : [];
 
   const recentCallsCard = overview && canViewSummaries ? (
-    <section className="overview-card recent-calls-card">
+    <section className={`overview-card recent-calls-card${selectedCallId ? " is-expanded" : ""}`}>
       <div className="card-heading">
         <div className="card-header">
           <p className="card-kicker">Recent calls</p>
@@ -1238,132 +1262,153 @@ function DashboardApp() {
         <span className="count-pill">{overview.calls.length}</span>
       </div>
       {overview.calls.length ? (
-        <ol className="call-thread-list">
-          {overview.calls.map((call) => (
-            <li key={call.id} className={`call-thread-item${selectedCallId === call.id ? " is-open" : ""}`}>
-              <button
-                className="call-thread-toggle"
-                type="button"
-                aria-expanded={selectedCallId === call.id}
-                aria-controls={`call-thread-${call.id}`}
-                onClick={() => selectCallThread(call.id)}
-              >
-                <span>
-                  <strong>{callSharedHeadline(
-                    call.careSummary,
-                    call.summaryState,
-                    careConsents?.careSummarySharing ?? null,
-                    call.privateSummarySaved,
-                    call.status,
-                  )}</strong>
-                  <span>{formatDate(call.startedAt)} · {call.status}</span>
-                </span>
-                <span className="call-thread-chevron" aria-hidden="true">{selectedCallId === call.id ? "−" : "+"}</span>
-              </button>
-              {selectedCallId === call.id && (
-                <div id={`call-thread-${call.id}`} className="call-thread-detail">
-                  {isLoadingCallThread && !callThread && <p className="loading-note">Loading this call…</p>}
-                  {callThreadError && <p className="form-validation-error" role="alert">{callThreadError}</p>}
-                  {callThread && (
-                    <>
-                      <div className="call-thread-recap">
-                        <strong>Conversation recap</strong>
-                        <p>{summaryLabel(
-                          callThread.call.careSummary,
-                          callThread.call.summaryState,
-                          careConsents?.careSummarySharing ?? null,
-                          callThread.call.privateSummarySaved,
-                          callThread.call.status,
-                        )}</p>
-                        {callThread.call.careSummary && (
-                          <>
-                            {callThread.call.careSummary.moodAndConcerns.length > 0 && (
-                              <div className="care-summary">
-                                <strong>{givenName(overview.person.displayName)} shared</strong>
-                                <ul>{callThread.call.careSummary.moodAndConcerns.map((item, index) => <li key={`${call.id}-thread-mood-${index}`}>{formatSharedConcern(item)}</li>)}</ul>
+        <div className={`call-thread-layout${selectedCallId ? " is-expanded" : ""}`}>
+          <div className="call-thread-list-column">
+            <ol className="call-thread-list">
+              {overview.calls.map((call) => (
+                <li key={call.id} className={`call-thread-item${selectedCallId === call.id ? " is-open" : ""}`}>
+                  <button
+                    className="call-thread-toggle"
+                    type="button"
+                    aria-expanded={selectedCallId === call.id}
+                    aria-controls="call-thread-detail"
+                    onClick={() => selectCallThread(call.id)}
+                  >
+                    <span>
+                      <strong>{callSharedHeadline(
+                        call.careSummary,
+                        call.summaryState,
+                        careConsents?.careSummarySharing ?? null,
+                        call.privateSummarySaved,
+                        call.status,
+                      )}</strong>
+                      <span>{formatDate(call.startedAt)} · {call.status}</span>
+                    </span>
+                    {overview.calls.length > 1 && (
+                      <span className="call-thread-chevron" aria-hidden="true">{selectedCallId === call.id ? "−" : "+"}</span>
+                    )}
+                  </button>
+                </li>
+              ))}
+            </ol>
+          </div>
+          {selectedCallId && (
+            <div id="call-thread-detail" className="call-thread-detail-columns">
+              <div className="call-thread-summary-column">
+                {isLoadingCallThread && !callThread && <p className="loading-note">Loading this call…</p>}
+                {callThreadError && <p className="form-validation-error" role="alert">{callThreadError}</p>}
+                {callThread && (
+                  <>
+                    <div className="call-thread-recap">
+                      <strong>Conversation recap</strong>
+                      <p>{summaryLabel(
+                        callThread.call.careSummary,
+                        callThread.call.summaryState,
+                        careConsents?.careSummarySharing ?? null,
+                        callThread.call.privateSummarySaved,
+                        callThread.call.status,
+                      )}</p>
+                      {callThread.call.careSummary && (
+                        <>
+                          {callThread.call.careSummary.moodAndConcerns.length > 0 && (
+                            <div className="care-summary">
+                              <strong>{givenName(overview.person.displayName)} shared</strong>
+                              <ul>{callThread.call.careSummary.moodAndConcerns.map((item, index) => <li key={`${selectedCallId}-thread-mood-${index}`}>{formatSharedConcern(item)}</li>)}</ul>
+                            </div>
+                          )}
+                          <IrisSuggestions idPrefix={`${selectedCallId}-thread`} items={callThread.call.careSummary.irisSuggestedNextSteps} />
+                        </>
+                      )}
+                    </div>
+                    {canUseCareNotes && (
+                      <form className="compact-form notes-form call-thread-note-form" noValidate onSubmit={addCallNote}>
+                        <label className="form-field" htmlFor={`call-note-${selectedCallId}`}>
+                          Add a note
+                          <span>Share an update about this call with the care circle.</span>
+                          <textarea
+                            id={`call-note-${selectedCallId}`}
+                            value={callNoteDraft}
+                            maxLength={1000}
+                            placeholder="e.g. I will check in after dinner."
+                            onChange={(event) => {
+                              setCallNoteDraft(event.target.value);
+                              setCallNoteFormError(null);
+                            }}
+                          />
+                          {callNoteFormError && <p className="form-validation-error" role="alert">{callNoteFormError}</p>}
+                        </label>
+                        <button className="secondary-button full-width-action" type="submit" disabled={isSavingCallNote}>
+                          {isSavingCallNote ? "Saving…" : "Save note"}
+                        </button>
+                      </form>
+                    )}
+                  </>
+                )}
+              </div>
+              <div className="call-thread-activity-column">
+                {callThread && (canViewThreadEvents || canUseCareNotes) && (
+                  <div className="call-thread-activity">
+                    <div className="call-thread-activity-heading">
+                      <strong>Call activity</strong>
+                      <button
+                        className="person-phone-edit"
+                        type="button"
+                        aria-pressed={callActivityNewestFirst}
+                        onClick={() => setCallActivityNewestFirst((current) => !current)}
+                      >
+                        {callActivityNewestFirst ? "Newest first" : "Oldest first"}
+                      </button>
+                    </div>
+                    {callThreadFeed.length ? (
+                      <ol className="item-list">
+                        {callThreadFeed.map((item) => item.kind === "event" ? (
+                          <li key={item.id}>
+                            <strong>{timelineCopy(item.event, overview.person.displayName)}</strong>
+                            <span>{formatDate(item.occurredAt)}</span>
+                          </li>
+                        ) : (
+                          <li key={item.id}>
+                            <strong>{item.note.authorDisplayName}{item.note.authorRelationship ? ` · ${item.note.authorRelationship}` : ""}</strong>
+                            <span>{formatDate(item.occurredAt)}</span>
+                            {editingNoteId === item.note.id ? (
+                              <div className="note-editor">
+                                <textarea
+                                  value={editingNoteDraft}
+                                  maxLength={1000}
+                                  aria-label="Edit note"
+                                  onChange={(event) => setEditingNoteDraft(event.target.value)}
+                                />
+                                <div className="note-controls">
+                                  <button className="person-phone-edit" type="button" disabled={!editingNoteDraft.trim() || savingEditedNoteId === item.note.id} onClick={() => void saveEditedNote(item.note.id)}>
+                                    {savingEditedNoteId === item.note.id ? "Saving…" : "Save"}
+                                  </button>
+                                  <button className="remove-person-button" type="button" disabled={savingEditedNoteId === item.note.id} onClick={() => { setEditingNoteId(null); setEditingNoteDraft(""); }}>
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            ) : <p className="care-note-body">{item.note.body}</p>}
+                            {item.note.canEdit && editingNoteId !== item.note.id && (
+                              <div className="note-controls">
+                                <button className="person-phone-edit" type="button" onClick={() => beginEditingNote(item.note)}>Edit</button>
+                                <button className="remove-person-button" type="button" disabled={savingEditedNoteId === item.note.id} onClick={() => void deleteNote(item.note.id)}>Delete</button>
                               </div>
                             )}
-                            <IrisSuggestions idPrefix={`${call.id}-thread`} items={callThread.call.careSummary.irisSuggestedNextSteps} />
-                          </>
-                        )}
-                      </div>
-                      {canViewThreadEvents || canUseCareNotes ? (
-                        <div className="call-thread-activity">
-                          <strong>Call activity</strong>
-                          {callThreadFeed.length ? (
-                            <ol className="item-list">
-                              {callThreadFeed.map((item) => item.kind === "event" ? (
-                                <li key={item.id}>
-                                  <strong>{timelineCopy(item.event, overview.person.displayName)}</strong>
-                                  <span>{formatDate(item.occurredAt)}</span>
-                                </li>
-                              ) : (
-                                <li key={item.id}>
-                                  <strong>{item.note.authorDisplayName}{item.note.authorRelationship ? ` · ${item.note.authorRelationship}` : ""}</strong>
-                                  <span>{formatDate(item.occurredAt)}</span>
-                                  {editingNoteId === item.note.id ? (
-                                    <div className="note-editor">
-                                      <textarea
-                                        value={editingNoteDraft}
-                                        maxLength={1000}
-                                        aria-label="Edit note"
-                                        onChange={(event) => setEditingNoteDraft(event.target.value)}
-                                      />
-                                      <div className="note-controls">
-                                        <button className="person-phone-edit" type="button" disabled={!editingNoteDraft.trim() || savingEditedNoteId === item.note.id} onClick={() => void saveEditedNote(item.note.id)}>
-                                          {savingEditedNoteId === item.note.id ? "Saving…" : "Save"}
-                                        </button>
-                                        <button className="remove-person-button" type="button" disabled={savingEditedNoteId === item.note.id} onClick={() => { setEditingNoteId(null); setEditingNoteDraft(""); }}>
-                                          Cancel
-                                        </button>
-                                      </div>
-                                    </div>
-                                  ) : <p className="care-note-body">{item.note.body}</p>}
-                                  {item.note.canEdit && editingNoteId !== item.note.id && (
-                                    <div className="note-controls">
-                                      <button className="person-phone-edit" type="button" onClick={() => beginEditingNote(item.note)}>Edit</button>
-                                      <button className="remove-person-button" type="button" disabled={savingEditedNoteId === item.note.id} onClick={() => void deleteNote(item.note.id)}>Delete</button>
-                                    </div>
-                                  )}
-                                </li>
-                              ))}
-                            </ol>
-                          ) : (
-                            <div className="empty-state-card"><p className="empty-state">No call activity yet.</p></div>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="empty-state-card"><p className="empty-state">Call activity is not included with this link.</p></div>
-                      )}
-                      {canUseCareNotes && (
-                        <form className="compact-form notes-form call-thread-note-form" noValidate onSubmit={addCallNote}>
-                          <label className="form-field" htmlFor={`call-note-${call.id}`}>
-                            Add a note
-                            <span>Share an update about this call with the care circle.</span>
-                            <textarea
-                              id={`call-note-${call.id}`}
-                              value={callNoteDraft}
-                              maxLength={1000}
-                              placeholder="e.g. I will check in after dinner."
-                              onChange={(event) => {
-                                setCallNoteDraft(event.target.value);
-                                setCallNoteFormError(null);
-                              }}
-                            />
-                            {callNoteFormError && <p className="form-validation-error" role="alert">{callNoteFormError}</p>}
-                          </label>
-                          <button className="secondary-button full-width-action" type="submit" disabled={isSavingCallNote}>
-                            {isSavingCallNote ? "Saving…" : "Save note"}
-                          </button>
-                        </form>
-                      )}
-                    </>
-                  )}
-                </div>
-              )}
-            </li>
-          ))}
-        </ol>
+                          </li>
+                        ))}
+                      </ol>
+                    ) : (
+                      <div className="empty-state-card"><p className="empty-state">No call activity yet.</p></div>
+                    )}
+                  </div>
+                )}
+                {callThread && !canViewThreadEvents && !canUseCareNotes && (
+                  <div className="empty-state-card"><p className="empty-state">Call activity is not included with this link.</p></div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       ) : (
         <div className="empty-state-card">
           <p className="empty-state">Shared notes from calls with Iris will appear here.</p>

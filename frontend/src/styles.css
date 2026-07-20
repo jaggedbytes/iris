@@ -708,7 +708,7 @@
 
   /* Recent calls + timeline lists */
   .recent-calls-card {
-    @apply order-5;
+    @apply order-5 col-span-12 max-[820px]:col-span-full;
   }
 
   .timeline-card {
@@ -719,16 +719,57 @@
     @apply mt-[1.2rem] grid list-none gap-[0.7rem] p-0;
   }
 
+  .call-thread-layout {
+    @apply mt-[1.2rem] grid gap-4;
+  }
+
+  .call-thread-layout.is-expanded {
+    @apply min-[821px]:grid-cols-3 min-[821px]:items-start;
+  }
+
+  .call-thread-list-column {
+    @apply min-w-0;
+  }
+
+  .call-thread-layout.is-expanded .call-thread-list-column {
+    @apply min-[821px]:col-span-1;
+  }
+
+  .call-thread-detail-columns {
+    @apply grid gap-4 min-[821px]:col-span-2 min-[821px]:grid-cols-2 min-[821px]:items-start;
+  }
+
+  .call-thread-summary-column,
+  .call-thread-activity-column {
+    @apply min-w-0 p-[0.8rem];
+  }
+
+  .call-thread-summary-column {
+    @apply grid content-start gap-4;
+  }
+
   .call-thread-list {
-    @apply mt-[1.2rem] grid list-none gap-[0.7rem] p-0;
+    @apply grid list-none gap-[0.7rem] p-0;
+  }
+
+  .call-thread-layout:not(.is-expanded) .call-thread-list {
+    @apply mt-0;
   }
 
   .call-thread-item {
     @apply overflow-hidden rounded-[0.7rem] bg-subtle;
   }
 
+  .call-thread-item.is-open {
+    @apply bg-lilac/40;
+  }
+
   .call-thread-toggle {
-    @apply flex w-full items-start justify-between gap-3 p-[0.8rem] text-left transition-colors hover:bg-lilac/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary;
+    @apply flex w-full items-start justify-between gap-3 border-0 bg-transparent p-[0.8rem] text-left transition-colors hover:bg-lilac/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-primary;
+  }
+
+  .call-thread-item.is-open .call-thread-toggle {
+    @apply bg-lilac/40;
   }
 
   .call-thread-toggle > span:first-child {
@@ -747,17 +788,17 @@
     @apply shrink-0 text-xl leading-none text-primary-dark;
   }
 
-  .call-thread-detail {
-    @apply grid gap-4 border-t border-border bg-surface p-[0.8rem];
-  }
-
   .call-thread-recap,
   .call-thread-activity {
     @apply grid gap-[0.45rem];
   }
 
+  .call-thread-activity-heading {
+    @apply flex items-center justify-between gap-3;
+  }
+
   .call-thread-recap > strong,
-  .call-thread-activity > strong {
+  .call-thread-activity-heading > strong {
     @apply text-[0.82rem];
   }
 
@@ -769,7 +810,8 @@
     @apply mt-0;
   }
 
-  .call-thread-activity .empty-state-card {
+  .call-thread-activity .empty-state-card,
+  .call-thread-activity-column > .empty-state-card {
     @apply mt-0;
   }
 
@@ -819,6 +861,10 @@
 
   .care-summary ul {
     @apply mt-[0.22rem] list-disc pl-[1.1rem];
+  }
+
+  .care-summary li {
+    @apply text-[0.88rem] leading-[1.5];
   }
 
   /* Opt-in / legal */
