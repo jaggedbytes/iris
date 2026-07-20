@@ -453,12 +453,12 @@ export function createDashboardRouter(context: DashboardContext) {
         : null,
       ...(canUseCareNotes
         ? {
-          notes: context.repositories.listCareNotes(personId).map(noteOverview),
+          notes: context.repositories.listUnthreadedCareNotes(personId).map(noteOverview),
           lastCheckInAt: context.repositories.lastCheckInAt(personId, canSeeCompletedCallsForCheckIn),
         }
         : {}),
       events: hasScope(principal, "view_events")
-        ? context.repositories.listEvents(personId).map(timelineEvent)
+        ? context.repositories.listUnlinkedEvents(personId).map(timelineEvent)
         : [],
       contacts:
         principal.role === "admin"
@@ -504,6 +504,36 @@ export function createDashboardRouter(context: DashboardContext) {
     });
   });
 
+  router.get("/people/:personId/calls/:callId/thread", (request, response) => {
+    const principal = requirePrincipal(request, response, context);
+    if (!principal) return;
+    const { personId, callId } = request.params;
+    if (!canAccessPerson(principal, personId)) {
+      response.status(403).json({ error: "This link cannot access that person." });
+      return;
+    }
+    if (!hasScope(principal, "view_summaries")) {
+      response.status(403).json({ error: "This link cannot view call threads." });
+      return;
+    }
+    const call = context.repositories.getCallForPerson(personId, callId);
+    if (!call) {
+      response.status(404).json({ error: "Call not found." });
+      return;
+    }
+    const careSummarySharingActive = context.repositories.hasActiveConsent(personId, "summary_retention")
+      && context.repositories.hasActiveConsent(personId, "care_summary_sharing");
+    response.json({
+      call: callOverview(call, careSummarySharingActive, principal.role === "admin"),
+      events: hasScope(principal, "view_events")
+        ? context.repositories.listEventsForCall(personId, callId).map(timelineEvent)
+        : [],
+      notes: hasScope(principal, "care_notes")
+        ? context.repositories.listCareNotesForCall(personId, callId).map(noteOverview)
+        : [],
+    });
+  });
+
   router.post("/people/:personId/notes", (request, response) => {
     const principal = requirePrincipal(request, response, context);
     if (!principal) return;
@@ -536,6 +566,47 @@ export function createDashboardRouter(context: DashboardContext) {
     const note = context.repositories.createCareNote({
       id: randomUUID(),
       personId,
+      authorRole: principal.role === "admin" ? "operator" : "trusted_contact",
+      authorTrustedContactId: contact?.id ?? null,
+      authorDisplayName: contact?.displayName ?? "Operator",
+      authorRelationship: contact?.relationship ?? null,
+      body,
+    });
+    response.status(201).json({ note: noteOverview(note) });
+  });
+
+  router.post("/people/:personId/calls/:callId/notes", (request, response) => {
+    const principal = requirePrincipal(request, response, context);
+    if (!principal) return;
+    const { personId, callId } = request.params;
+    if (!canAccessPerson(principal, personId)) {
+      response.status(403).json({ error: "This link cannot access that person." });
+      return;
+    }
+    if (!hasScope(principal, "view_summaries") || !hasScope(principal, "care_notes")) {
+      response.status(403).json({ error: "This link cannot add notes to call threads." });
+      return;
+    }
+    if (!context.repositories.getCallForPerson(personId, callId)) {
+      response.status(404).json({ error: "Call not found." });
+      return;
+    }
+    const body = stringField(request.body?.body, 1000);
+    if (!body) {
+      response.status(400).json({ error: "Enter a note up to 1,000 characters." });
+      return;
+    }
+    const contact = principal.role === "trusted_contact"
+      ? context.repositories.getTrustedContact(principal.trustedContactId)
+      : null;
+    if (principal.role === "trusted_contact" && (!contact || contact.personId !== personId)) {
+      response.status(403).json({ error: "This link cannot add notes to call threads." });
+      return;
+    }
+    const note = context.repositories.createCareNote({
+      id: randomUUID(),
+      personId,
+      callId,
       authorRole: principal.role === "admin" ? "operator" : "trusted_contact",
       authorTrustedContactId: contact?.id ?? null,
       authorDisplayName: contact?.displayName ?? "Operator",

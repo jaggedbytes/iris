@@ -983,6 +983,13 @@ export function createRepositories(database: IrisDatabase) {
       return rows.map(toCall);
     },
 
+    getCallForPerson(personId: string, callId: string) {
+      const row = database
+        .prepare("SELECT * FROM calls WHERE person_id = ? AND id = ?")
+        .get(personId, callId) as CallRow | undefined;
+      return row ? toCall(row) : null;
+    },
+
     createCareNote(input: {
       id: string;
       personId: string;
@@ -1020,6 +1027,13 @@ export function createRepositories(database: IrisDatabase) {
     listCareNotes(personId: string) {
       const rows = database.prepare(
         "SELECT * FROM care_notes WHERE person_id = ? ORDER BY created_at DESC, rowid DESC",
+      ).all(personId) as CareNoteRow[];
+      return rows.map(toCareNote);
+    },
+
+    listUnthreadedCareNotes(personId: string) {
+      const rows = database.prepare(
+        "SELECT * FROM care_notes WHERE person_id = ? AND call_id IS NULL ORDER BY created_at DESC, rowid DESC",
       ).all(personId) as CareNoteRow[];
       return rows.map(toCareNote);
     },
@@ -1259,6 +1273,15 @@ export function createRepositories(database: IrisDatabase) {
       const rows = database
         .prepare(
           "SELECT * FROM events WHERE person_id = ? ORDER BY occurred_at DESC",
+        )
+        .all(personId) as EventRow[];
+      return rows.map(toEvent);
+    },
+
+    listUnlinkedEvents(personId: string) {
+      const rows = database
+        .prepare(
+          "SELECT * FROM events WHERE person_id = ? AND call_id IS NULL ORDER BY occurred_at DESC, rowid DESC",
         )
         .all(personId) as EventRow[];
       return rows.map(toEvent);

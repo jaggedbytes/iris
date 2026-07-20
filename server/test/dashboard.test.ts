@@ -660,6 +660,98 @@ test("projects generic Shield safety events to trusted contacts with view_events
   } finally { fixture.close(); }
 });
 
+test("scopes call threads and keeps linked activity out of overview feeds", async () => {
+  const fixture = await createDashboardServer();
+  try {
+    fixture.repositories.recordConsent({ id: "retention", personId: "person-a", kind: "summary_retention", status: "granted", source: "test" });
+    fixture.repositories.recordConsent({ id: "care", personId: "person-a", kind: "care_summary_sharing", status: "granted", source: "test" });
+    fixture.repositories.createCall({ id: "call-a", personId: "person-a", status: "completed" });
+    fixture.repositories.completeCall({
+      id: "call-a", status: "completed", summaryJson: JSON.stringify({
+        recap: "Private memory", facts: ["Private fact"], people: [], unresolvedTopics: [], recallAnchor: "Private anchor",
+        careSummary: { recap: "Avery talked about dinner.", moodAndConcerns: [], irisSuggestedNextSteps: [] },
+      }),
+    });
+    fixture.repositories.createEvent({
+      id: "thread-event", personId: "person-a", callId: "call-a", type: "bridge.sms_sent",
+      payload: { contactName: "Robin", body: "private text", to: "+15550001111" },
+    });
+    fixture.repositories.createEvent({ id: "general-event", personId: "person-a", type: "check_in.requested", payload: { requesterDisplayName: "Robin" } });
+    fixture.repositories.createCareNote({
+      id: "thread-note", personId: "person-a", callId: "call-a", authorRole: "operator",
+      authorDisplayName: "Operator", body: "Follow up tomorrow.",
+    });
+    fixture.repositories.createCareNote({
+      id: "general-note", personId: "person-a", authorRole: "operator",
+      authorDisplayName: "Operator", body: "General care-circle update.",
+    });
+    fixture.repositories.grantAccess({
+      id: "grant-full", personId: "person-a", trustedContactId: "contact-a",
+      scopes: ["view_summaries", "view_events", "care_notes"], tokenHash: hash("full-token"), expiresAt: futureExpiry(),
+    });
+    fixture.repositories.grantAccess({
+      id: "grant-summaries", personId: "person-a", trustedContactId: "contact-a",
+      scopes: ["view_summaries"], tokenHash: hash("summaries-token"), expiresAt: futureExpiry(),
+    });
+    fixture.repositories.grantAccess({
+      id: "grant-notes", personId: "person-a", trustedContactId: "contact-a",
+      scopes: ["care_notes"], tokenHash: hash("notes-token"), expiresAt: futureExpiry(),
+    });
+
+    const [overviewResponse, threadResponse] = await Promise.all([
+      fetch(`${fixture.url}/api/dashboard/people/person-a/overview`, { headers: { Authorization: "Bearer full-token" } }),
+      fetch(`${fixture.url}/api/dashboard/people/person-a/calls/call-a/thread`, { headers: { Authorization: "Bearer full-token" } }),
+    ]);
+    assert.equal(overviewResponse.status, 200);
+    assert.equal(threadResponse.status, 200);
+    const overview = await overviewResponse.json() as {
+      events: Array<{ id: string }>;
+      notes?: Array<{ id: string }>;
+    };
+    const thread = await threadResponse.json() as {
+      call: Record<string, unknown>;
+      events: Array<{ id: string; payload: unknown }>;
+      notes: Array<{ id: string; body: string }>;
+    };
+    assert.deepEqual(overview.events.map((event) => event.id), ["general-event"]);
+    assert.deepEqual(overview.notes?.map((note) => note.id), ["general-note"]);
+    assert.equal(thread.call.careSummary && typeof thread.call.careSummary === "object", true);
+    assert.deepEqual(thread.events.map((event) => ({ id: event.id, payload: event.payload })), [{ id: "thread-event", payload: { contactName: "Robin" } }]);
+    assert.deepEqual(thread.notes.map((note) => ({ id: note.id, body: note.body })), [{ id: "thread-note", body: "Follow up tomorrow." }]);
+    assert.equal(JSON.stringify(thread).includes("Private memory"), false);
+    assert.equal(JSON.stringify(thread).includes("private text"), false);
+
+    const summariesOnly = await fetch(`${fixture.url}/api/dashboard/people/person-a/calls/call-a/thread`, { headers: { Authorization: "Bearer summaries-token" } });
+    assert.equal(summariesOnly.status, 200);
+    assert.deepEqual(await summariesOnly.json(), {
+      call: thread.call,
+      events: [],
+      notes: [],
+    });
+    const notesOnly = await fetch(`${fixture.url}/api/dashboard/people/person-a/calls/call-a/thread`, { headers: { Authorization: "Bearer notes-token" } });
+    assert.equal(notesOnly.status, 403);
+
+    const created = await fetch(`${fixture.url}/api/dashboard/people/person-a/calls/call-a/notes`, {
+      method: "POST",
+      headers: { Authorization: "Bearer full-token", "Content-Type": "application/json" },
+      body: JSON.stringify({ body: "I will call this evening." }),
+    });
+    assert.equal(created.status, 201);
+    assert.equal(fixture.repositories.getCareNote((await created.json() as { note: { id: string } }).note.id)?.callId, "call-a");
+    const deniedPost = await fetch(`${fixture.url}/api/dashboard/people/person-a/calls/call-a/notes`, {
+      method: "POST",
+      headers: { Authorization: "Bearer summaries-token", "Content-Type": "application/json" },
+      body: JSON.stringify({ body: "No permission." }),
+    });
+    assert.equal(deniedPost.status, 403);
+
+    const missing = await fetch(`${fixture.url}/api/dashboard/people/person-a/calls/missing/thread`, { headers: { Authorization: `Bearer ${adminToken}` } });
+    assert.equal(missing.status, 404);
+    const wrongPerson = await fetch(`${fixture.url}/api/dashboard/people/person-b/calls/call-a/thread`, { headers: { Authorization: `Bearer ${adminToken}` } });
+    assert.equal(wrongPerson.status, 404);
+  } finally { fixture.close(); }
+});
+
 test("shares only a current call state with a check-in-only trusted contact", async () => {
   const fixture = await createDashboardServer();
   try {
