@@ -449,13 +449,8 @@ export function createDashboardRouter(context: DashboardContext) {
     const visibleCalls = hasScope(principal, "view_summaries")
       ? context.repositories.listCalls(personId)
       : [];
-    const homeNotes = canUseCareNotes
-      ? [
-          ...context.repositories.listUnthreadedCareNotes(personId),
-          ...(hasScope(principal, "view_summaries") && visibleCalls[0]
-            ? context.repositories.listCareNotesForCall(personId, visibleCalls[0].id)
-            : []),
-        ]
+    const homeNotes = canUseCareNotes && hasScope(principal, "view_summaries") && visibleCalls[0]
+      ? context.repositories.listCareNotesForCall(personId, visibleCalls[0].id)
       : [];
 
     response.json({
@@ -471,7 +466,7 @@ export function createDashboardRouter(context: DashboardContext) {
         : null,
       ...(canUseCareNotes
         ? {
-          // Home keeps general notes plus notes from exactly one visible call.
+          // Home shows care-circle notes for exactly the newest visible call.
           // Intentionally omit callId here so this safe feed cannot be used to
           // reconstruct call-thread associations.
           notes: homeNotes.map((note) => noteOverview(note, canEditCareNote(principal, note))),

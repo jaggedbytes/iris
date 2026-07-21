@@ -678,6 +678,11 @@ function DashboardApp() {
   const addCareNote = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!personId) return;
+    const homeCallId = overview?.calls[0]?.id;
+    if (!homeCallId) {
+      setNoteFormError("A recent Iris call is needed before you can add a note here.");
+      return;
+    }
     const body = noteDraft.trim();
     if (!body) {
       setNoteFormError("Enter a note before saving.");
@@ -687,7 +692,7 @@ function DashboardApp() {
     setNoteFormError(null);
     setError(null);
     try {
-      await dashboardJson(`/api/dashboard/people/${personId}/notes`, token, {
+      await dashboardJson(`/api/dashboard/people/${personId}/calls/${homeCallId}/notes`, token, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ body }),
@@ -1417,16 +1422,18 @@ function DashboardApp() {
     </section>
   ) : null;
 
-  const visibleIrisNotes = overview?.calls.filter((call) => call.careSummary) ?? [];
+  const newestHomeCall = overview?.calls[0] ?? null;
   const careNotes = overview?.notes ?? [];
   const notesFeed = [
-    ...visibleIrisNotes.map((call) => ({
-      id: `iris-${call.id}`,
-      kind: "iris" as const,
-      occurredAt: call.startedAt,
-      recap: call.careSummary!.recap,
-      suggestions: call.careSummary!.irisSuggestedNextSteps,
-    })),
+    ...(newestHomeCall?.careSummary
+      ? [{
+          id: `iris-${newestHomeCall.id}`,
+          kind: "iris" as const,
+          occurredAt: newestHomeCall.startedAt,
+          recap: newestHomeCall.careSummary.recap,
+          suggestions: newestHomeCall.careSummary.irisSuggestedNextSteps,
+        }]
+      : []),
     ...careNotes.map((note) => ({
       id: `note-${note.id}`,
       noteId: note.id,
@@ -1444,7 +1451,7 @@ function DashboardApp() {
         <div className="card-header">
           <p className="card-kicker">Notes</p>
           <h2>Care-circle updates</h2>
-          <p className="privacy-note">Keep track of recent Iris calls and the ways your care circle has connected.</p>
+          <p className="privacy-note">Keep track of the latest Iris call and the ways your care circle has connected.</p>
         </div>
         <span className="count-pill">{notesFeed.length}</span>
       </div>
@@ -1499,26 +1506,30 @@ function DashboardApp() {
           <p className="empty-state">Care-circle updates will appear here.</p>
         </div>
       )}
-      <form className="compact-form notes-form" noValidate onSubmit={addCareNote}>
-        <label className="form-field" htmlFor="care-note">
-          Add a note
-          <span>Share a quick update with this person’s care circle.</span>
-          <textarea
-            id="care-note"
-            value={noteDraft}
-            maxLength={1000}
-            placeholder="e.g. I called after dinner and they sounded in good spirits."
-            onChange={(event) => {
-              setNoteDraft(event.target.value);
-              setNoteFormError(null);
-            }}
-          />
-          {noteFormError && <p className="form-validation-error" role="alert">{noteFormError}</p>}
-        </label>
-        <button className="secondary-button full-width-action" type="submit" disabled={isSavingNote}>
-          {isSavingNote ? "Saving…" : "Save note"}
-        </button>
-      </form>
+      {newestHomeCall ? (
+        <form className="compact-form notes-form" noValidate onSubmit={addCareNote}>
+          <label className="form-field" htmlFor="care-note">
+            Add a note
+            <span>Share a quick update about this latest call with the care circle.</span>
+            <textarea
+              id="care-note"
+              value={noteDraft}
+              maxLength={1000}
+              placeholder="e.g. I called after dinner and they sounded in good spirits."
+              onChange={(event) => {
+                setNoteDraft(event.target.value);
+                setNoteFormError(null);
+              }}
+            />
+            {noteFormError && <p className="form-validation-error" role="alert">{noteFormError}</p>}
+          </label>
+          <button className="secondary-button full-width-action" type="submit" disabled={isSavingNote}>
+            {isSavingNote ? "Saving…" : "Save note"}
+          </button>
+        </form>
+      ) : (
+        <p className="privacy-note">Notes can be added here once there is a recent Iris call.</p>
+      )}
     </section>
   ) : null;
 

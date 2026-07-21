@@ -199,7 +199,7 @@ test("care-note scope authorizes posting and controls last-check-in visibility",
     assert.deepEqual(notesAndSummariesBody.notes, []);
     assert.equal(notesAndSummariesBody.calls[0]?.careSummary?.recap, "Avery enjoyed a family call.");
 
-    const adminCreated = await fetch(`${fixture.url}/api/dashboard/people/person-a/notes`, {
+    const adminCreated = await fetch(`${fixture.url}/api/dashboard/people/person-a/calls/call-a/notes`, {
       method: "POST",
       headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" },
       body: JSON.stringify({ body: "Operator checked in too." }),
@@ -215,9 +215,9 @@ test("care-note scope authorizes posting and controls last-check-in visibility",
     assert.ok(adminNote.id);
     assert.ok(adminNote.createdAt);
 
-    const created = await fetch(`${fixture.url}/api/dashboard/people/person-a/notes`, {
+    const created = await fetch(`${fixture.url}/api/dashboard/people/person-a/calls/call-a/notes`, {
       method: "POST",
-      headers: { Authorization: "Bearer notes-token", "Content-Type": "application/json" },
+      headers: { Authorization: "Bearer notes-and-summaries-token", "Content-Type": "application/json" },
       body: JSON.stringify({ body: "  I checked in after dinner.  " }),
     });
     assert.equal(created.status, 201);
@@ -230,6 +230,13 @@ test("care-note scope authorizes posting and controls last-check-in visibility",
       updatedAt: createdBody.note.updatedAt, canEdit: true,
     });
 
+    const notesOnlyDeniedThread = await fetch(`${fixture.url}/api/dashboard/people/person-a/calls/call-a/notes`, {
+      method: "POST",
+      headers: { Authorization: "Bearer notes-token", "Content-Type": "application/json" },
+      body: JSON.stringify({ body: "I lack summaries scope." }),
+    });
+    assert.equal(notesOnlyDeniedThread.status, 403);
+
     const notesOnlyAfter = await fetch(`${fixture.url}/api/dashboard/people/person-a/overview`, {
       headers: { Authorization: "Bearer notes-token" },
     });
@@ -240,11 +247,21 @@ test("care-note scope authorizes posting and controls last-check-in visibility",
     };
     assert.ok(notesOnlyAfterBody.lastCheckInAt);
     assert.deepEqual(notesOnlyAfterBody.calls, []);
-    assert.deepEqual(notesOnlyAfterBody.notes.map((note) => ({ authorDisplayName: note.authorDisplayName, body: note.body })), [
-      { authorDisplayName: "Robin", body: "I checked in after dinner." },
+    assert.deepEqual(notesOnlyAfterBody.notes, []);
+
+    const homeAfter = await fetch(`${fixture.url}/api/dashboard/people/person-a/overview`, {
+      headers: { Authorization: "Bearer notes-and-summaries-token" },
+    });
+    const homeAfterBody = await homeAfter.json() as {
+      lastCheckInAt: string | null;
+      notes: Array<{ authorDisplayName: string; body: string }>;
+    };
+    assert.ok(homeAfterBody.lastCheckInAt);
+    assert.deepEqual(homeAfterBody.notes.map((note) => ({ authorDisplayName: note.authorDisplayName, body: note.body })), [
       { authorDisplayName: "Operator", body: "Operator checked in too." },
+      { authorDisplayName: "Robin", body: "I checked in after dinner." },
     ]);
-    assert.equal(JSON.stringify(notesOnlyAfterBody).includes("authorTrustedContactId"), false);
+    assert.equal(JSON.stringify(homeAfterBody).includes("authorTrustedContactId"), false);
 
     const summariesOnly = await fetch(`${fixture.url}/api/dashboard/people/person-a/overview`, {
       headers: { Authorization: "Bearer summaries-token" },
@@ -384,7 +401,7 @@ test("only a note author may edit or delete their note", async () => {
   }
 });
 
-test("Home notes include only general notes and the newest visible call's active notes", async () => {
+test("Home notes include only the newest visible call's active notes", async () => {
   const fixture = await createDashboardServer();
   try {
     fixture.repositories.createCall({ id: "older-call", personId: "person-a", status: "completed" });
@@ -419,7 +436,7 @@ test("Home notes include only general notes and the newest visible call's active
       headers: { Authorization: "Bearer notes-only-token" },
     });
     const notesOnlyBody = await notesOnly.json() as { notes: Array<{ id: string }>; calls: unknown[] };
-    assert.deepEqual(notesOnlyBody.notes.map((note) => note.id), ["general-note"]);
+    assert.deepEqual(notesOnlyBody.notes, []);
     assert.deepEqual(notesOnlyBody.calls, []);
 
     const full = await fetch(`${fixture.url}/api/dashboard/people/person-a/overview`, {
@@ -428,7 +445,7 @@ test("Home notes include only general notes and the newest visible call's active
     const fullBody = await full.json() as {
       notes: Array<{ id: string; canEdit: boolean; updatedAt: string } & Record<string, unknown>>;
     };
-    assert.deepEqual(fullBody.notes.map((note) => note.id), ["general-note", "newer-note"]);
+    assert.deepEqual(fullBody.notes.map((note) => note.id), ["newer-note"]);
     assert.equal(fullBody.notes.every((note) => note.canEdit === false && typeof note.updatedAt === "string"), true);
     assert.equal(JSON.stringify(fullBody.notes).includes("callId"), false);
     assert.equal(JSON.stringify(fullBody.notes).includes("deletedAt"), false);
