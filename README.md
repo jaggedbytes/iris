@@ -1,113 +1,141 @@
 # Iris
 
-Iris is a phone-first AI companion for older adults. The current demo proves Bridge and Shield: an operator or trusted contact can ask Iris to check in by phone, Iris can recall consented conversation continuity, and Iris can offer a calm scam-safety pause with an explicitly approved, privacy-safe trusted-contact alert.
+**Iris is a phone-first AI companion for aging parents and the families who worry about them.** A caregiver sends Iris to call their loved one on the phone they already own — no app, nothing to install for the older adult. Iris has a warm, natural conversation, keeps the family in the loop, and offers a calm second opinion when a call feels off.
 
-## Phone-first Bridge + Shield demo
+This demo proves two things Iris can do on a call:
 
-The dashboard starts an outbound Twilio call. Twilio opens a bidirectional Media Stream to the Iris server, which relays audio to OpenAI Realtime without application-side transcoding. Raw audio is never persisted. Transcript text is held only in memory for consent-gated summary extraction after the call, then discarded—it is never written to SQLite.
+- **Bridge**: Iris can reopen a prior conversation thread with one gentle invitation, and can pass a message to a trusted contact after the person's spoken approval.
+- **Shield**: when the person describes scam pressure (urgency, gift cards, sworn secrecy), Iris offers a safety pause, steers them away, and, with spoken approval, texts a trusted contact to check in.
 
-Private continuity requires active summary-retention consent. A separately consented shared care recap can show a concise update, including explicitly discussed health-related concerns and clearly attributed Iris guidance, to the operator and trusted contacts with summary access. It never exposes raw audio or a full transcript. It does not add a diagnosis, professional conclusion, or guidance Iris did not actually say. Required operational audit and outbox records may also be retained.
+Everything the family sees lives in a shared dashboard: recaps of recent calls, a timeline of what Iris has done, and shared notes. Privacy is the foundation. Raw audio and transcripts are never stored, and the dashboard only ever shows allowlisted, human-readable events.
+
+---
+
+## For judges
+
+A hosted demo instance is live — **you don't need to configure Twilio or run anything locally.** The demo URL and operator access token are in the Devpost submission's testing field.
+
+1. Open the demo URL and enter the access token on the login screen to reach the operator dashboard.
+2. To place a live call, add yourself as a new person with your own phone number (E.164), turn on **Private memory** and **Shared care recap** (attest and save), then press **Call now**. Iris will ring your phone.
+3. Have a short conversation. On a second call, Iris may offer one gentle continuity opener if the first call had enough signal.
+4. Try **Bridge** and **Shield**. Iris asks for spoken approval before any text. For a real SMS attempt, add a trusted contact with a mobile number you control, complete the public `/opt-in` form first, then ask Iris to message or alert that contact.
+
+**Please note:**
+- The demo runs on a small prepaid balance (~$20 across Twilio Voice and OpenAI Realtime), so brief calls are appreciated. If a call won't connect, the balance may be spent (happy to top it up on request).
+- **Carrier SMS delivery is not live yet.** Iris texts depend on Twilio A2P 10DLC registration (US carrier approval for business messaging), which is still pending. The consent-and-send path is built and tested. You'll see Iris request spoken approval and lifecycle events on the dashboard but final delivery to the handset is blocked. When Twilio accepts the API send and the carrier later rejects it, activity may show provider acceptance followed by a delivery update such as undelivered; other failure or recovery states are also possible. That is expected until A2P clears.
+
+**What you can fully verify today:** a live phone conversation with Iris; continuity across calls when private-memory consent is on; Bridge and Shield spoken-consent flows; the public web SMS opt-in path; a consented shared care recap on the dashboard when shared-care consent is on; the scoped trusted-contact view via an expiring magic link; and the privacy boundaries.
+
+---
+
+## How Codex and GPT-5.6 were used
+
+**Iris was built with Codex, with me directing and reviewing.** The working rhythm was consistent throughout: I made the product and architecture decisions, brought plans to Codex, and reviewed every change as Codex implemented it.
+
+- **Validating the idea first.** The riskiest assumption was whether the voice would feel human enough to build a product around. Before any phone infrastructure, I used Codex to spin up a quick browser test of OpenAI's Realtime model so I could hear it. That confirmed the voice, and the rest of the plan grew from there.
+- **Plan Mode for shaping.** I brought loose user stories to Codex's Plan Mode and worked them into a concrete, incremental build plan, then had Codex implement it step by step while I reviewed the code, which kept me shaping the architecture rather than chasing it.
+- **Getting the hard integrations right.** Codex checked OpenAI's own documentation to implement the current secure patterns (e.g. keeping secret keys server-side, and wiring the Twilio Media Stream into Realtime) then drove the tight write-test-build loops that carried the project to 90+ passing tests.
+
+**GPT-5.6 does the deliberate reasoning** in two places, both on the `gpt-5.6-terra` tier (the balance of quality and cost that fits this everyday work):
+
+- **Consented recaps.** When a call ends and `summary_retention` consent is active, the in-memory transcript is passed once to GPT-5.6 for structured extraction: durable facts, named people and context, unresolved topics, a recap, and an optional recall anchor. With separately active `care_summary_sharing` consent, the same pass also produces the dashboard-only shared care recap. The transcript is then discarded.
+- **Shield risk assessment.** During a Shield pause, only the Realtime-provided situation summary is sent to `gpt-5.6-terra` with `store: false`, then both input and output are discarded locally. A pause persists only an empty `shield.pause_offered` event.
+
+The live voice loop itself runs on **OpenAI Realtime**, bridged to the phone network by Twilio.
+
+---
+
+## How it works
+
+The dashboard starts an outbound Twilio call. Twilio opens a bidirectional G.711 µ-law Media Stream to the Iris Express server, which relays audio to OpenAI Realtime with no application-side transcoding. A single `CallSession` owns each call end to end — the connection, the in-memory conversation, interruptions, and a clean shutdown — so features never touch raw provider events. Iris's persona and safety boundaries live in versioned source (`iris-v1.ts`) so they stay reviewable and testable.
 
 ```text
-Operator or trusted contact dashboard
-  → Iris server → Twilio outbound call → person’s phone
-  ← call threads, unlinked timeline activity, and care-circle notes
+Operator or trusted-contact dashboard
+  → Iris server → Twilio outbound call → person's phone
+  ← call threads, timeline activity, and care-circle notes
 ```
 
-Each Recent Call can be expanded on **Calls** into a focused call thread: its consented recap, call-linked lifecycle/SMS events, and notes written specifically about that call. The URL may include `/calls?call=<call-id>` for a refreshable, shareable-in-session view. **Updates** contains the operator **Messages** recovery queue and **Recent activity**, which contains only unlinked person-level activity so call events are not duplicated in a long global feed.
+**Roles.** An operator (admin, usually a lead caregiver) manages several people, each with their own care circle of trusted contacts. A trusted contact can belong to more than one person's circle. The operator sets up each person and invites their contacts. After that, the operator or a trusted contact can start a call.
 
-The timeline and call threads are privacy boundaries: they render only allowlisted, human-readable event data. They never expose message bodies, phone numbers, provider identifiers, raw transcripts, or audit metadata.
+**The dashboard** is organized into **Home**, **Calls**, and **Updates**. **Calls** expands each recent call into its own thread: the consented recap, call-linked lifecycle and SMS events, and notes about that call (`/calls?call=<call-id>` keeps the same thread open across refresh). **Updates** holds the operator **Messages** recovery queue plus **Recent activity** for unlinked person-level events. Call-linked events appear only in their own thread, never duplicated in a global feed.
 
-Care-circle Notes are separate, intentionally shared dashboard updates. On Home, the Notes card shows the newest Iris call and notes attached to that call; the Home form creates a note on that same call. With both `care_notes` and `view_summaries`, an expanded call on **Calls** can also add notes to that thread. Older call notes stay in their own thread. Authors may edit or soft-delete their own notes: the shared operator identity owns operator notes, while a trusted contact owns only notes tied to their live contact record. Deleted notes remain internal but disappear from dashboard views and last-check-in calculations. Notes never become Iris memory, Bridge context, phone-session instructions, Timeline events, or audit metadata. Existing dashboard links issued before Notes was added do not receive `care_notes`; regenerate a link to grant Notes access.
+**Care-circle notes** are deliberately shared dashboard updates. On Home, the Notes card shows the newest Iris call and notes attached to that call; the Home form creates a note on that same call. With both `care_notes` and `view_summaries`, an expanded call on **Calls** can also add notes to that thread. Older call notes stay thread-only. Authors may edit or soft-delete only their own notes; attribution survives contact deletion. Notes never become Iris memory, Bridge context, or phone-session instructions.
 
-## Hosted judge demo (Railway)
+**Call completion.** Outbound calls use Twilio Answering Machine Detection. Iris opens the Media Stream only on a human pickup, and voicemail/fax/busy end cleanly with no Realtime session. A natural goodbye triggers a confirmed `end_call`; an ordinary handset hangup is also fully supported. Both paths clear the transcript into the same consent-gated summary lifecycle, after which the transcript is discarded.
 
-The judge-facing demo should be a private, hosted instance operated by you; do
-not ask judges to configure Twilio or run a local server. The seeded local
-workflow remains the reproducible fallback.
+---
 
-Open the hosted site (for example your Railway public URL), enter `IRIS_ADMIN_TOKEN` on the access screen, and use the operator dashboard. That is the Bridge + Shield demo—there is no browser microphone voice loop.
+## Privacy boundaries
 
-This repository includes a single-service Docker deployment. In Railway:
+Privacy is enforced in the architecture, not layered on after:
 
-1. Deploy from this repository and generate one public HTTPS domain.
-2. Attach a persistent volume at `/app/data`. The image pins `IRIS_DATABASE_PATH=/app/data/iris.sqlite`; keep the service at one replica. SQLite and active phone sessions are intentionally single-process in this prototype.
-3. Set `IRIS_PUBLIC_BASE_URL=https://your-public-domain` and `FRONTEND_ORIGIN=https://your-public-domain` to the same Railway domain. Also set the OpenAI key and safety identifier, `IRIS_ADMIN_TOKEN`, the Twilio Voice and Messaging Service credentials, `IRIS_DEMO_PHONE_E164`, and the SMS/legal settings from [`server/.env.example`](server/.env.example). Production startup fails if `FRONTEND_ORIGIN` is omitted, preventing copied opt-in links from pointing to localhost.
-4. Configure the Twilio Messaging Service inbound-message webhook at `https://your-public-domain/api/messages/inbound`. Iris supplies its Voice TwiML and status-callback URLs with each outbound call, so no console-level Voice webhook is required for this demo. From the Railway shell, run `npm run db:seed:prod` only when you want the demo fixture reset; the production image intentionally contains compiled `dist/` files rather than TypeScript source.
+- **Raw audio is never persisted. Transcripts live only in memory** through consent-gated extraction after a call, then are discarded and never written to SQLite.
+- **Two separate, revocable consent layers.** `summary_retention` gates whether any private continuity memory is written at all. `care_summary_sharing` separately gates whether a dashboard-visible shared care recap is produced. That recap never includes a diagnosis, professional conclusion, or advice Iris did not actually give. Private memory fields and recall anchors never reach the dashboard.
+- **The dashboard shows only allowlisted, human-readable events.** No SMS body, provider identifier, raw transcript, recall anchor, Shield scenario, or audit metadata ever reaches the browser.
+- **SMS is opt-in and approval-gated.** Iris only ever texts a contact whose current phone matches an active, separately recorded opt-in, and every send is approval-gated through a durable outbox with a server-owned `Iris:` prefix and HELP/STOP footer.
 
-SMS enrollment and confirmation messages depend on a live Twilio Messaging Service
-and registered A2P 10DLC campaign. Before that is live, a confirmation may fail or
-require operator recovery; that is external carrier configuration, not an
-enrollment-data failure.
+---
 
-The container serves the production dashboard and public SPA routes such as `/opt-in` from Express. `/api/*`, Twilio webhooks, and the Media Stream endpoint remain server routes rather than SPA fallbacks.
+## Running it yourself
 
-The hosted opt-in form uses `IRIS_PRIVACY_URL` and `IRIS_TERMS_URL`, which default to Iris’s public legal pages. Keep those URLs public and HTTPS; they are rendered directly to invited contacts.
-
-## Local development
+### Local development
 
 Prerequisites: Node.js 22+ and an OpenAI API key.
 
 ```bash
-cd server && npm install && npm run dev
+cd server && npm install && npm run db:seed && npm run dev
 cd frontend && npm install && npm run dev
 ```
 
-Copy `server/.env.example` to `server/.env` and set `OPENAI_API_KEY`. Do not put the API key in the frontend.
+Copy [`server/.env.example`](server/.env.example) to `server/.env` and set `OPENAI_API_KEY` and a long `IRIS_ADMIN_TOKEN`. **Never put the API key in the frontend.** Open the frontend and enter the token to reach the operator dashboard. Operators can add people and trusted contacts, create expiring revocable dashboard links, and create one-time SMS opt-in links.
 
-## Local dashboard foundation
+### Live phone calls (local)
 
-The dashboard is protected by `IRIS_ADMIN_TOKEN`; set a long local secret in `server/.env`, then seed the included demo person and trusted contact before starting the server:
+A live call needs Twilio credentials and a public HTTPS/WSS URL Twilio can reach (a tunnel works for local dev). Set these in `server/.env`:
 
-```bash
-cd server && npm run db:seed && npm run dev
-cd frontend && npm run dev
-```
+- `IRIS_PUBLIC_BASE_URL`: the public URL terminating at this server.
+- `IRIS_DEMO_PHONE_E164`: the authorized destination phone Iris calls when using the seeded demo person; set it before `npm run db:seed`.
+- `TWILIO_PHONE_NUMBER`: Iris's Twilio from-number (not the destination).
+- `TWILIO_MESSAGING_SERVICE_SID`: required for any SMS; configure Twilio Advanced Opt-Out to match `IRIS_SMS_HELP_TEXT`.
+- `IRIS_FAREWELL_CLOSE_TIMEOUT_MS`: optional; defaults to `8000`. Bounds only a missing completion event after a tool-driven goodbye; it is not an idle-call timeout.
 
-Open the frontend and enter `IRIS_ADMIN_TOKEN` to use the operator view. Operators can add people and trusted contacts, create expiring revocable dashboard links, and create one-time SMS opt-in links.
+Sign in as the operator, press **Call now**, answer the phone, and talk with Iris. The seed grants both private-memory and shared-care-recap consent for the demo person. Its seeded trusted contact is deliberately non-routable but opted in for automated tests. For a live Bridge or Shield text, add a trusted contact with a number you control and complete the public web opt-in first.
 
-## Phone-first Bridge + Shield smoke test
+Twilio accepting an SMS is not proof of delivery. US long-code delivery may require A2P 10DLC registration, which is external to Iris. Every production body begins with one `Iris:` prefix and ends with `Reply HELP for help. Reply STOP to opt out.` If delivery remains uncertain, an operator may use **Retry SMS** after accepting that a retry can create a duplicate by design.
 
-Set the Twilio and `IRIS_PUBLIC_BASE_URL` values in `server/.env`. The public URL must terminate at this server and be reachable by Twilio over HTTPS/WSS (a tunnel is fine for local development).
+### Hosted deployment (Railway)
 
-- `IRIS_DEMO_PHONE_E164` is the authorized destination phone that receives Iris’s call.
-- `TWILIO_PHONE_NUMBER` is Iris’s Twilio sender/from-number. It is not the demo destination.
-- `TWILIO_MESSAGING_SERVICE_SID` is required for every Iris SMS. Configure Twilio Advanced Opt-Out on that Messaging Service with the same HELP response as `IRIS_SMS_HELP_TEXT` (shown on the public opt-in form).
-- `IRIS_FAREWELL_CLOSE_TIMEOUT_MS` is optional and defaults to `8000`. It bounds only a missing completion event after a tool-driven goodbye; it is not an idle-call timeout.
+The seeded local workflow above is the reproducible fallback. The container serves the production dashboard and public SPA routes such as `/opt-in` from Express; `/api/*`, Twilio webhooks, and the Media Stream endpoint remain server routes.
 
-Set the destination before running `npm run db:seed`. Start the server and frontend, sign in as the operator, press **Call now**, answer the phone, and speak with Iris.
+1. Deploy from this repository and generate one public HTTPS domain.
+2. Attach a persistent volume at `/app/data` (the image pins `IRIS_DATABASE_PATH=/app/data/iris.sqlite`); keep the service at one replica — SQLite and active phone sessions are intentionally single-process in this prototype.
+3. Set `IRIS_PUBLIC_BASE_URL` and `FRONTEND_ORIGIN` to the same Railway domain, plus the OpenAI key and safety identifier, `IRIS_ADMIN_TOKEN`, the Twilio Voice and Messaging Service credentials, `IRIS_DEMO_PHONE_E164`, and the SMS/legal settings from [`server/.env.example`](server/.env.example). Startup fails if `FRONTEND_ORIGIN` is missing.
+4. Point the Twilio Messaging Service inbound webhook at `https://your-domain/api/messages/inbound`. Iris supplies its own Voice TwiML and status-callback URLs per call. Run `npm run db:seed:prod` from the Railway shell only to reset the demo fixture.
 
-The seed grants both private-memory and shared-care-recap consent for the demo person. Its seeded trusted contact is deliberately non-routable but explicitly opted in for automated tests. For a live Bridge or Shield SMS, add a trusted contact with a mobile number you control and complete the public web opt-in first. To run the full demo:
+> SMS enrollment depends on a live Messaging Service and registered A2P 10DLC campaign. Until that clears, confirmation delivery may fail or require operator recovery (that's external carrier configuration, not an enrollment-data failure).
 
-1. Start the server and frontend, sign in as the operator, and press **Call now**. Answer the authorized demo phone; Iris should be audible and the dashboard should move from **Calling…** to **Call in progress**.
-2. In the first call, share a meaningful but non-sensitive update—for example, “I enjoyed watching family videos of my granddaughter’s dance recital.” The dashboard should refresh with a shared care recap after processing. On a dashboard link with both `care_notes` and `view_summaries`, confirm **Last check-in** advances when the completed call appears. If demonstrating Bridge, ask Iris to send a specific message to the opted-in trusted contact, then give clear spoken approval after Iris reads the recipient and exact final text.
-3. For Shield, describe an observable scenario such as: “Someone claiming to be my bank says I need to buy gift cards right now and read them a passcode.” Iris should recommend a pause, firmly advise stopping or limiting contact with that party (without helping draft a reply to them), and then offer a short check-in text to a listed trusted contact. After Iris names the selected contact and briefly describes that Iris will text them to check in—without reading the full SMS body aloud—give direct approval. The call thread should show only **Iris offered a safety pause** and **Iris asked [contact] to check in**—never the scenario or assessment. If Iris never asks for alert approval, no SMS attempt is created (Messages stays empty).
-4. After a little back-and-forth, say a natural closing such as “Goodbye, Iris” or “I should get going.” Iris should offer a brief farewell and end the call. An early or ambiguous goodbye may prompt a short confirmation; answering “yes,” “Yes, Iris,” or repeating “Goodbye, Iris” should finish the hang-up. The dashboard polls while the summary is processing, then shows the shared recap.
-5. Place a second call. With active consent and a successful first extraction, Iris may offer one gentle opener based on a prior recall thread, a named person, or an open topic. This is an invitation, not a claim of certainty; do not expect it if the first call had insufficient signal or ASR captured the fact poorly.
-6. In a separate short call, hang up the handset normally without saying goodbye. The existing Twilio disconnect path still finalizes the call; `end_call` is additive, not required for every demo.
-7. Open **Calls**, expand the completed call, and confirm its recap plus linked call lifecycle/Bridge/Shield events appear only in that thread. Refresh the page with `/calls?call=<call-id>` and confirm the same call reopens. Open **Updates** and confirm **Recent activity** (unlinked system updates) and operator **Messages** recovery controls are there instead of on Calls.
-8. On **Home**, confirm the Notes card shows only the newest Iris call. Add a note there and confirm it attaches to that call (it also appears in that call’s thread on **Calls**). Open an older call in **Calls**, add a note, and confirm it stays thread-only on Home. Edit and delete notes as their author; confirm deleted notes disappear from the thread, Home, and **Last check-in** calculation. Open a newly generated trusted-contact link with both `care_notes` and `view_summaries`; add a note on Home and confirm both viewers see it, while a different trusted contact cannot edit or delete it. A legacy link without `care_notes` must show neither Notes nor last check-in; regenerate it to grant access.
-9. Create a trusted-contact link with `request_check_in`, `view_events`, `view_summaries`, and `care_notes`, open it in a separate session, and select **Ask Iris to check in**. The resulting call thread should attribute the request by the contact’s display name and may show the two generic Shield cards.
-10. Check that no recap card, thread, Notes card, Messages card, or Recent activity payload exposes a recall anchor, raw transcript, SMS body, phone number, provider identifier, Shield scenario, red-flag label, or a trusted contact’s internal ID. Notes must not change Iris’s spoken continuity on a later call.
-11. For the enrollment/compliance check, create an opt-in link from the operator contact card, submit the exact drafted mobile number and checkbox at `/opt-in`, and confirm the operator sees the contact as **SMS: opted in** with confirmation status. In Twilio’s Messaging Service test setup, reply **STOP** from that number; the inbound webhook should change every matching Iris contact to **SMS: opted out**. Reply **HELP** to verify Twilio’s configured help response. Replying **START** does not restore Iris eligibility; use a new web opt-in link.
-12. For the empty state, use a newly enrolled person with no shared care recap and no care-circle notes. The homepage Notes card should show **Care-circle updates will appear here.**
+The hosted opt-in form uses `IRIS_PRIVACY_URL` and `IRIS_TERMS_URL`, which default to Iris's public legal pages. Keep those URLs public and HTTPS.
 
-Twilio accepting an SMS is not proof of delivery. US long-code delivery may require A2P 10DLC brand/campaign registration, which is external to Iris. Every production body begins with one `Iris:` prefix and ends with `Reply HELP for help. Reply STOP to opt out.`; the Messaging Service must be configured with matching Advanced Opt-Out behavior. ASR can also misrecognize names or short utterances, so use an ordinary durable fact for the recall demonstration. If delivery is confirmed, do not retry. If delivery remains uncertain, an operator may use the recovery card after accepting that **Retry SMS** can create a duplicate message by design.
+---
 
 ## Repository layout
 
 ```text
 iris/
 ├── docs/
-│   └── architecture.md
-├── frontend/                 # dashboard and public SMS opt-in page
+│   └── architecture.md      # detailed design and safety constraints
+├── frontend/                # dashboard and public SMS opt-in page
 │   └── src/
-├── server/                   # API, telephony, and persona ownership
+├── server/                  # API, telephony, and persona ownership
 │   └── src/
-│       └── personas/
+│       └── personas/        # versioned Iris persona (iris-v1.ts)
 └── README.md
 ```
 
-## Privacy boundary
+For the full design rationale, safety constraints, and call-completion details, see [`docs/architecture.md`](docs/architecture.md).
 
-Raw phone audio, raw transcripts, message bodies, phone numbers, and provider identifiers are never rendered in the dashboard timeline. Phone transcripts are never persisted; they remain in memory through consent-gated summary extraction after the call, then are discarded. Conversation-derived durable storage is limited to consented structured summaries, user-stated facts, named people/context, unresolved topics, and recall anchors. The dashboard receives only the separately consented shared care recap, including explicitly discussed health-related concerns and clearly attributed Iris suggestions; private memory fields and recall anchors never reach the dashboard. Care-circle notes are deliberately shared dashboard content for viewers with `care_notes`; they are never inserted into Iris’s memory or phone context. Soft-deleted notes are retained internally for integrity but are excluded from all dashboard projections and check-in dates. Required operational audit and outbox records may also be retained.
+---
+
+## Deliberate deferrals
+
+Some things are intentionally out of scope for this demo: Translator (reading a confusing letter into plain-language steps) is not yet a vertical slice, there's no automatic retry for uncertain SMS sends, and call recording, raw-transcript storage, and analytics persistence are all deliberately excluded by design.
