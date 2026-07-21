@@ -331,7 +331,73 @@ test("a normal Bridge call gets one authoritative recall opener only when an anc
   } finally { closeDatabase(database); }
 });
 
-test("an active-consent Bridge call without an anchor does not volunteer prior details", async () => {
+test("a Bridge call can seed its opener from a named person when no recall anchor exists", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  repositories.recordConsent({ id: "consent-a", personId: "person-a", kind: "summary_retention", status: "granted", source: "test" });
+  repositories.createCall({ id: "call-memory", personId: "person-a", status: "completed" });
+  repositories.createMemory({
+    id: "memory-person",
+    personId: "person-a",
+    sourceCallId: "call-memory",
+    category: "named_person",
+    payload: { name: "Grace", relationshipOrContext: "friend who wore a dress" },
+  });
+  const realtime = new FakeSocket();
+  const bridge = new BridgeService(repositories, new ActionDispatcher(repositories, telephonyConfig));
+  const manager = new OutboundCallManager(
+    repositories, telephonyConfig, { calls: { create: async () => ({ sid: "CA123" }) } }, () => realtime,
+    undefined, undefined, undefined, bridge,
+  );
+  try {
+    const { callId } = await manager.startCall("person-a");
+    const token = /streamToken" value="([^"]+)"/.exec(manager.twiml(callId) ?? "")?.[1];
+    assert.ok(token);
+    const socket = new FakeSocket();
+    manager.acceptMediaSocket(socket);
+    socket.emit("message", Buffer.from(JSON.stringify({ event: "start", start: { streamSid: "MZ123", customParameters: { callId, streamToken: token } } })));
+    realtime.emit("open");
+    const sessionUpdate = JSON.parse(realtime.sent[0]) as { session: { instructions: string } };
+    assert.match(sessionUpdate.session.instructions, /Grace \(friend who wore a dress\)/);
+    assert.match(sessionUpdate.session.instructions, /exactly one gentle invitation/);
+  } finally { closeDatabase(database); }
+});
+
+test("a Bridge call can seed its opener from an open topic when no anchor or person exists", async () => {
+  const database = createDatabase(":memory:");
+  const repositories = createRepositories(database);
+  repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
+  repositories.recordConsent({ id: "consent-a", personId: "person-a", kind: "summary_retention", status: "granted", source: "test" });
+  repositories.createCall({ id: "call-memory", personId: "person-a", status: "completed" });
+  repositories.createMemory({
+    id: "memory-topic",
+    personId: "person-a",
+    sourceCallId: "call-memory",
+    category: "unresolved_topic",
+    payload: { topic: "weekend plans with Ruth" },
+  });
+  const realtime = new FakeSocket();
+  const bridge = new BridgeService(repositories, new ActionDispatcher(repositories, telephonyConfig));
+  const manager = new OutboundCallManager(
+    repositories, telephonyConfig, { calls: { create: async () => ({ sid: "CA123" }) } }, () => realtime,
+    undefined, undefined, undefined, bridge,
+  );
+  try {
+    const { callId } = await manager.startCall("person-a");
+    const token = /streamToken" value="([^"]+)"/.exec(manager.twiml(callId) ?? "")?.[1];
+    assert.ok(token);
+    const socket = new FakeSocket();
+    manager.acceptMediaSocket(socket);
+    socket.emit("message", Buffer.from(JSON.stringify({ event: "start", start: { streamSid: "MZ123", customParameters: { callId, streamToken: token } } })));
+    realtime.emit("open");
+    const sessionUpdate = JSON.parse(realtime.sent[0]) as { session: { instructions: string } };
+    assert.match(sessionUpdate.session.instructions, /weekend plans with Ruth/);
+    assert.match(sessionUpdate.session.instructions, /exactly one gentle invitation/);
+  } finally { closeDatabase(database); }
+});
+
+test("an active-consent Bridge call without an opener seed does not volunteer prior details", async () => {
   const database = createDatabase(":memory:");
   const repositories = createRepositories(database);
   repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });

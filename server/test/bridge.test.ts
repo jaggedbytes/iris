@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ActionDispatcher } from "../src/actions.js";
-import { BridgeService } from "../src/bridge.js";
+import { BridgeService, resolveRecallOpener } from "../src/bridge.js";
 import { closeDatabase, createDatabase, createRepositories } from "../src/db/index.js";
 
 function grantSmsOptIn(repositories: ReturnType<typeof createRepositories>, trustedContactId: string, phoneE164 = "+15550002222") {
@@ -10,6 +10,36 @@ function grantSmsOptIn(repositories: ReturnType<typeof createRepositories>, trus
     status: "granted", source: "web_form", disclosureVersion: "test",
   });
 }
+
+test("resolveRecallOpener prefers an anchor, then a named person, then an open topic", () => {
+  assert.equal(resolveRecallOpener({
+    recallAnchor: "your garden plans",
+    memories: [
+      { category: "named_person", value: { name: "Grace", relationshipOrContext: "friend who wore a dress" } },
+      { category: "unresolved_topic", value: { topic: "weekend plans" } },
+    ],
+  }), "your garden plans");
+  assert.equal(resolveRecallOpener({
+    recallAnchor: null,
+    memories: [
+      { category: "durable_fact", value: { fact: "Avery gardens." } },
+      { category: "named_person", value: { name: "Grace", relationshipOrContext: "friend who wore a dress" } },
+      { category: "unresolved_topic", value: { topic: "weekend plans" } },
+    ],
+  }), "Grace (friend who wore a dress)");
+  assert.equal(resolveRecallOpener({
+    recallAnchor: null,
+    memories: [
+      { category: "durable_fact", value: { fact: "Avery gardens." } },
+      { category: "unresolved_topic", value: { topic: "weekend plans" } },
+    ],
+  }), "weekend plans");
+  assert.equal(resolveRecallOpener({
+    recallAnchor: "  ",
+    memories: [{ category: "named_person", value: { name: "Grace" } }],
+  }), "Grace");
+  assert.equal(resolveRecallOpener({ recallAnchor: null, memories: [] }), null);
+});
 
 test("Bridge recalls scoped memory and sends only to the selected trusted contact", async () => {
   const database = createDatabase(":memory:");
@@ -27,7 +57,7 @@ test("Bridge recalls scoped memory and sends only to the selected trusted contac
     const context = bridge.context("person-a");
     assert.deepEqual(context.contacts.map((contact) => contact.id), ["contact-a"]);
     assert.deepEqual(context.memories, [{ category: "durable_fact", value: { fact: "Avery enjoys gardening." } }]);
-    assert.equal(context.recallAnchor, null);
+    assert.equal(context.recallOpener, null);
     assert.equal((await bridge.sendApprovedSms({ callId: "call-a", personId: "person-a", trustedContactId: "contact-a", message: "Could you call me about the garden?", approvalId: "tool-call-1" })).ok, true);
     assert.equal((await bridge.sendApprovedSms({ callId: "call-a", personId: "person-a", trustedContactId: "contact-a", message: "Could you call me about the garden?", approvalId: "tool-call-1" })).ok, true);
     assert.equal(sent, 1);
@@ -53,12 +83,12 @@ test("Bridge exposes only the latest valid recall anchor while consent is active
   const bridge = new BridgeService(repositories, dispatcher);
   try {
     const active = bridge.context("person-a");
-    assert.equal(active.recallAnchor, "your garden plans");
+    assert.equal(active.recallOpener, "your garden plans");
     assert.deepEqual(active.memories, [{ category: "durable_fact", value: { fact: "Avery enjoys gardening." } }]);
 
     repositories.recordConsent({ id: "consent-revoked", personId: "person-a", kind: "summary_retention", status: "revoked", source: "test" });
     const revoked = bridge.context("person-a");
-    assert.equal(revoked.recallAnchor, null);
+    assert.equal(revoked.recallOpener, null);
     assert.deepEqual(revoked.memories, []);
     assert.deepEqual(revoked.contacts.map((contact) => contact.id), ["contact-a"]);
   } finally { closeDatabase(database); }
@@ -89,7 +119,7 @@ test("Bridge memory context keeps durable facts when many recall anchors exist",
   try {
     const context = bridge.context("person-a");
     assert.deepEqual(context.memories, [{ category: "durable_fact", value: { fact: "Avery enjoys gardening." } }]);
-    assert.equal(context.recallAnchor, "anchor 24");
+    assert.equal(context.recallOpener, "anchor 24");
     assert.equal(repositories.listMemories("person-a").some((memory) => memory.category === "recall_anchor"), false);
   } finally { closeDatabase(database); }
 });

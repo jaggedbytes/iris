@@ -4,19 +4,58 @@ import type { ActionDispatcher } from "./actions.js";
 import type { IrisRepositories } from "./db/repositories.js";
 import { formatIrisSms, truncateSmsContent } from "./sms.js";
 
+type BridgeMemory = { category: string; value: unknown };
+
+/** Prefer an explicit recall anchor; otherwise seed from a named person or open topic. */
+export function resolveRecallOpener(input: {
+  recallAnchor: string | null;
+  memories: BridgeMemory[];
+}): string | null {
+  const anchor = input.recallAnchor?.trim() ?? "";
+  if (anchor.length > 0 && anchor.length <= 160) return anchor;
+
+  // listMemories is newest-first; take the first usable person or open topic.
+  for (const memory of input.memories) {
+    if (memory.category === "named_person") {
+      const value = memory.value as { name?: unknown; relationshipOrContext?: unknown };
+      if (typeof value.name !== "string") continue;
+      const name = value.name.trim();
+      if (!name || name.length > 80) continue;
+      const context = typeof value.relationshipOrContext === "string"
+        ? value.relationshipOrContext.trim()
+        : "";
+      if (context && context.length <= 120) {
+        const combined = `${name} (${context})`;
+        if (combined.length <= 160) return combined;
+      }
+      return name.slice(0, 160);
+    }
+    if (memory.category === "unresolved_topic") {
+      const value = memory.value as { topic?: unknown };
+      if (typeof value.topic !== "string") continue;
+      const topic = value.topic.trim();
+      if (topic.length > 0 && topic.length <= 160) return topic;
+    }
+  }
+  return null;
+}
+
 export class BridgeService {
   constructor(private readonly repositories: IrisRepositories, private readonly actions: ActionDispatcher) {}
 
   context(personId: string) {
     const contacts = this.repositories.listSmsEligibleTrustedContacts(personId).map((contact) => ({ id: contact.id, name: contact.displayName, relationship: contact.relationship }));
     if (!this.repositories.hasActiveConsent(personId, "summary_retention")) {
-      return { memories: [], recallAnchor: null, contacts };
+      return { memories: [], recallOpener: null, contacts };
     }
     const memories = this.repositories.listMemories(personId)
       .map((memory) => ({ category: memory.category, value: JSON.parse(memory.payload_json) }));
     return {
       memories,
-      recallAnchor: this.repositories.findLatestRecallAnchor(personId),
+      recallOpener: resolveRecallOpener({
+        recallAnchor: this.repositories.findLatestRecallAnchor(personId),
+        memories,
+      }),
       contacts,
     };
   }
