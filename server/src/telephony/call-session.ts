@@ -51,12 +51,12 @@ function isExplicitEndCallConfirmation(text: string) {
   if (!normalized || /\b(?:no|nope|nah|don't|do not|not yet|wait|hold on|keep talking|continue)\b/.test(normalized)) {
     return false;
   }
-  const filler = "(?:(?:um|uh|well|actually)\\s+)*";
-  const affirmative = "(?:yes|yeah|yep|sure|okay|ok|alright|all right|please)";
-  // After Iris asks to confirm, accept short yes-forms or an explicit end request.
-  // Optional trailing "iris" covers common ASR attachments ("Yes, Iris") without
-  // requiring a perfect transcript of the confirmation phrase Iris suggested.
-  if (new RegExp(`^${filler}${affirmative}(?:\\s+please)?(?:\\s+iris)?$`).test(normalized)) return true;
+  const filler = "(?:(?:um|uh|well|actually|oh)\\s+)*";
+  const affirmative = "(?:yes|yeah|yep|yup|yea|sure|okay|ok|alright|all right|please|absolutely|definitely|go ahead|mm+\\s*h+m+|mhm|uh\\s*huh)";
+  const softTail = "(?:\\s+(?:please|go ahead|do (?:it|that)|that(?:'s| is)? (?:fine|good|okay|ok)|thanks?|thank you|iris))*";
+  // After Iris asks to confirm, accept short yes-forms (with common ASR tails)
+  // or an explicit end request—without requiring a scripted “Yes, Iris.”
+  if (new RegExp(`^${filler}${affirmative}${softTail}$`).test(normalized)) return true;
   if (new RegExp(
     `^${filler}(?:${affirmative}\\s+)*(?:please\\s+)?(?:go ahead(?:\\s+and)?\\s+)?(?:end(?:ing)?(?:\\s+the)?\\s+call|hang\\s+up)(?:\\s+please)?(?:\\s+iris)?$`,
   ).test(normalized)) return true;
@@ -76,10 +76,10 @@ function isNaturalEndCallIntent(text: string, userTurns: LiveTranscriptTurn[]) {
   }
   const meaningfulTurnCount = userTurns.filter((turn) => turn.text.trim().length > 0).length;
   // A direct address makes a short farewell meaningful. A bare "bye" or
-  // "goodbye" needs a little more conversation behind it because it is easy
-  // for ASR to pick up from background speech at the beginning of a call.
-  if (/^(?:(?:okay|ok|well|thanks?)\s+)?(?:bye|goodbye|good\s+bye)(?:\s+iris)?$/.test(normalized)) {
-    return /\biris$/.test(normalized) || meaningfulTurnCount >= 3;
+  // "goodbye" needs a little conversation behind it because it is easy for
+  // ASR to pick up from background speech at the beginning of a call.
+  if (/^(?:(?:okay|ok|well|thanks?|thank you)\s+)?(?:bye|goodbye|good\s+bye)(?:\s+(?:for now|now))?(?:\s+iris)?$/.test(normalized)) {
+    return /\biris$/.test(normalized) || meaningfulTurnCount >= MIN_USER_TURNS_FOR_NATURAL_END;
   }
   // Closing phrases must describe the utterance as a whole or its ending.
   // Substring matches would turn “I'm done eating” or “That's all I remember”
@@ -88,7 +88,7 @@ function isNaturalEndCallIntent(text: string, userTurns: LiveTranscriptTurn[]) {
     /^(?:i'm|i am) (?:all set|done)(?: for now)?$/,
     /^(?:that's|that is) all(?: for now)?$/,
     /^(?:(?:okay|ok|thanks?|well) )?take care(?: iris)?$/,
-    /^(?:(?:okay|ok|well) )?(?:good night|have a good (?:day|night))(?: iris)?$/,
+    /^(?:(?:okay|ok|well) )?(?:good night|have a good (?:day|night)|see you(?: later)?|see ya|so long)(?: iris)?$/,
     /\b(?:i(?:'ll| will) )?(?:talk|speak) to you later$/,
     /\bi (?:should|need to|have to) (?:get going|go)(?: now)?$/,
     /^(?:please\s+)?(?:end(?:ing)?(?:\s+the)?\s+call|hang\s+up)(?:\s+please)?(?:\s+iris)?$/,
@@ -169,6 +169,7 @@ export class CallSession {
   private streamSid: string | null = null;
   private realtime: SocketLike | null = null;
   private realtimeReady = false;
+  private openingGreetingStarted = false;
   private bufferedAudio: string[] = [];
   private liveTranscript: LiveTranscriptTurn[] = [];
   private closed = false;
@@ -248,7 +249,7 @@ export class CallSession {
           this.shield
             ? `Shield context: the listed trusted contacts are ${JSON.stringify(this.shield.contacts)}. Authoritative phone-session instructions: use shield_assess only after the person explicitly describes observable suspicious pressure. Summarize only what they said; never invent or embellish details. When assessment recommends a pause, calmly recommend that pause, name only the returned observable signals, and be firmly clear that they should stop or limit contact with the suspicious party for now—do not help draft, send, or refine any reply to that party. Prefer verifying through a known official number or established contact method, and speaking with a trusted person. Never state that something is definitely a scam, ask for credentials, or give financial, legal, or medical advice. After recommending a pause, if at least one listed trusted contact is available, promptly offer a check-in text: name the selected contact and briefly say Iris will text them a short fixed message asking them to check in on the person when they can, then ask clearly for yes-or-no approval. Do not read the SMS body, Iris prefix, or HELP/STOP footer aloud—the server owns that fixed text. The shield_send_alert tool is allowed only after Iris has named the selected contact, described that check-in purpose, and the person has clearly and directly approved sending that alert to that listed contact. Never call it on ambiguity, before that spoken approval, or for an unlisted contact.`
             : "",
-          "Authoritative phone-session instructions: let a clear, natural closing end naturally after some real back-and-forth. You may use end_call after a completed user transcript clearly closes the conversation, such as “Goodbye, Iris,” “I should get going,” or “Talk to you later.” A plain “bye” or “goodbye” can close a well-established conversation, but never use it for an isolated early goodbye, background speech, partial words, hesitation, or an uncertain transcription. Ask a short confirmation only when the ending is genuinely unclear. If you ask for confirmation, wait for a new clear yes (including “Yes, Iris”), “end the call,” or another goodbye such as “Goodbye, Iris,” before using end_call, and set confirmation to the exact words you heard. The phone session verifies every request against the completed user transcript; the tool argument is not consent by itself. If the person continues talking, says no, is silent, or the words are ambiguous, keep the call open. When using it, give a brief warm farewell after the tool result.",
+          "Authoritative phone-session instructions: let a clear, natural closing end naturally after some real back-and-forth. Prefer end_call without a confirmation ritual when a completed user transcript clearly closes the conversation—for example goodbye, bye, I should get going, or talk to you later. A plain bye or goodbye can close a well-established conversation, but never use it for an isolated early goodbye, background speech, partial words, hesitation, or an uncertain transcription. Ask a short yes-or-no confirmation only when the ending is genuinely unclear; do not coach the person to say a specific phrase such as “Yes, Iris.” If you ask, any clear yes, yeah, okay, bye, goodbye, or hang-up is enough—then call end_call with the exact words you heard. The phone session verifies every request against the completed user transcript; the tool argument is not consent by itself. If the person continues talking, says no, is silent, or the words are ambiguous, keep the call open. When using end_call, give a brief warm farewell after the tool result.",
         ].filter(Boolean).join("\n\n");
         this.realtime.send(
           JSON.stringify({
@@ -263,7 +264,7 @@ export class CallSession {
                   { type: "function", name: "shield_assess", description: "Assess an explicitly stated suspicious or urgent situation before offering a safety pause. Do not use for vague or inferred concerns.", parameters: { type: "object", additionalProperties: false, required: ["situation"], properties: { situation: { type: "string", minLength: 1, maxLength: 2000 } } } },
                   { type: "function", name: "shield_send_alert", description: "Send the fixed Shield check-in alert only after direct spoken approval of the named recipient and a short check-in purpose (do not require reading the SMS body aloud).", parameters: { type: "object", additionalProperties: false, required: ["trusted_contact_id"], properties: { trusted_contact_id: { type: "string" } } } },
                 ] : []),
-                { type: "function", name: "end_call", description: "End after a clear completed user closing or after a direct confirmation Iris asked for. confirmation must contain the exact closing or confirmation words heard.", parameters: { type: "object", additionalProperties: false, required: ["confirmation"], properties: { confirmation: { type: "string", minLength: 1, maxLength: 120 } } } },
+                { type: "function", name: "end_call", description: "End after a clear completed user closing, or after any clear yes/bye confirmation Iris asked for. confirmation must contain the exact closing or confirmation words heard; do not require a scripted phrase.", parameters: { type: "object", additionalProperties: false, required: ["confirmation"], properties: { confirmation: { type: "string", minLength: 1, maxLength: 120 } } } },
               ],
               audio: {
                 input: {
@@ -271,7 +272,9 @@ export class CallSession {
                   // Realtime API. Keeping both ends in PCMU avoids transcoding.
                   format: { type: "audio/pcmu" },
                   transcription: { model: "gpt-4o-transcribe" },
-                  turn_detection: { type: "server_vad" },
+                  // Slightly shorter silence than the 500ms default so replies
+                  // feel snappier on phone without jumping on brief pauses.
+                  turn_detection: { type: "server_vad", silence_duration_ms: 400, create_response: true },
                 },
                 output: { format: { type: "audio/pcmu" }, voice: "marin" },
               },
@@ -330,6 +333,16 @@ export class CallSession {
     if (event.type === "session.updated") {
       this.realtimeReady = true;
       for (const audio of this.bufferedAudio.splice(0)) this.appendAudio(audio);
+      // Outbound calls: Iris greets promptly once Realtime is ready instead of
+      // waiting for the person to speak first.
+      if (!this.openingGreetingStarted && this.realtime && !this.closed) {
+        this.openingGreetingStarted = true;
+        try {
+          this.realtime.send(JSON.stringify({ type: "response.create" }));
+        } catch {
+          this.close("failed");
+        }
+      }
       return;
     }
     if (event.type === "response.done") {
@@ -529,17 +542,20 @@ export class CallSession {
 
   private resolvePendingEndCallConfirmation() {
     const pending = this.pendingEndCallConfirmation;
-    if (!pending?.toolCallId) return;
+    if (!pending || this.pendingFarewell) return;
     const userTurns = this.liveTranscript.filter((turn) => turn.speaker === "user");
     const transcriptConfirmation = userTurns.slice(pending.userTurnCount).at(-1)?.text;
     if (!transcriptConfirmation) return;
-    const callId = pending.toolCallId;
     const confirmed = isEndCallConfirmation(transcriptConfirmation, userTurns);
-    this.clearPendingEndCallConfirmation();
+    const callId = pending.toolCallId;
     if (!confirmed) {
-      this.sendToolOutput(callId, { ok: false, error: "confirmation_not_clear" });
+      // A real post-ask turn that is not an affirmation cancels the ask frame.
+      this.clearPendingEndCallConfirmation();
+      if (callId) this.sendToolOutput(callId, { ok: false, error: "confirmation_not_clear" });
       return;
     }
+    // Confirm from the transcript immediately so a plain “yes” or “bye” ends
+    // the call even if the model has not issued another end_call yet.
     this.beginFarewell(callId);
   }
 
@@ -558,7 +574,7 @@ export class CallSession {
     }
   }
 
-  private beginFarewell(callId: string) {
+  private beginFarewell(callId: string | null) {
     this.clearPendingEndCallConfirmation();
     this.pendingFarewell = {
       responseId: null,
@@ -570,7 +586,15 @@ export class CallSession {
       timer: null,
     };
     try {
-      this.sendToolOutput(callId, { ok: true });
+      if (callId) {
+        this.sendToolOutput(callId, { ok: true });
+      } else if (this.realtime && !this.closed) {
+        // Confirmed from transcript after Iris asked, with no open tool call.
+        this.realtime.send(JSON.stringify({
+          type: "response.create",
+          response: { instructions: "The person confirmed the call is ending. Give a brief warm goodbye now." },
+        }));
+      }
     } finally {
       // Keep the safety bound intact even if the Realtime socket rejects the
       // function output. The caller also handles that rejected dispatch by
@@ -587,9 +611,9 @@ export class CallSession {
   }
 
   private handleResponseCreated(event: RealtimeEvent) {
-    // response.create is emitted only after the function-call output. Realtime
-    // serializes these server events, so the next response.created is that
-    // farewell response; do not accept audio or done events before this bind.
+    // Bind the next response after we request a farewell (tool result or a
+    // direct response.create). Ignore unrelated responses such as the opening
+    // greeting.
     if (!this.pendingFarewell || this.pendingFarewell.responseId || !event.response?.id) return;
     this.pendingFarewell.responseId = event.response.id;
   }

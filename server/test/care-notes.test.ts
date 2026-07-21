@@ -67,7 +67,7 @@ test("care notes stay person-scoped and retain trusted-contact attribution after
     assert.deepEqual(repositories.listCareNotes("person-b"), []);
     assert.equal(repositories.deleteTrustedContact("contact-a"), true);
     assert.deepEqual(repositories.listCareNotes("person-a"), [{
-      id: "note-a", personId: "person-a", authorRole: "trusted_contact", authorTrustedContactId: null,
+      id: "note-a", personId: "person-a", callId: null, authorRole: "trusted_contact", authorTrustedContactId: null,
       authorDisplayName: "Robin", authorRelationship: "daughter", body: "I called after dinner.",
       createdAt: repositories.listCareNotes("person-a")[0]!.createdAt,
       updatedAt: repositories.listCareNotes("person-a")[0]!.updatedAt,

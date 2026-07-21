@@ -99,9 +99,10 @@ test("outbound calls use a token-bound μ-law stream and discard live transcript
     assert.equal(realtime.sent.length, 1);
     realtime.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
     assert.deepEqual(JSON.parse(realtime.sent[1]), { type: "input_audio_buffer.append", audio: "ulaw-before-realtime-opens" });
+    assert.deepEqual(JSON.parse(realtime.sent[2]), { type: "response.create" });
 
     socket.emit("message", Buffer.from(JSON.stringify({ event: "media", media: { payload: "ulaw-from-phone" } })));
-    assert.deepEqual(JSON.parse(realtime.sent[2]), { type: "input_audio_buffer.append", audio: "ulaw-from-phone" });
+    assert.deepEqual(JSON.parse(realtime.sent[3]), { type: "input_audio_buffer.append", audio: "ulaw-from-phone" });
     realtime.emit("message", Buffer.from(JSON.stringify({ type: "response.output_audio.delta", delta: "ulaw-from-iris" })));
     assert.deepEqual(JSON.parse(socket.sent[0]), { event: "media", streamSid: "MZ123", media: { payload: "ulaw-from-iris" } });
     realtime.emit("message", Buffer.from(JSON.stringify({ type: "input_audio_buffer.speech_started" })));
@@ -602,12 +603,18 @@ test("end_call waits for the farewell response, then finalizes through the exist
     realtime.emit("open");
     const sessionUpdate = JSON.parse(realtime.sent[0]) as { session: { instructions: string; tools: Array<{ name: string }> } };
     assert.match(sessionUpdate.session.instructions, /let a clear, natural closing end naturally/i);
+    assert.match(sessionUpdate.session.instructions, /do not coach the person to say a specific phrase/i);
+    assert.equal(
+      (sessionUpdate.session as { audio?: { input?: { turn_detection?: { silence_duration_ms?: number } } } }).audio?.input?.turn_detection?.silence_duration_ms,
+      400,
+    );
     assert.equal(sessionUpdate.session.tools.some((tool) => tool.name === "end_call"), true);
     // A tentative remark in a transcript is never a local teardown signal.
     realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "Maybe we can wrap up later." })));
     assert.equal(socket.closed, false);
-    realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "Goodbye." })));
 
+    // An ambiguous early close asks for confirmation instead of hanging up.
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "Could you end the call?" })));
     const endResponse = {
       type: "response.done",
       response: { id: "response-end-tool", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-end", arguments: "{}" }] },
@@ -617,42 +624,40 @@ test("end_call waits for the farewell response, then finalizes through the exist
     assert.equal(scheduler.scheduled?.delayMs, 10_000);
     assert.equal(socket.closed, false);
 
-    // A negative or unrelated post-question turn cancels the pending request.
+    // A negative post-question turn cancels the pending ask.
     realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "No, let's keep talking." })));
+    assert.equal(scheduler.scheduled?.delayMs, 10_000);
+
+    // Iris asks again after another unclear end request.
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "Should we hang up?" })));
     realtime.emit("message", Buffer.from(JSON.stringify({
-      type: "response.done", response: { id: "response-end-rejected", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-end-rejected", arguments: "{\"confirmation\":\"No, let's keep talking.\"}" }] },
+      type: "response.done", response: { id: "response-end-ask-again", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-end-ask-again", arguments: "{}" }] },
     })));
     assert.equal(scheduler.scheduled?.delayMs, 10_000);
 
-    // An unclear request asks again; it cannot double as confirmation.
-    realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "Could you end the call?" })));
-    realtime.emit("message", Buffer.from(JSON.stringify({
-      type: "response.done", response: { id: "response-end-ask-again", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-end-ask-again", arguments: "{\"confirmation\":\"Bye, Iris.\"}" }] },
-    })));
-    assert.equal(scheduler.scheduled?.delayMs, 10_000);
-
-    // A spoken confirmation Iris asked for—including the common “end the call”
-    // phrasing—should finalize without another confirmation loop.
-    realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "Yes, please end the call." })));
-    realtime.emit("message", Buffer.from(JSON.stringify({
-      type: "response.done", response: { id: "response-end-confirmed", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-end-confirmed", arguments: "{\"confirmation\":\"Yes, please end the call.\"}" }] },
-    })));
+    // A plain spoken yes after Iris asked finalizes without requiring another
+    // end_call tool round-trip or a scripted “Yes, Iris.”
+    realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: "Yes." })));
     assert.equal(scheduler.scheduled?.delayMs, 77);
     assert.equal(socket.closed, false);
-    assert.equal(realtime.sent.filter((message) => JSON.parse(message).type === "response.create").length, 4);
+    assert.ok(realtime.sent.some((message) => {
+      const parsed = JSON.parse(message) as { type?: string; response?: { instructions?: string } };
+      return parsed.type === "response.create" && Boolean(parsed.response?.instructions);
+    }));
 
-    // A non-tool response that predates the tool result cannot masquerade as
+    // A non-tool response that predates the farewell bind cannot masquerade as
     // the farewell before response.created binds the newly requested response.
     realtime.emit("message", Buffer.from(JSON.stringify({ type: "response.done", response: { id: "response-stale", output: [] } })));
     assert.equal(socket.closed, false);
 
     // A second end request acknowledges its tool call but cannot create a
     // second farewell or a second call finalization.
+    const createsBeforeDuplicate = realtime.sent.filter((message) => JSON.parse(message).type === "response.create").length;
     realtime.emit("message", Buffer.from(JSON.stringify({
       type: "response.done",
       response: { id: "response-end-duplicate", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-end-second", arguments: "{}" }] },
     })));
-    assert.equal(realtime.sent.filter((message) => JSON.parse(message).type === "response.create").length, 4);
+    assert.equal(realtime.sent.filter((message) => JSON.parse(message).type === "response.create").length, createsBeforeDuplicate);
 
     realtime.emit("message", Buffer.from(JSON.stringify({ type: "response.created", response: { id: "response-farewell" } })));
     realtime.emit("message", Buffer.from(JSON.stringify({ type: "response.output_audio.delta", response_id: "response-farewell", delta: "farewell-audio" })));
@@ -672,10 +677,10 @@ test("end_call waits for the farewell response, then finalizes through the exist
     assert.equal(repositories.listCalls("person-a")[0].summaryState, "processing");
     assert.deepEqual(summaries, [{ callId, personId: "person-a", transcript: [
       { speaker: "user", text: "Maybe we can wrap up later." },
-      { speaker: "user", text: "Goodbye." },
-      { speaker: "user", text: "No, let's keep talking." },
       { speaker: "user", text: "Could you end the call?" },
-      { speaker: "user", text: "Yes, please end the call." },
+      { speaker: "user", text: "No, let's keep talking." },
+      { speaker: "user", text: "Should we hang up?" },
+      { speaker: "user", text: "Yes." },
     ] }]);
   } finally { closeDatabase(database); }
 });
@@ -761,8 +766,8 @@ test("end_call keeps an early direct goodbye in the confirmation path", async ()
   } finally { closeDatabase(database); }
 });
 
-test("end_call accepts Yes Iris or a repeated goodbye after confirmation is asked", async () => {
-  for (const confirmation of ["Yes, Iris.", "Goodbye, Iris."]) {
+test("end_call accepts a plain yes after confirmation without another tool call", async () => {
+  for (const confirmation of ["Yes.", "Yeah, go ahead.", "Okay.", "Bye.", "Yes, Iris.", "Goodbye, Iris."]) {
     const database = createDatabase(":memory:");
     const repositories = createRepositories(database);
     repositories.createPerson({ id: "person-a", displayName: "Avery", phoneE164: "+15550002222" });
@@ -796,13 +801,14 @@ test("end_call accepts Yes Iris or a repeated goodbye after confirmation is aske
           .some((result) => result.error === "confirmation_required"),
       );
 
+      // A confirming transcript after Iris asked should end the call even when
+      // the model has not issued another end_call yet.
       realtime.emit("message", Buffer.from(JSON.stringify({ type: "conversation.item.input_audio_transcription.completed", transcript: confirmation })));
-      realtime.emit("message", Buffer.from(JSON.stringify({
-        type: "response.done",
-        response: { id: "response-confirmed", output: [{ type: "function_call", status: "completed", name: "end_call", call_id: "tool-confirmed", arguments: JSON.stringify({ confirmation }) }] },
-      })));
       assert.equal(scheduler.scheduled?.delayMs, 77);
-      assert.equal(socket.closed, false);
+      assert.ok(realtime.sent.some((message) => {
+        const parsed = JSON.parse(message) as { type?: string; response?: { instructions?: string } };
+        return parsed.type === "response.create" && Boolean(parsed.response?.instructions);
+      }));
 
       realtime.emit("message", Buffer.from(JSON.stringify({ type: "response.created", response: { id: "response-farewell" } })));
       realtime.emit("message", Buffer.from(JSON.stringify({ type: "response.output_audio.delta", response_id: "response-farewell", delta: "farewell-audio" })));
